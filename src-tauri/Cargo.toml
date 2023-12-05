@@ -1,0 +1,25 @@
+[package]
+name = "verge"
+version = "0.0.0"
+description = "A Tauri App"
+authors = ["zzzgydi"]
+license = "GPL-3.0"
+repository = "https://github.com/zzzgydi/verge.git"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2.0.0-alpha", features = [] }
+
+[dependencies]
+tauri = { version = "2.0.0-alpha", features = [] }
+tauri-plugin-window = "2.0.0-alpha"
+serde_json = "1.0"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
