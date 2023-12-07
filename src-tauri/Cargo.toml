@@ -11,9 +11,15 @@ edition = "2021"
 tauri-build = { version = "2.0.0-alpha", features = [] }
 
 [dependencies]
-tauri = { version = "2.0.0-alpha", features = [] }
-tauri-plugin-window = "2.0.0-alpha"
+log = "0.4"
+anyhow = "1.0"
+dirs-next = "2.0"
 serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+tauri = { version = "2.0.0-alpha", features = ["tray-icon", "icon-png"] }
+tauri-plugin-log = "2.0.0-alpha"
+tauri-plugin-window = "2.0.0-alpha"
+tauri-plugin-single-instance = "2.0.0-alpha"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
