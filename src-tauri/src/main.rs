@@ -7,6 +7,7 @@ use tauri_plugin_log::{Target, TargetKind};
 use utils::dirs::log_dir;
 
 mod core;
+mod entities;
 mod services;
 mod utils;
 
