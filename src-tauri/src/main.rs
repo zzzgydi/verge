@@ -9,6 +9,7 @@ use utils::dirs::log_dir;
 mod core;
 mod entities;
 mod services;
+mod transform;
 mod utils;
 
 #[tauri::command]
