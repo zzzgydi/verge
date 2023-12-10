@@ -5,9 +5,7 @@ use super::common::*;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Outbound {
-    pub r#type: String,
     pub tag: String,
-
     #[serde(flatten)]
     pub option: OutboundOptions,
 }
@@ -114,7 +112,7 @@ pub struct ShadowsocksOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub plugin_options: Option<String>,
+    pub plugin_opts: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
