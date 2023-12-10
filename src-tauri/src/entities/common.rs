@@ -218,7 +218,7 @@ pub struct WireGuardPeer {
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Hysteria2Obfs {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub type_field: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,

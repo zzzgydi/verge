@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
 use super::common::*;
 
@@ -214,11 +214,11 @@ pub struct HysteriaOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth: Option<Vec<u8>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub auth_string: Option<String>,
+    pub auth_str: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub receive_window_conn: Option<u64>,
+    pub recv_window_conn: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub receive_window: Option<u64>,
+    pub recv_window: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable_mtu_discovery: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -336,7 +336,7 @@ pub struct TUICOptions {
     pub udp_over_stream: bool,
     pub zero_rtt_handshake: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub heartbeat: Option<Duration>,
+    pub heartbeat: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -378,7 +378,7 @@ pub struct URLTestOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub interval: Option<Duration>,
+    pub interval: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tolerance: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
