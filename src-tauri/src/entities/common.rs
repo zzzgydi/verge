@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::time::Duration;
 
@@ -106,4 +107,97 @@ pub struct OutboundRealityOptions {
     pub public_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub short_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct OutboundMultiplexOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_connections: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_streams: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_streams: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub padding: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brutal: Option<BrutalOptions>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct BrutalOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub up_mbps: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub down_mbps: Option<i32>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum V2RayTransportOptions {
+    #[serde(rename = "http")]
+    HTTP(V2RayHTTPOptions),
+    #[serde(rename = "ws")]
+    Websocket(V2RayWebsocketOptions),
+    #[serde(rename = "quic")]
+    QUIC,
+    #[serde(rename = "grpc")]
+    GRPC(V2RayGRPCOptions),
+    #[serde(rename = "httpupgrade")]
+    HTTPUpgrade(V2RayHTTPUpgradeOptions),
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(tag = "type")]
+pub struct V2RayHTTPOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers: Option<HashMap<String, Vec<String>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_timeout: Option<Duration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ping_timeout: Option<Duration>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct V2RayWebsocketOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers: Option<HashMap<String, Vec<String>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_early_data: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub early_data_header_name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct V2RayGRPCOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_timeout: Option<Duration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ping_timeout: Option<Duration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permit_without_stream: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct V2RayHTTPUpgradeOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers: Option<HashMap<String, Vec<String>>>,
 }
