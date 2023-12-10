@@ -201,3 +201,25 @@ pub struct V2RayHTTPUpgradeOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub headers: Option<HashMap<String, Vec<String>>>,
 }
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct WireGuardPeer {
+    #[serde(flatten)]
+    pub server_options: ServerOptions,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pre_shared_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_ips: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reserved: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct Hysteria2Obfs {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+}
