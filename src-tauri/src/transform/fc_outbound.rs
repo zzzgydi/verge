@@ -14,6 +14,7 @@ impl FromClash for Outbound {
             "http" => OutboundOptions::HTTP(HTTPOptions::from_clash(v)?),
             "ss" => OutboundOptions::Shadowsocks(ShadowsocksOptions::from_clash(v)?),
             "vmess" => OutboundOptions::VMess(VMessOptions::from_clash(v)?),
+            "trojan" => OutboundOptions::Trojan(TrojanOptions::from_clash(v)?),
             s @ _ => anyhow::bail!("invalid type `{s}`"),
         };
 
@@ -90,15 +91,13 @@ impl FromClash for ShadowsocksOptions {
         })
     }
 }
-// 为 VMessOptions 实现 FromClash trait
+
 impl FromClash for VMessOptions {
     fn from_clash(v: &serde_yaml::Value) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
-        let m = v
-            .as_mapping()
-            .ok_or_else(|| anyhow::Error::msg("invalid object"))?;
+        let m = v.as_mapping().okr("invalid object")?;
         let m = MapWrapper(m);
 
         Ok(VMessOptions {
@@ -113,6 +112,26 @@ impl FromClash for VMessOptions {
             tls: OutboundTLSOptions::from_clash(&v).ok(),
             transport: V2RayTransportOptions::from_clash(v).ok(),
             packet_encoding: None,
+            multiplex: None,
+        })
+    }
+}
+
+impl FromClash for TrojanOptions {
+    fn from_clash(v: &serde_yaml::Value) -> anyhow::Result<Self>
+    where
+        Self: Sized,
+    {
+        let m = v.as_mapping().okr("invalid object")?;
+        let m = MapWrapper(m);
+
+        Ok(TrojanOptions {
+            dialer_options: DialerOptions::default(),
+            server_options: ServerOptions::from_clash(&v)?,
+            password: m.get_str("password")?,
+            network: m.fc_network(),
+            tls: OutboundTLSOptions::from_clash(&v).ok(),
+            transport: V2RayTransportOptions::from_clash(v).ok(),
             multiplex: None,
         })
     }
