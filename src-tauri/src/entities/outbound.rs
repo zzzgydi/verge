@@ -168,16 +168,20 @@ pub struct TrojanOptions {
 pub struct WireGuardOptions {
     #[serde(flatten)]
     pub dialer_options: DialerOptions,
+    #[serde(flatten)]
+    pub server_options: ServerOptions,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system_interface: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gso: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gso_max_size: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interface_name: Option<String>,
     pub local_address: Vec<String>,
     pub private_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peers: Option<Vec<WireGuardPeer>>,
-    #[serde(flatten)]
-    pub server_options: ServerOptions,
     pub peer_public_key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pre_shared_key: Option<String>,

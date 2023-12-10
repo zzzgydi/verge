@@ -243,6 +243,23 @@ proxies:
     # skip-cert-verify: true
     # sni: custom.com
 
+  - name: "wg"
+    type: wireguard
+    private-key: eCtXsJZ27+4PbhDkHnB923tkUn2Gj59wZw5wFA75MnU=
+    server: 162.159.192.1
+    port: 2480
+    ip: 172.16.0.2
+    ipv6: fd01:5ca1:ab1e:80fa:ab85:6eea:213f:f4a5
+    public-key: Cr8hWlKvtDt7nrvf+f0brNQQzabAqrjfBvas9pmowjo=
+    allowed-ips: ["0.0.0.0/0"]
+    # pre-shared-key: 31aIhAPwktDGpH4JDhA8GNvjFXEf/a6+UaQRyOAiyfM=
+    # reserved: [209,98,59]  # 字符串格式也是合法的，如"U4An"
+    udp: true
+    # mtu: 1408
+    # dialer-proxy: "ss1"  # 一个出站代理的标识。当值不为空时，将使用指定的 proxy/proxy-group 发出连接
+    # remote-dns-resolve: true # 强制dns远程解析，默认值为false
+    # dns: [ 1.1.1.1, 8.8.8.8 ] # 仅在remote-dns-resolve为true时生效
+
   # http
   - name: "http2"
     type: http

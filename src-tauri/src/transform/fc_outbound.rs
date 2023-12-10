@@ -15,6 +15,7 @@ impl FromClash for Outbound {
             "ss" => OutboundOptions::Shadowsocks(ShadowsocksOptions::from_clash(v)?),
             "vmess" => OutboundOptions::VMess(VMessOptions::from_clash(v)?),
             "trojan" => OutboundOptions::Trojan(TrojanOptions::from_clash(v)?),
+            "wireguard" => OutboundOptions::WireGuard(WireGuardOptions::from_clash(v)?),
             s @ _ => anyhow::bail!("invalid type `{s}`"),
         };
 
@@ -133,6 +134,34 @@ impl FromClash for TrojanOptions {
             tls: OutboundTLSOptions::from_clash(&v).ok(),
             transport: V2RayTransportOptions::from_clash(v).ok(),
             multiplex: None,
+        })
+    }
+}
+
+impl FromClash for WireGuardOptions {
+    fn from_clash(v: &serde_yaml::Value) -> anyhow::Result<Self>
+    where
+        Self: Sized,
+    {
+        let m = v.as_mapping().okr("invalid object")?;
+        let m = MapWrapper(m);
+
+        Ok(WireGuardOptions {
+            dialer_options: DialerOptions::default(),
+            server_options: ServerOptions::from_clash(&v)?,
+            system_interface: None,
+            interface_name: None,
+            gso: None,
+            gso_max_size: None,
+            local_address: m.or_vec_str("allowed-ips").unwrap_or(vec![]),
+            peers: None,
+            peer_public_key: m.get_str("public-key")?,
+            private_key: m.get_str("private-key")?,
+            pre_shared_key: m.or_str("pre-shared-key"),
+            reserved: m.or_vec_u8("reserved"),
+            workers: None,
+            mtu: m.or_u32("mtu"),
+            network: m.fc_network(),
         })
     }
 }

@@ -1,5 +1,6 @@
 pub struct MapWrapper<'a>(pub &'a serde_yaml::Mapping);
 
+#[allow(dead_code)]
 impl<'a> MapWrapper<'a> {
     pub fn has(&self, key: &str) -> bool {
         self.0.get(key).is_some()
@@ -129,6 +130,27 @@ impl<'a> MapWrapper<'a> {
         self.0.get(key).and_then(|s| s.as_sequence()).map(|s| {
             s.iter()
                 .filter_map(|s| s.as_str().map(|s| s.to_owned()))
+                .collect()
+        })
+    }
+
+    // vec of u8
+    pub fn get_vec_u8(&self, key: &str) -> anyhow::Result<Vec<u8>> {
+        self.0
+            .get(key)
+            .and_then(|s| s.as_sequence())
+            .ok_or_else(|| anyhow::Error::msg(format!("invalid `{}`", key)))
+            .map(|s| {
+                s.iter()
+                    .filter_map(|s| s.as_i64().map(|s| s as u8))
+                    .collect()
+            })
+    }
+
+    pub fn or_vec_u8(&self, key: &str) -> Option<Vec<u8>> {
+        self.0.get(key).and_then(|s| s.as_sequence()).map(|s| {
+            s.iter()
+                .filter_map(|s| s.as_i64().map(|s| s as u8))
                 .collect()
         })
     }
