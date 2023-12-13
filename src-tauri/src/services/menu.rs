@@ -3,7 +3,7 @@ use tauri::{
     AppHandle,
 };
 
-pub fn setup_menu(handle: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+pub fn setup_menu(handle: &AppHandle) -> anyhow::Result<()> {
     let pkg_info = handle.package_info();
     let metadata = AboutMetadata {
         name: Some("Verge".into()),
