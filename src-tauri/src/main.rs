@@ -65,6 +65,7 @@ fn main() {
 
             let _ = tray::setup_tray(app.app_handle());
 
+            app.path().resource_dir();
             Ok(())
         })
         .build(tauri::generate_context!())

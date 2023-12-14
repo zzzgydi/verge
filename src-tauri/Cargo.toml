@@ -12,6 +12,7 @@ tauri-build = { version = "2.0.0-alpha", features = [] }
 
 [dependencies]
 log = "0.4"
+sled = "0.34"
 anyhow = "1.0"
 dirs-next = "2.0"
 serde_json = "1.0"
