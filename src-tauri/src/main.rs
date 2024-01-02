@@ -4,7 +4,7 @@
 use services::{menu, tray};
 use tauri::Manager;
 use tauri_plugin_log::{Target, TargetKind};
-use utils::dirs::log_dir;
+use utils::log_dir;
 
 mod core;
 mod entities;
@@ -61,17 +61,13 @@ fn main() {
             // TODO
         })
         .setup(|app| {
-            let _ = menu::setup_menu(app.app_handle());
-
-            let _ = tray::setup_tray(app.app_handle());
-
-            app.path().resource_dir();
+            utils::resolve_setup(app)?;
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while running tauri application");
 
-    app.run(|app_handle, e| match e {
+    app.run(|_app_handle, e| match e {
         tauri::RunEvent::ExitRequested { api, .. } => {
             api.prevent_exit();
         }
@@ -79,9 +75,6 @@ fn main() {
             println!("exiting");
         }
         tauri::RunEvent::MainEventsCleared => {}
-
-        a @ _ => {
-            println!("{:?}", a);
-        }
+        _ => {}
     });
 }

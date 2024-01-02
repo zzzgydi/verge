@@ -29,3 +29,11 @@ pub fn bin_dir() -> Result<PathBuf> {
         .to_path_buf()
         .join("bin"))
 }
+
+pub fn path_to_str(path: &PathBuf) -> Result<&str> {
+    let path_str = path
+        .as_os_str()
+        .to_str()
+        .ok_or(anyhow::anyhow!("failed to get path from {:?}", path))?;
+    Ok(path_str)
+}
