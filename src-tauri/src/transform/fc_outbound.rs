@@ -1,5 +1,5 @@
 use super::{from_clash::*, map_wrapper::MapWrapper};
-use crate::entities::{common::*, outbound::*};
+use crate::entities::singbox::*;
 
 impl FromClash for Outbound {
     fn from_clash(v: &serde_yaml::Value) -> anyhow::Result<Self> {

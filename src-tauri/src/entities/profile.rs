@@ -5,6 +5,8 @@ use std::collections::HashMap;
 pub struct Profile {
     pub name: String,
 
+    pub file_name: String,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
 

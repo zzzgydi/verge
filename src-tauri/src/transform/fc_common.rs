@@ -1,5 +1,5 @@
 use super::{from_clash::*, map_wrapper::MapWrapper};
-use crate::entities::common::*;
+use crate::entities::singbox::*;
 
 impl FromClash for ServerOptions {
     fn from_clash(v: &serde_yaml::Value) -> anyhow::Result<Self> {

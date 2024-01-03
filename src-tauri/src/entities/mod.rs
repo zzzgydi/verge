@@ -1,3 +1,5 @@
-pub mod common;
-pub mod outbound;
-pub mod profile;
+pub mod singbox;
+
+mod profile;
+
+pub use profile::*;
