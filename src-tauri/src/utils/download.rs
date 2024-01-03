@@ -2,18 +2,12 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+use crate::entities::SubscriptionInfo;
+
 #[derive(Default, Debug, Clone)]
 pub struct DownloadOption {
     pub user_agent: Option<String>,
     pub proxy_scheme: Option<String>,
-}
-
-#[derive(Default, Debug, Clone, Copy, Deserialize, Serialize)]
-pub struct SubscriptionInfo {
-    pub upload: usize,
-    pub download: usize,
-    pub total: usize,
-    pub expire: usize,
 }
 
 #[derive(Default, Debug, Clone, Deserialize, Serialize)]

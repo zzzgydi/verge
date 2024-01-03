@@ -58,7 +58,7 @@ impl Core {
 
         *core_handler = Some(cmd_child);
 
-        log::info!(target: "app", "run core {core_path}");
+        log::info!("run core {core_path}");
 
         // #[cfg(feature = "stdout-log")]
         tauri::async_runtime::spawn(async move {
