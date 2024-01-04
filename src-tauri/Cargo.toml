@@ -30,6 +30,7 @@ reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
 tauri = { version = "2.0.0-alpha", features = ["tray-icon", "icon-png"] }
 tauri-plugin-log = "2.0.0-alpha"
 tauri-plugin-window = "2.0.0-alpha"
+tauri-plugin-window-state = "2.0.0-alpha"
 tauri-plugin-single-instance = "2.0.0-alpha"
 
 [features]

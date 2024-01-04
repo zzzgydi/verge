@@ -16,6 +16,7 @@ mod utils;
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_window::init())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             println!("{}, {argv:?}, {cwd}", app.package_info().name);
             // TODO
@@ -65,14 +66,20 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while running tauri application");
 
-    app.run(|_app_handle, e| match e {
+    app.run(|app_handle, e| match e {
         tauri::RunEvent::ExitRequested { api, .. } => {
             api.prevent_exit();
         }
-        tauri::RunEvent::Exit => {
-            println!("exiting");
-        }
-        tauri::RunEvent::MainEventsCleared => {}
+        tauri::RunEvent::WindowEvent { event, .. } => match event {
+            tauri::WindowEvent::CloseRequested { .. }
+            | tauri::WindowEvent::Moved(_)
+            | tauri::WindowEvent::Resized(_) => {
+                use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+                let res = app_handle.save_window_state(StateFlags::all());
+                log::info!("restore state: {:?}", res);
+            }
+            _ => {}
+        },
         _ => {}
     });
 }

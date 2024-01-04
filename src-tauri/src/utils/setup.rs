@@ -1,7 +1,9 @@
-use crate::{menu, services::core::Core, tray, utils};
 use anyhow::{bail, Result};
 use std::fs;
 use tauri::Manager;
+
+use super::create_window;
+use crate::{menu, services::core::Core, tray, utils};
 
 pub fn resolve_setup(app: &mut tauri::App) -> Result<()> {
     let _ = menu::setup_menu(app.app_handle());
@@ -11,6 +13,8 @@ pub fn resolve_setup(app: &mut tauri::App) -> Result<()> {
     // if let Err(e) = resolve_bin(app) {
     //     log::error!("failed to resolve bin: {e}");
     // }
+
+    let _ = create_window(app.app_handle());
 
     Ok(())
 }
