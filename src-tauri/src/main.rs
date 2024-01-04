@@ -71,9 +71,7 @@ fn main() {
             api.prevent_exit();
         }
         tauri::RunEvent::WindowEvent { event, .. } => match event {
-            tauri::WindowEvent::CloseRequested { .. }
-            | tauri::WindowEvent::Moved(_)
-            | tauri::WindowEvent::Resized(_) => {
+            tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Resized(_) => {
                 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
                 let res = app_handle.save_window_state(StateFlags::all());
                 log::info!("restore state: {:?}", res);
