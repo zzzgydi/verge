@@ -8,9 +8,9 @@ pub fn resolve_setup(app: &mut tauri::App) -> Result<()> {
 
     let _ = tray::setup_tray(app.app_handle());
 
-    if let Err(e) = resolve_bin(app) {
-        log::error!("failed to resolve bin: {e}");
-    }
+    // if let Err(e) = resolve_bin(app) {
+    //     log::error!("failed to resolve bin: {e}");
+    // }
 
     Ok(())
 }

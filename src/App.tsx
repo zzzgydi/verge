@@ -1,16 +1,30 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import reactLogo from "./assets/react.svg";
 import { invoke } from "@tauri-apps/api/primitives";
 import "./App.css";
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  const [url, setUrl] = useState("");
 
   async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
-    setGreetMsg(await invoke("greet", { name }));
+    try {
+      await invoke("import_profile", { req: { url } });
+    } catch (err) {
+      console.error(err);
+    }
   }
+
+  useEffect(() => {
+    async function init() {
+      try {
+        const data = await invoke("list_profiles");
+        console.log(data);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    init();
+  }, []);
 
   return (
     <div className="container">
@@ -39,13 +53,11 @@ function App() {
       >
         <input
           id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
+          onChange={(e) => setUrl(e.currentTarget.value)}
           placeholder="Enter a name..."
         />
         <button type="submit">Greet</button>
       </form>
-
-      <p>{greetMsg}</p>
     </div>
   );
 }

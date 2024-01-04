@@ -6,17 +6,12 @@ use tauri::Manager;
 use tauri_plugin_log::{Target, TargetKind};
 use utils::log_dir;
 
+mod cmds;
 mod core;
 mod entities;
 mod services;
 mod transform;
 mod utils;
-
-#[tauri::command]
-fn greet(name: &str) -> String {
-    log::info!("Hello, {}!", name);
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
 
 fn main() {
     let app = tauri::Builder::default()
@@ -38,12 +33,15 @@ fn main() {
                 ])
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![
+            cmds::list_profiles,
+            cmds::import_profile,
+        ])
         .on_window_event(|event| {
             match event.event() {
-                tauri::WindowEvent::Focused(focused) => {
-                    log::info!("Window focused: {}", focused);
-                }
+                // tauri::WindowEvent::Focused(focused) => {
+                //     log::info!("Window focused: {}", focused);
+                // }
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     #[cfg(not(target_os = "macos"))]
                     {
