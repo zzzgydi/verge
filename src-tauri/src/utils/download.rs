@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
@@ -72,7 +73,17 @@ pub async fn download_subscription(
     let filename = match header.get("Content-Disposition") {
         Some(value) => {
             let filename = value.to_str().unwrap_or("");
-            parse_str::<String>(filename, "filename=")
+            parse_str::<String>(filename, "filename=").or_else(|| {
+                parse_str::<String>(filename, "filename*=").map(|v| {
+                    match v.trim().split_once("''") {
+                        Some((_, v)) => percent_decode_str(v)
+                            .decode_utf8()
+                            .unwrap_or(v.into())
+                            .into(),
+                        None => v.into(),
+                    }
+                })
+            })
         }
         None => None,
     };
