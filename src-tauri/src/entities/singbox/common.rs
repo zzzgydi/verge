@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::time::Duration;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct DialerOptions {
@@ -20,7 +19,7 @@ pub struct DialerOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reuse_addr: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub connect_timeout: Option<Duration>,
+    pub connect_timeout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tcp_fast_open: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -30,7 +29,7 @@ pub struct DialerOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub domain_strategy: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fallback_delay: Option<Duration>,
+    pub fallback_delay: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -163,9 +162,9 @@ pub struct V2RayHTTPOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub headers: Option<HashMap<String, Vec<String>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub idle_timeout: Option<Duration>,
+    pub idle_timeout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ping_timeout: Option<Duration>,
+    pub ping_timeout: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -185,9 +184,9 @@ pub struct V2RayGRPCOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub idle_timeout: Option<Duration>,
+    pub idle_timeout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ping_timeout: Option<Duration>,
+    pub ping_timeout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permit_without_stream: Option<bool>,
 }

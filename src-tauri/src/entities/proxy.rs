@@ -5,15 +5,17 @@ use serde::{Deserialize, Serialize};
 pub struct ProxyItem {
     pub pid: String, // profile id
     pub id: String,  // proxy item id
-    pub item: Outbound,
+    pub outbound: Outbound,
     pub disabled: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProxyGroup {
+    pub id: String,
     pub name: String,
     pub proxies: Vec<String>, // proxy item id list
     pub option: ProxyGroupOption,
+    pub disabled: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

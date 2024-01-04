@@ -32,7 +32,7 @@ pub struct Profile {
     pub updated_at: Option<usize>,
 }
 
-#[derive(Default, Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct SubscriptionInfo {
     pub upload: usize,
     pub download: usize,
