@@ -12,18 +12,37 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@radix-ui/react-slot": "^1.0.2",
+    "@tauri-apps/api": "2.0.0-alpha.13",
+    "ahooks": "^3.7.8",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.1.0",
+    "dayjs": "^1.11.10",
+    "i18next": "^23.7.15",
+    "lucide-react": "^0.303.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "@tauri-apps/api": "^2.0.0-alpha.11",
-    "@tauri-apps/plugin-shell": "^2.0.0-alpha.3"
+    "react-error-boundary": "^4.0.12",
+    "react-hook-form": "^7.49.2",
+    "react-i18next": "^14.0.0",
+    "react-icons": "^4.12.0",
+    "react-router-dom": "^6.21.1",
+    "swr": "^2.2.4",
+    "tailwind-merge": "^2.2.0",
+    "tailwindcss-animate": "^1.0.7",
+    "zustand": "^4.4.7"
   },
   "devDependencies": {
-    "@types/react": "^18.2.15",
-    "@types/react-dom": "^18.2.7",
+    "@tauri-apps/cli": "2.0.0-alpha.20",
+    "@types/node": "^20.10.6",
+    "@types/react": "^18.2.46",
+    "@types/react-dom": "^18.2.18",
     "@vitejs/plugin-react": "^4.2.1",
-    "typescript": "^5.0.2",
-    "vite": "^5.0.5",
-    "@tauri-apps/cli": "^2.0.0-alpha.17"
+    "autoprefixer": "^10.4.16",
+    "postcss": "^8.4.32",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.10"
   },
   "prettier": {
     "tabWidth": 2,
