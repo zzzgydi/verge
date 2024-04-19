@@ -8,7 +8,7 @@ repository = "https://github.com/zzzgydi/verge.git"
 edition = "2021"
 
 [build-dependencies]
-tauri-build = { version = "2.0.0-alpha", features = [] }
+tauri-build = { version = "2.0.0-beta", features = [] }
 
 [dependencies]
 log = "0.4"
@@ -27,11 +27,10 @@ percent-encoding = "2.3"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
-tauri = { version = "2.0.0-alpha", features = ["tray-icon", "icon-png"] }
-tauri-plugin-log = "2.0.0-alpha"
-tauri-plugin-window = "2.0.0-alpha"
-tauri-plugin-window-state = "2.0.0-alpha"
-tauri-plugin-single-instance = "2.0.0-alpha"
+tauri = { version = "2.0.0-beta", features = ["tray-icon", "image-png"] }
+tauri-plugin-log = "2.0.0-beta"
+tauri-plugin-window-state = "2.0.0-beta"
+tauri-plugin-single-instance = "2.0.0-beta"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

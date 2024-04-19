@@ -1,6 +1,6 @@
 use anyhow::Result;
 use tauri::{AppHandle, Manager};
-use tauri_plugin_window_state::{StateFlags, WindowExt};
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 /// create main window
 pub fn create_window(app_handle: &AppHandle) -> Result<()> {
@@ -12,17 +12,17 @@ pub fn create_window(app_handle: &AppHandle) -> Result<()> {
         };
     }
 
-    if let Some(window) = app_handle.get_window("main") {
+    if let Some(window) = app_handle.get_webview_window("main") {
         trace_err!(window.unminimize(), "set win unminimize");
         trace_err!(window.show(), "set win visible");
         trace_err!(window.set_focus(), "set win focus");
         return Ok(());
     }
 
-    let builder = tauri::window::WindowBuilder::new(
+    let builder = tauri::WebviewWindowBuilder::new(
         app_handle,
         "main".to_string(),
-        tauri::WindowUrl::App("index.html".into()),
+        tauri::WebviewUrl::App("index.html".into()),
     )
     .title("Verge")
     .fullscreen(false)
@@ -41,7 +41,7 @@ pub fn create_window(app_handle: &AppHandle) -> Result<()> {
     #[cfg(target_os = "linux")]
     let window = builder.decorations(true).transparent(false).build()?;
 
-    window.restore_state(StateFlags::all())?;
+    app_handle.save_window_state(StateFlags::all())?;
 
     Ok(())
 }

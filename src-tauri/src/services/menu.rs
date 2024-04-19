@@ -16,16 +16,16 @@ pub fn setup_menu(handle: &AppHandle) -> anyhow::Result<()> {
 
     let native_menu = SubmenuBuilder::new(handle, "Edit")
         .items(&[
-            &PredefinedMenuItem::about(handle, None, Some(metadata)),
-            &PredefinedMenuItem::undo(handle, None),
-            &PredefinedMenuItem::redo(handle, None),
-            &PredefinedMenuItem::cut(handle, None),
-            &PredefinedMenuItem::copy(handle, None),
-            &PredefinedMenuItem::paste(handle, None),
-            &PredefinedMenuItem::select_all(handle, None),
-            &PredefinedMenuItem::fullscreen(handle, None),
-            &PredefinedMenuItem::minimize(handle, None),
-            &PredefinedMenuItem::maximize(handle, None),
+            &PredefinedMenuItem::about(handle, None, Some(metadata))?,
+            &PredefinedMenuItem::undo(handle, None)?,
+            &PredefinedMenuItem::redo(handle, None)?,
+            &PredefinedMenuItem::cut(handle, None)?,
+            &PredefinedMenuItem::copy(handle, None)?,
+            &PredefinedMenuItem::paste(handle, None)?,
+            &PredefinedMenuItem::select_all(handle, None)?,
+            &PredefinedMenuItem::fullscreen(handle, None)?,
+            &PredefinedMenuItem::minimize(handle, None)?,
+            &PredefinedMenuItem::maximize(handle, None)?,
         ])
         .build()?;
 

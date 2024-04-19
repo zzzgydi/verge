@@ -15,7 +15,6 @@ mod utils;
 
 fn main() {
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_window::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             println!("{}, {argv:?}, {cwd}", app.package_info().name);
@@ -38,8 +37,8 @@ fn main() {
             cmds::list_profiles,
             cmds::import_profile,
         ])
-        .on_window_event(|event| {
-            match event.event() {
+        .on_window_event(|app, event| {
+            match event {
                 // tauri::WindowEvent::Focused(focused) => {
                 //     log::info!("Window focused: {}", focused);
                 // }
@@ -51,7 +50,7 @@ fn main() {
 
                     #[cfg(target_os = "macos")]
                     {
-                        let _ = tauri::AppHandle::hide(&event.window().app_handle());
+                        let _ = tauri::AppHandle::hide(&app.app_handle());
                     }
                     api.prevent_close();
                 }
@@ -67,14 +66,14 @@ fn main() {
         .expect("error while running tauri application");
 
     app.run(|app_handle, e| match e {
-        tauri::RunEvent::ExitRequested { api, .. } => {
-            api.prevent_exit();
-        }
+        // tauri::RunEvent::ExitRequested { api, code } => {
+        //     api.prevent_exit();
+        // }
         tauri::RunEvent::WindowEvent { event, .. } => match event {
             tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Resized(_) => {
                 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
-                let res = app_handle.save_window_state(StateFlags::all());
-                log::info!("restore state: {:?}", res);
+                let _ = app_handle.save_window_state(StateFlags::all());
+                // log::info!("restore state: {:?}", res);
             }
             _ => {}
         },
