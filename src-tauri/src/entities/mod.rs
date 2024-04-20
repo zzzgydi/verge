@@ -1,3 +1,4 @@
+pub mod models;
 pub mod singbox;
 
 mod profile;
