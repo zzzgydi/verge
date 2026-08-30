@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "version": "1.19.26",
+  "release_url": "https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.26",
+  "targets": {
+    "aarch64-apple-darwin": {
+      "asset": "mihomo-darwin-arm64-v1.19.26.gz",
+      "download_url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.26/mihomo-darwin-arm64-v1.19.26.gz",
+      "archive_sha256": "2d9db5acc7c814a31ff0c04df98b6ac333494ab1ab8e95673ad6e80b28ca6b68",
+      "executable_sha256": "bf542b0205738b9121b17f5086ea5163985447452bb08fbb15a0cb83c23d4665"
+    }
+  }
+}

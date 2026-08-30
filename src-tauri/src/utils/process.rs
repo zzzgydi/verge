@@ -400,7 +400,9 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn test_cmd_spawn_output() {
-        let cmd = Command::new("cat").args(["test/test.txt"]);
+        let cmd = Command::new("cat")
+            .args(["test/test.txt"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"));
         let (mut rx, _) = cmd.spawn().unwrap();
 
         tauri::async_runtime::block_on(async move {
@@ -421,7 +423,9 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn test_cmd_spawn_raw_output() {
-        let cmd = Command::new("cat").args(["test/test.txt"]);
+        let cmd = Command::new("cat")
+            .args(["test/test.txt"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"));
         let (mut rx, _) = cmd.spawn().unwrap();
 
         tauri::async_runtime::block_on(async move {
@@ -443,7 +447,9 @@ mod tests {
     #[test]
     // test the failure case
     fn test_cmd_spawn_fail() {
-        let cmd = Command::new("cat").args(["test/"]);
+        let cmd = Command::new("cat")
+            .args(["test/"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"));
         let (mut rx, _) = cmd.spawn().unwrap();
 
         tauri::async_runtime::block_on(async move {
@@ -468,7 +474,9 @@ mod tests {
     #[test]
     // test the failure case (raw encoding)
     fn test_cmd_spawn_raw_fail() {
-        let cmd = Command::new("cat").args(["test/"]);
+        let cmd = Command::new("cat")
+            .args(["test/"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"));
         let (mut rx, _) = cmd.spawn().unwrap();
 
         tauri::async_runtime::block_on(async move {
@@ -492,7 +500,9 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn test_cmd_output_output() {
-        let cmd = Command::new("cat").args(["test/test.txt"]);
+        let cmd = Command::new("cat")
+            .args(["test/test.txt"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"));
         let output = tauri::async_runtime::block_on(cmd.output()).unwrap();
 
         assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
@@ -505,7 +515,9 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn test_cmd_output_output_fail() {
-        let cmd = Command::new("cat").args(["test/"]);
+        let cmd = Command::new("cat")
+            .args(["test/"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"));
         let output = tauri::async_runtime::block_on(cmd.output()).unwrap();
 
         assert_eq!(String::from_utf8(output.stdout).unwrap(), "");

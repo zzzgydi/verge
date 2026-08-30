@@ -1,0 +1,23 @@
+[package]
+name = "verge-platform"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0"
+publish = false
+
+[dependencies]
+fs2 = "0.4"
+libc = "0.2"
+serde_json = "1.0"
+verge-domain = { path = "../verge-domain" }
+verge-helper-protocol = { path = "../verge-helper-protocol" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"
+objc2-service-management = "0.3"
+tray-icon = "0.21"
+
+[dev-dependencies]
+verge-helper = { path = "../../apps/verge-helper" }

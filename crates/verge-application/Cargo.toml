@@ -1,0 +1,17 @@
+[package]
+name = "verge-application"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0"
+publish = false
+
+[dependencies]
+flate2 = "1.1"
+reqwest = { version = "0.11.27", default-features = false, features = ["blocking", "rustls-tls"] }
+verge-config = { path = "../verge-config" }
+verge-core = { path = "../verge-core" }
+verge-domain = { path = "../verge-domain" }
+verge-platform = { path = "../verge-platform" }
+
+[dev-dependencies]
+sha2 = "0.10"

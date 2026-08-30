@@ -1,0 +1,15 @@
+[package]
+name = "verge-gpui-tray-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "0e2fb7acdf1d40d4db3d458da3893fe9865e901e" }
+image = { version = "0.25", default-features = false, features = ["png"] }
+tray-icon = "0.21"

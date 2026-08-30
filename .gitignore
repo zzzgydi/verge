@@ -23,4 +23,8 @@ dist-ssr
 *.sln
 *.sw?
 
-/target/
+target/
+dist/
+
+.cache/
+apps/verge-gpui/scripts/benchmark/
