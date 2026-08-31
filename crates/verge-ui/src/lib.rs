@@ -195,6 +195,7 @@ pub enum UiAction {
         name: String,
         url: String,
         update_policy: UpdatePolicy,
+        user_agent: Option<String>,
     },
     SelectProfile(ProfileId),
     UpdateProfileYaml {
@@ -344,12 +345,14 @@ impl UiAction {
                 name,
                 url,
                 update_policy,
+                user_agent,
             } => vec![
                 UiRequest::Profile(AppCommand::ImportRemoteProfile {
                     id,
                     name,
                     url,
                     update_policy,
+                    user_agent,
                 }),
                 UiRequest::Profile(AppCommand::ListProfiles),
             ],
@@ -826,6 +829,7 @@ mod tests {
             ProfileSource::Local,
             UpdatePolicy::Manual,
             100,
+            None,
         )
         .unwrap();
         let mut state = UiState::default();

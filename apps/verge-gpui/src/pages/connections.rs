@@ -28,14 +28,15 @@ impl ConnectionsDelegate {
     pub fn new(actions: mpsc::Sender<UiAction>) -> Self {
         Self {
             connections: Vec::new(),
+            // 7 列总宽控制在内容区（约 850px）内，避免横向挤压。
             columns: vec![
-                Column::new("process", "进程").width(160.),
-                Column::new("target", "目标").width(240.),
-                Column::new("rule", "规则").width(160.),
-                Column::new("chains", "链路").width(200.),
-                Column::new("upload", "上传").width(90.).text_right(),
-                Column::new("download", "下载").width(90.).text_right(),
-                Column::new("actions", "操作").width(70.),
+                Column::new("process", "进程").width(110.),
+                Column::new("target", "目标").width(170.),
+                Column::new("rule", "规则").width(130.),
+                Column::new("chains", "链路").width(140.),
+                Column::new("upload", "上传").width(80.).text_right(),
+                Column::new("download", "下载").width(80.).text_right(),
+                Column::new("actions", "操作").width(60.),
             ],
             actions,
         }

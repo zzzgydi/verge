@@ -72,6 +72,11 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         .memory
         .as_ref()
         .map_or_else(|| "未知".to_owned(), |memory| format::bytes(memory.inuse));
+    let connections = view
+        .state
+        .connections
+        .as_ref()
+        .map_or_else(|| "—".to_owned(), |connections| connections.connection_count.to_string());
 
     let mode_group = ButtonGroup::new("mode-group")
         .outline()
@@ -107,7 +112,8 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 .child(stat_tile("内核状态", core_status, cx))
                 .child(stat_tile("上传速率", format!("↑ {upload}"), cx))
                 .child(stat_tile("下载速率", format!("↓ {download}"), cx))
-                .child(stat_tile("内存占用", memory, cx)),
+                .child(stat_tile("内存占用", memory, cx))
+                .child(stat_tile("连接数", connections, cx)),
         )
         .child(
             GroupBox::new()

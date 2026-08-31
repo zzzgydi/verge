@@ -1,9 +1,10 @@
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
-    ActiveTheme as _, Selectable as _, Sizable as _,
+    ActiveTheme as _, Disableable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     group_box::GroupBox,
     h_flex,
+    menu::{DropdownMenu as _, PopupMenuItem},
     tag::Tag,
     v_flex,
 };
@@ -65,14 +66,16 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
             ProfileSource::Local => "本地",
             ProfileSource::Remote { .. } => "远程",
         };
+        // 操作分级：启用是主操作（primary），查看/合并/更新是次要（ghost），
+        // 删除收进"更多…"下拉（危险操作隔离，确认弹窗内才是 danger 按钮）。
         let actions = h_flex()
             .gap_1()
             .child(
                 Button::new(format!("select-profile-{}", id.as_str()))
-                    .label("启用")
+                    .label(if selected { "已启用" } else { "启用" })
                     .small()
-                    .ghost()
-                    .selected(selected)
+                    .primary()
+                    .disabled(selected)
                     .loading(view.is_pending(&["profile_write"]))
                     .on_click(cx.listener({
                         let id = id.clone();
@@ -138,18 +141,29 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 },
             )
             .child(
-                Button::new(format!("delete-profile-{}", id.as_str()))
-                    .label("删除")
+                Button::new(format!("profile-more-{}", id.as_str()))
+                    .label("更多…")
                     .small()
                     .ghost()
-                    .danger()
-                    .on_click(cx.listener({
+                    .dropdown_menu({
+                        let view_entity = cx.entity();
                         let id = id.clone();
                         let name = name.clone();
-                        move |this, _, window, cx| {
-                            this.confirm_delete_profile(id.clone(), name.clone(), window, cx);
+                        move |menu, _, _| {
+                            menu.item(
+                                PopupMenuItem::new("删除配置…").on_click({
+                                    let view = view_entity.clone();
+                                    let id = id.clone();
+                                    let name = name.clone();
+                                    move |_, window, cx| {
+                                        view.update(cx, |this, cx| {
+                                            this.confirm_delete_profile(id.clone(), name.clone(), window, cx);
+                                        });
+                                    }
+                                }),
+                            )
                         }
-                    })),
+                    }),
             );
         list = list.child(
             GroupBox::new()

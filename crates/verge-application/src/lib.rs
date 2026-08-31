@@ -1110,7 +1110,8 @@ pub struct ProfileCommandHandler<'a, C> {
 }
 
 pub trait ProfileFetcher {
-    fn fetch(&mut self, url: &str) -> Result<String, AppError>;
+    /// 拉取订阅内容。`user_agent` 覆盖客户端默认 UA（None 用默认值）。
+    fn fetch(&mut self, url: &str, user_agent: Option<&str>) -> Result<String, AppError>;
 }
 
 pub struct ReqwestProfileFetcher {
@@ -1136,7 +1137,7 @@ impl ReqwestProfileFetcher {
 }
 
 impl ProfileFetcher for ReqwestProfileFetcher {
-    fn fetch(&mut self, url: &str) -> Result<String, AppError> {
+    fn fetch(&mut self, url: &str, user_agent: Option<&str>) -> Result<String, AppError> {
         let parsed = reqwest::Url::parse(url).map_err(profile_fetch_error)?;
         if !matches!(parsed.scheme(), "http" | "https") {
             return Err(AppError::new(
@@ -1144,9 +1145,11 @@ impl ProfileFetcher for ReqwestProfileFetcher {
                 "profile URL must use HTTP or HTTPS",
             ));
         }
-        let mut response = self
-            .client
-            .get(parsed)
+        let mut request = self.client.get(parsed);
+        if let Some(ua) = user_agent.filter(|ua| !ua.trim().is_empty()) {
+            request = request.header(reqwest::header::USER_AGENT, ua);
+        }
+        let mut response = request
             .send()
             .and_then(reqwest::blocking::Response::error_for_status)
             .map_err(profile_fetch_error)?;
@@ -1384,7 +1387,7 @@ impl<'a, C: CoreControl, F: ProfileFetcher> ProfileUpdateCoordinator<'a, C, F> {
     }
 
     fn run_job(&mut self, job: ProfileUpdateJob, now: i64) -> Result<(), CommandFailure> {
-        let fetched = self.fetcher.fetch(&job.url);
+        let fetched = self.fetcher.fetch(&job.url, job.user_agent.as_deref());
         let result = match fetched {
             Ok(yaml) => self.config().update_profile_yaml(&job.id, &yaml, now),
             Err(cause) => Err(no_recovery(cause)),
@@ -1469,7 +1472,7 @@ impl<'a, C: CoreControl> ProfileCommandHandler<'a, C> {
                 update_policy,
             } => {
                 let profile =
-                    Profile::new(id, name, source, update_policy, now).map_err(no_recovery)?;
+                    Profile::new(id, name, source, update_policy, now, None).map_err(no_recovery)?;
                 self.profiles.import(profile, &yaml).map_err(no_recovery)?;
                 AppCommandOutput::None
             }
@@ -1722,7 +1725,7 @@ mod tests {
                 ProfileSource::Local,
                 UpdatePolicy::Manual,
                 1_000,
-            )
+                    None)
             .unwrap();
             store.import(profile, yaml).unwrap();
         }
@@ -1878,7 +1881,7 @@ mod tests {
     }
 
     impl ProfileFetcher for FakeFetcher {
-        fn fetch(&mut self, _url: &str) -> Result<String, AppError> {
+        fn fetch(&mut self, _url: &str, _user_agent: Option<&str>) -> Result<String, AppError> {
             self.responses.pop_front().unwrap()
         }
     }
@@ -1898,7 +1901,7 @@ mod tests {
                     },
                     UpdatePolicy::Interval { seconds: 300 },
                     100,
-                )
+                    None)
                 .unwrap(),
                 "mode: rule\n",
             )
@@ -1951,16 +1954,16 @@ mod tests {
     fn http_profile_fetcher_enforces_protocol_and_size_limit() {
         let mut fetcher = ReqwestProfileFetcher::new(Duration::from_secs(2), 64).unwrap();
         assert_eq!(
-            fetcher.fetch(&serve_once("mode: rule\n")).unwrap(),
+            fetcher.fetch(&serve_once("mode: rule\n"), None).unwrap(),
             "mode: rule\n"
         );
         assert_eq!(
-            fetcher.fetch("file:///tmp/profile.yaml").unwrap_err().code,
+            fetcher.fetch("file:///tmp/profile.yaml", None).unwrap_err().code,
             ErrorCode::InvalidInput
         );
         let mut limited = ReqwestProfileFetcher::new(Duration::from_secs(2), 4).unwrap();
         assert_eq!(
-            limited.fetch(&serve_once("mode: rule\n")).unwrap_err().code,
+            limited.fetch(&serve_once("mode: rule\n"), None).unwrap_err().code,
             ErrorCode::ValidationFailed
         );
     }
@@ -2104,7 +2107,7 @@ mod tests {
                     ProfileSource::Local,
                     UpdatePolicy::Manual,
                     100,
-                )
+                    None)
                 .unwrap(),
                 "mode: rule\n",
             )
@@ -2276,7 +2279,7 @@ mod tests {
                     ProfileSource::Local,
                     UpdatePolicy::Manual,
                     1_000,
-                )
+                    None)
                 .unwrap(),
                 "mode: direct\n",
             )

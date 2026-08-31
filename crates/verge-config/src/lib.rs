@@ -1091,6 +1091,7 @@ pub struct ProfileUpdateJob {
     pub id: ProfileId,
     pub url: String,
     pub trigger: UpdateTrigger,
+    pub user_agent: Option<String>,
 }
 
 #[derive(Default)]
@@ -1159,6 +1160,7 @@ impl UpdateScheduler {
             id: profile.id.clone(),
             url: url.clone(),
             trigger,
+            user_agent: profile.user_agent.clone(),
         })
     }
 }
@@ -1368,7 +1370,7 @@ mod tests {
             },
             policy,
             1_000,
-        )
+                    None)
         .unwrap()
     }
 
@@ -1415,7 +1417,7 @@ mod tests {
                     },
                     UpdatePolicy::Manual,
                     1_000,
-                )
+                    None)
                 .unwrap(),
                 "mixed-port: 7890\nsecret: private-yaml-secret\n",
             )
@@ -1455,7 +1457,7 @@ mod tests {
                     ProfileSource::Local,
                     UpdatePolicy::Manual,
                     2_000,
-                )
+                    None)
                 .unwrap(),
                 "mixed-port: 7891\n",
             )
@@ -1568,7 +1570,7 @@ mod tests {
                     },
                     UpdatePolicy::Interval { seconds: 300 },
                     100,
-                )
+                    None)
                 .unwrap(),
                 "mode: rule\n",
             )
@@ -1760,7 +1762,7 @@ mod tests {
                     ProfileSource::Local,
                     UpdatePolicy::Manual,
                     100,
-                )
+                    None)
                 .unwrap(),
                 "mixed-port: 7893\nport: 7890\n",
             )
@@ -1779,7 +1781,7 @@ mod tests {
                     ProfileSource::Local,
                     UpdatePolicy::Manual,
                     100,
-                )
+                    None)
                 .unwrap(),
                 "mode: rule\n",
             )
@@ -1803,7 +1805,7 @@ mod tests {
                         ProfileSource::Local,
                         UpdatePolicy::Manual,
                         100,
-                    )
+                    None)
                     .unwrap(),
                     yaml,
                 )

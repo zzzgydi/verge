@@ -26,6 +26,9 @@ mod hotkey;
 mod pages;
 mod view;
 
+#[cfg(test)]
+mod dialog_mechanism_tests;
+
 fn main() {
     // 守护进程分叉：同一可执行文件以 --daemon 参数启动，由 GUI 进程拉起或登录项调用。
     if std::env::args().any(|argument| argument == "--daemon") {

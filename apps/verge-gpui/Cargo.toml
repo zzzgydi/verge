@@ -20,3 +20,6 @@ verge-ipc = { path = "../../crates/verge-ipc" }
 verge-platform = { path = "../../crates/verge-platform" }
 verge-runtime = { path = "../../crates/verge-runtime" }
 verge-ui = { path = "../../crates/verge-ui" }
+
+[dev-dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", features = ["test-support"] }

@@ -2,10 +2,12 @@ use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
+    collapsible::Collapsible,
     form::{field, v_form},
     group_box::GroupBox,
     h_flex,
     input::{Input, NumberInput},
+    Icon, IconName,
     switch::Switch,
     v_flex,
 };
@@ -25,6 +27,58 @@ fn helper_label(view: &MainView) -> String {
         Some(HelperStatus::Incompatible { message }) => format!("需要修复：{message}"),
         None => "未知".into(),
     }
+}
+
+/// 可折叠设置分组的标题行（箭头 + 组名），点击切换折叠状态。
+fn group_trigger<'a>(
+    view: &MainView,
+    id: &'static str,
+    title: &'a str,
+    cx: &mut Context<MainView>,
+) -> impl IntoElement + 'a {
+    let collapsed = view.settings_collapsed.borrow().contains(id);
+    let view_entity = cx.entity();
+    let title_owned = SharedString::from(title);
+    let icon = if collapsed {
+        IconName::ChevronRight
+    } else {
+        IconName::ChevronDown
+    };
+    h_flex()
+        .id(SharedString::from(format!("settings-toggle-{id}")))
+        .gap_2()
+        .items_center()
+        .px_1()
+        .py_1()
+        .cursor_pointer()
+        .on_click(move |_, _, cx| {
+            {
+                let mut collapsed_set = view_entity.read(cx).settings_collapsed.borrow_mut();
+                if collapsed {
+                    collapsed_set.remove(id);
+                } else {
+                    collapsed_set.insert(id);
+                }
+            }
+            cx.notify(view_entity.entity_id());
+        })
+        .child(Icon::new(icon).size_4().text_color(cx.theme().muted_foreground))
+        .child(div().text_sm().font_weight(gpui::FontWeight::SEMIBOLD).child(title_owned))
+}
+
+/// 把分组包成可折叠组件（默认展开）。
+fn collapsible_group(
+    view: &MainView,
+    id: &'static str,
+    title: &str,
+    group: GroupBox,
+    cx: &mut Context<MainView>,
+) -> Collapsible {
+    let collapsed = view.settings_collapsed.borrow().contains(id);
+    Collapsible::new()
+        .open(!collapsed)
+        .child(group_trigger(view, id, title, cx))
+        .content(group)
 }
 
 pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
@@ -514,13 +568,13 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         });
 
     v_flex()
-        .gap_4()
+        .gap_3()
         .child(page_title("设置"))
-        .child(general_group)
-        .child(network_group)
-        .child(proxy_group)
-        .child(core_group)
-        .child(system_group)
-        .child(backup_group)
+        .child(collapsible_group(view, "general", "通用", general_group, cx))
+        .child(collapsible_group(view, "network", "网络", network_group, cx))
+        .child(collapsible_group(view, "proxy", "系统代理", proxy_group, cx))
+        .child(collapsible_group(view, "core", "Mihomo 内核", core_group, cx))
+        .child(collapsible_group(view, "system", "系统", system_group, cx))
+        .child(collapsible_group(view, "backup", "加密备份", backup_group, cx))
         .into_any_element()
 }

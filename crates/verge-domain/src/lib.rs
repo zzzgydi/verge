@@ -114,6 +114,7 @@ pub enum AppCommand {
         name: String,
         url: String,
         update_policy: UpdatePolicy,
+        user_agent: Option<String>,
     },
     SelectProfile {
         id: ProfileId,
@@ -167,6 +168,9 @@ pub struct Profile {
     pub consecutive_failures: u32,
     #[serde(default)]
     pub last_error: Option<String>,
+    /// 订阅下载请求的自定义 User-Agent；None 使用默认 UA。
+    #[serde(default)]
+    pub user_agent: Option<String>,
 }
 
 impl Profile {
@@ -176,6 +180,7 @@ impl Profile {
         source: ProfileSource,
         update_policy: UpdatePolicy,
         now: i64,
+        user_agent: Option<String>,
     ) -> Result<Self, AppError> {
         let name = name.into();
         if name.trim().is_empty() {
@@ -218,6 +223,7 @@ impl Profile {
             next_update_at,
             consecutive_failures: 0,
             last_error: None,
+            user_agent,
         })
     }
 }

@@ -1,9 +1,10 @@
+use std::rc::Rc;
 use std::sync::mpsc;
 
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
-    WindowExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Root, Sizable as _, StyledExt as _,
+    TitleBar, WindowExt as _,
     alert::Alert,
     button::{Button, ButtonVariants as _},
     dialog::DialogButtonProps,
@@ -28,7 +29,6 @@ use verge_domain::{
 use verge_ui::{CoreStatus, Page, UiAction, UiRequestEnvelope, UiState};
 
 use crate::{
-    format,
     pages::{self, connections::ConnectionsDelegate},
 };
 
@@ -46,13 +46,33 @@ actions!(
     ]
 );
 
+/// Sheet 加载状态：独立于 MainView 的实体。
+///
+/// gpui-component 的 sheet builder 在渲染时执行（`render_sheet_layer` 调用），
+/// 而渲染期间 MainView 实体处于 lease 状态——builder 里直接 `view.read()` 读
+/// MainView 会 double-lease panic。因此这些状态放进独立实体，builder 只读它。
+#[derive(Default)]
+pub struct SheetState {
+    /// 正在等待 YAML 加载的配置 id。
+    pub pending_yaml: Option<ProfileId>,
+    /// 正在等待 Merge 配置加载。
+    pub pending_merge: bool,
+    /// 正在等待合并结果生成的配置 id。
+    pub pending_merged: Option<ProfileId>,
+}
+
 pub struct MainView {
     pub state: UiState,
     pub requests: mpsc::Sender<UiRequestEnvelope>,
+    pub sheet_state: Entity<SheetState>,
+    /// 设置页已折叠的分组 id。
+    pub settings_collapsed: Rc<std::cell::RefCell<std::collections::HashSet<&'static str>>>,
     pub profile_id: Entity<InputState>,
     pub profile_name: Entity<InputState>,
     pub profile_url: Entity<InputState>,
     pub profile_interval: Entity<InputState>,
+    /// 订阅请求的自定义 User-Agent（可选）。
+    pub profile_user_agent: Entity<InputState>,
     pub backup_passphrase: Entity<InputState>,
     /// 设置页的设置导入路径输入框。
     pub settings_import_path: Entity<InputState>,
@@ -75,12 +95,6 @@ pub struct MainView {
     pub connections_table: Entity<TableState<ConnectionsDelegate>>,
     /// 日志级别过滤，None 表示全部。
     pub log_filter: Option<&'static str>,
-    /// 点击“查看 YAML”后等待加载完成再打开 Sheet 的配置 ID。
-    pub pending_yaml_sheet: Option<ProfileId>,
-    /// 点击“Merge 配置”后等待加载完成再填充 Sheet。
-    pub pending_merge_sheet: bool,
-    /// 点击“合并结果”后等待加载完成再填充 Sheet 的配置 ID。
-    pub pending_merged_sheet: Option<ProfileId>,
     /// 点击“预览导入”后等待预览结果再打开确认弹窗的设置文件路径。
     pub pending_settings_import: Option<String>,
     /// 组件内回调（表格右键菜单等）回传的待分发动作。
@@ -157,6 +171,9 @@ impl MainView {
                     .placeholder("更新间隔（秒）")
                     .default_value("3600")
             }),
+            profile_user_agent: cx.new(|cx| {
+                InputState::new(window, cx).placeholder("可选，如 ClashX/1.0（留空用默认）")
+            }),
             backup_passphrase: cx.new(|cx| {
                 InputState::new(window, cx)
                     .placeholder("备份口令（至少 12 个字符）")
@@ -185,10 +202,9 @@ impl MainView {
             merged_editor: cx.new(|cx| TextareaState::new(window, cx)),
             connections_table,
             log_filter: None,
-            pending_yaml_sheet: None,
-            pending_merge_sheet: false,
-            pending_merged_sheet: None,
             pending_settings_import: None,
+            sheet_state: cx.new(|_| SheetState::default()),
+            settings_collapsed: Rc::new(std::cell::RefCell::new(std::collections::HashSet::new())),
             action_rx,
             focus_handle,
             sidebar_collapsed: false,
@@ -373,6 +389,8 @@ impl MainView {
         let name = self.profile_name.read(cx).value().to_string();
         let url = self.profile_url.read(cx).value().to_string();
         let interval = self.profile_interval.read(cx).value().parse::<u64>();
+        let user_agent = self.profile_user_agent.read(cx).value().trim().to_string();
+        let user_agent = (!user_agent.is_empty()).then_some(user_agent);
         match (ProfileId::parse(id), interval) {
             (Ok(id), Ok(seconds)) if seconds > 0 => {
                 self.dispatch(
@@ -381,6 +399,7 @@ impl MainView {
                         name,
                         url,
                         update_policy: UpdatePolicy::Interval { seconds },
+                        user_agent,
                     },
                     cx,
                 );
@@ -438,6 +457,7 @@ impl MainView {
         let name_input = self.profile_name.clone();
         let url_input = self.profile_url.clone();
         let interval_input = self.profile_interval.clone();
+        let ua_input = self.profile_user_agent.clone();
         let yaml_input = self.profile_yaml.clone();
         window.open_dialog(cx, move |dialog, window, _| {
             let view_local = view.clone();
@@ -469,6 +489,12 @@ impl MainView {
                             field()
                                 .label("更新间隔（秒）")
                                 .child(Input::new(&interval_input)),
+                        )
+                        .child(
+                            field()
+                                .label("User-Agent")
+                                .description("订阅下载请求的 UA，留空使用默认值")
+                                .child(Input::new(&ua_input)),
                         )
                         .child(
                             field()
@@ -733,20 +759,22 @@ impl MainView {
 
     /// 点击后立即打开 YAML Sheet；加载完成后由响应轮询填入编辑器。
     pub fn open_yaml_sheet(&mut self, id: ProfileId, window: &mut Window, cx: &mut Context<Self>) {
-        self.pending_yaml_sheet = Some(id.clone());
+        self.sheet_state
+            .update(cx, |state, _| state.pending_yaml = Some(id.clone()));
         self.yaml_editor.update(cx, |editor, cx| {
             editor.set_value("正在加载配置 YAML…", window, cx)
         });
+        let sheet_state = self.sheet_state.clone();
         let view = cx.entity();
         let editor = self.yaml_editor.clone();
         let mono = cx.theme().mono_font_family.clone();
         let request_id = id.clone();
         window.open_sheet(cx, move |sheet, _, cx| {
-            let view = view.clone();
+            let sheet_state = sheet_state.clone();
             let id = id.clone();
             let editor = editor.clone();
             let mono = mono.clone();
-            let loading = view.read(cx).pending_yaml_sheet.as_ref() == Some(&id);
+            let loading = sheet_state.read(cx).pending_yaml.as_ref() == Some(&id);
             sheet
                 .title(format!("配置 YAML · {}", id.as_str()))
                 .size(rems(32.))
@@ -832,7 +860,8 @@ impl MainView {
 
     /// YAML 加载成功后填入已经打开的 Sheet。
     pub fn maybe_open_yaml_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(want) = self.pending_yaml_sheet.clone() else {
+        let want = self.sheet_state.read(cx).pending_yaml.clone();
+        let Some(want) = want else {
             return;
         };
         let Some((id, yaml)) = self.state.profile_yaml.clone() else {
@@ -841,7 +870,8 @@ impl MainView {
         if id != want {
             return;
         }
-        self.pending_yaml_sheet = None;
+        self.sheet_state
+            .update(cx, |state, _| state.pending_yaml = None);
         self.yaml_editor
             .update(cx, |editor, cx| editor.set_value(yaml.clone(), window, cx));
     }
@@ -853,7 +883,8 @@ impl MainView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.pending_yaml_sheet = None;
+        self.sheet_state
+            .update(cx, |state, _| state.pending_yaml = None);
         self.yaml_editor.update(cx, |editor, cx| {
             editor.set_value(
                 format!("无法加载配置 YAML：\n{}", error.message),
@@ -865,18 +896,21 @@ impl MainView {
 
     /// 点击后立即打开 Merge 配置 Sheet；加载完成后由响应轮询填入编辑器。
     pub fn open_merge_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.pending_merge_sheet = true;
+        self.sheet_state
+            .update(cx, |state, _| state.pending_merge = true);
         self.merge_editor.update(cx, |editor, cx| {
             editor.set_value("正在加载 Merge 配置…", window, cx)
         });
         let view = cx.entity();
+        let sheet_state = self.sheet_state.clone();
         let editor = self.merge_editor.clone();
         let mono = cx.theme().mono_font_family.clone();
         window.open_sheet(cx, move |sheet, _, cx| {
             let view = view.clone();
+            let sheet_state = sheet_state.clone();
             let editor = editor.clone();
             let mono = mono.clone();
-            let loading = view.read(cx).pending_merge_sheet;
+            let loading = sheet_state.read(cx).pending_merge;
             sheet
                 .title("全局 Merge 配置")
                 .size(rems(32.))
@@ -952,20 +986,22 @@ impl MainView {
 
     /// Merge 配置加载成功后填入已经打开的 Sheet。
     pub fn maybe_open_merge_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.pending_merge_sheet {
+        if !self.sheet_state.read(cx).pending_merge {
             return;
         }
         let Some(yaml) = self.state.merge_yaml.clone() else {
             return;
         };
-        self.pending_merge_sheet = false;
+        self.sheet_state
+            .update(cx, |state, _| state.pending_merge = false);
         self.merge_editor
             .update(cx, |editor, cx| editor.set_value(yaml.clone(), window, cx));
     }
 
     /// Merge 配置加载失败时保留 Sheet，并在编辑器内直接显示错误。
     pub fn fail_merge_sheet(&mut self, error: &AppError, window: &mut Window, cx: &mut Context<Self>) {
-        self.pending_merge_sheet = false;
+        self.sheet_state
+            .update(cx, |state, _| state.pending_merge = false);
         self.merge_editor.update(cx, |editor, cx| {
             editor.set_value(
                 format!("无法加载 Merge 配置：\n{}", error.message),
@@ -977,18 +1013,20 @@ impl MainView {
 
     /// 点击后立即打开合并结果 Sheet（只读）；加载完成后由响应轮询填入内容。
     pub fn open_merged_sheet(&mut self, id: ProfileId, window: &mut Window, cx: &mut Context<Self>) {
-        self.pending_merged_sheet = Some(id.clone());
+        self.sheet_state
+            .update(cx, |state, _| state.pending_merged = Some(id.clone()));
         self.merged_editor.update(cx, |editor, cx| {
             editor.set_value("正在生成合并结果…", window, cx)
         });
-        let view = cx.entity();
+        let sheet_state = self.sheet_state.clone();
         let editor = self.merged_editor.clone();
         let mono = cx.theme().mono_font_family.clone();
         let request_id = id.clone();
         window.open_sheet(cx, move |sheet, _, cx| {
             let editor = editor.clone();
             let mono = mono.clone();
-            let loading = view.read(cx).pending_merged_sheet.is_some();
+            let sheet_state = sheet_state.clone();
+            let loading = sheet_state.read(cx).pending_merged.is_some();
             sheet
                 .title(format!("合并结果 · {}", id.as_str()))
                 .size(rems(32.))
@@ -1025,7 +1063,8 @@ impl MainView {
 
     /// 合并结果加载成功后填入已经打开的 Sheet。
     pub fn maybe_open_merged_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(want) = self.pending_merged_sheet.clone() else {
+        let want = self.sheet_state.read(cx).pending_merged.clone();
+        let Some(want) = want else {
             return;
         };
         let Some((id, yaml)) = self.state.merged_yaml.clone() else {
@@ -1034,14 +1073,16 @@ impl MainView {
         if id != want {
             return;
         }
-        self.pending_merged_sheet = None;
+        self.sheet_state
+            .update(cx, |state, _| state.pending_merged = None);
         self.merged_editor
             .update(cx, |editor, cx| editor.set_value(yaml.clone(), window, cx));
     }
 
     /// 合并结果生成失败时保留 Sheet，并在编辑器内直接显示错误。
     pub fn fail_merged_sheet(&mut self, error: &AppError, window: &mut Window, cx: &mut Context<Self>) {
-        self.pending_merged_sheet = None;
+        self.sheet_state
+            .update(cx, |state, _| state.pending_merged = None);
         self.merged_editor.update(cx, |editor, cx| {
             editor.set_value(
                 format!("无法生成合并结果：\n{}", error.message),
@@ -1171,34 +1212,31 @@ impl MainView {
             .mode
             .map(pages::home::mode_label)
             .unwrap_or("模式未知");
-        let traffic = self.state.traffic.as_ref().map_or_else(
-            || "等待流量数据…".to_owned(),
-            |traffic| {
-                format!(
-                    "↑ {}  ↓ {}",
-                    format::rate(traffic.up),
-                    format::rate(traffic.down)
-                )
-            },
+        let connections = self.state.connections.as_ref().map_or_else(
+            || "连接等待中".to_owned(),
+            |snapshot| format!("连接 {}", snapshot.connection_count),
         );
-        let memory = self.state.memory.as_ref().map_or_else(
-            || "内存未知".to_owned(),
-            |memory| format!("内存 {}", format::bytes(memory.inuse)),
-        );
+        // 流量与内存留给首页统计卡（避免状态栏与首页信息重复）。
         StatusBar::new()
             .left(core_status)
             .left(mode)
-            .right(traffic)
-            .right(memory)
+            .right(connections)
     }
 }
 
 impl Render for MainView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // 表格右键菜单等组件回调通过 channel 回到这里统一 dispatch。
         while let Ok(action) = self.action_rx.try_recv() {
             self.dispatch(action, cx);
         }
+
+        // gpui-component 的 Root::render 不挂载 overlay 层；dialog / sheet / 通知
+        // 必须由应用自己在渲染树里显式挂载，否则窗口状态注册了但屏幕上不显示
+        // （表现为"点了没反应"）。
+        let sheet_layer = Root::render_sheet_layer(window, cx);
+        let dialog_layer = Root::render_dialog_layer(window, cx);
+        let notification_layer = Root::render_notification_layer(window, cx);
 
         let page = self.state.page;
         let content = match page {
@@ -1281,5 +1319,9 @@ impl Render for MainView {
                 ),
             )
             .child(self.status_bar(cx))
+            // overlay 层必须最后挂载（位于内容之上）。
+            .children(sheet_layer)
+            .children(dialog_layer)
+            .children(notification_layer)
     }
 }

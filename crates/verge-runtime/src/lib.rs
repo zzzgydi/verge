@@ -489,8 +489,14 @@ impl Backend {
                 source,
                 update_policy,
             } => {
-                let profile =
-                    Profile::new(id.clone(), name, source.clone(), update_policy.clone(), now)?;
+                let profile = Profile::new(
+                    id.clone(),
+                    name,
+                    source.clone(),
+                    update_policy.clone(),
+                    now,
+                    None,
+                )?;
                 self.profiles.import(profile, yaml)?;
             }
             AppCommand::ImportRemoteProfile {
@@ -498,14 +504,16 @@ impl Backend {
                 name,
                 url,
                 update_policy,
+                user_agent,
             } => {
-                let yaml = self.profile_fetcher.fetch(url)?;
+                let yaml = self.profile_fetcher.fetch(url, user_agent.as_deref())?;
                 let profile = Profile::new(
                     id.clone(),
                     name,
                     verge_domain::ProfileSource::Remote { url: url.clone() },
                     update_policy.clone(),
                     now,
+                    user_agent.clone(),
                 )?;
                 self.profiles.import(profile, &yaml)?;
             }
