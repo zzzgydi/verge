@@ -12,7 +12,9 @@ use verge_domain::{
 use verge_ui::{UiRequestEnvelope, UiResponseEnvelope};
 
 /// IPC 协议版本。守护进程与 GUI 进程必须一致；升级不匹配时拒绝连接。
-pub const PROTOCOL_VERSION: u32 = 1;
+/// v2：新增应用自身更新命令（CheckAppUpdate / UpdateApplication / RestartApplication）
+/// 与快照字段；应用更新后旧守护进程与新 GUI 的配对靠这个版本号明确拒绝。
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// GUI → Daemon 的消息。
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -72,6 +74,7 @@ impl Default for InitialSnapshot {
             application_settings: ApplicationSettingsSnapshot {
                 settings: Default::default(),
                 data_directory: String::new(),
+                app_version: None,
             },
             runtime_settings: None,
         }

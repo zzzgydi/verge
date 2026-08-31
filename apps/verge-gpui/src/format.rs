@@ -1,5 +1,7 @@
 //! 数值与时间的小格式化函数，供各页面和状态栏共用。
 
+use crate::i18n::Lang;
+
 /// 字节速率：`123 B/s`、`1.2 KB/s`、`3.4 MB/s`。
 pub fn rate(bytes_per_second: u64) -> String {
     format!("{}/s", bytes(bytes_per_second))
@@ -22,14 +24,28 @@ pub fn bytes(value: u64) -> String {
     }
 }
 
-/// 更新间隔秒数的人性化描述。
-pub fn interval(seconds: u64) -> String {
+/// 更新间隔秒数的人性化描述（双语）。
+pub fn interval(lang: Lang, seconds: u64) -> String {
     if seconds.is_multiple_of(3600) {
-        format!("每 {} 小时", seconds / 3600)
+        let hours = seconds / 3600;
+        match lang {
+            Lang::ZhCn => format!("每 {hours} 小时"),
+            Lang::En if hours == 1 => "every hour".to_owned(),
+            Lang::En => format!("every {hours} hours"),
+        }
     } else if seconds.is_multiple_of(60) {
-        format!("每 {} 分钟", seconds / 60)
+        let minutes = seconds / 60;
+        match lang {
+            Lang::ZhCn => format!("每 {minutes} 分钟"),
+            Lang::En if minutes == 1 => "every minute".to_owned(),
+            Lang::En => format!("every {minutes} minutes"),
+        }
     } else {
-        format!("每 {seconds} 秒")
+        match lang {
+            Lang::ZhCn => format!("每 {seconds} 秒"),
+            Lang::En if seconds == 1 => "every second".to_owned(),
+            Lang::En => format!("every {seconds} seconds"),
+        }
     }
 }
 
@@ -48,8 +64,14 @@ mod tests {
 
     #[test]
     fn formats_update_intervals() {
-        assert_eq!(interval(3600), "每 1 小时");
-        assert_eq!(interval(300), "每 5 分钟");
-        assert_eq!(interval(45), "每 45 秒");
+        assert_eq!(interval(Lang::ZhCn, 3600), "每 1 小时");
+        assert_eq!(interval(Lang::ZhCn, 300), "每 5 分钟");
+        assert_eq!(interval(Lang::ZhCn, 45), "每 45 秒");
+        assert_eq!(interval(Lang::En, 3600), "every hour");
+        assert_eq!(interval(Lang::En, 7200), "every 2 hours");
+        assert_eq!(interval(Lang::En, 300), "every 5 minutes");
+        assert_eq!(interval(Lang::En, 60), "every minute");
+        assert_eq!(interval(Lang::En, 45), "every 45 seconds");
+        assert_eq!(interval(Lang::En, 1), "every second");
     }
 }

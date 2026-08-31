@@ -15,6 +15,10 @@ use verge_application::{
     RuntimeCommandHandler, RuntimeCredentials, SupervisorControl, SystemProxyCommandHandler,
     SystemProxyControl, download_mihomo_candidate,
 };
+use verge_application::app_update::{
+    APP_EXECUTABLE_NAME, DittoArchiver, MacCodesign, check_app_update,
+    update_application_bundle,
+};
 use verge_config::{
     FileProfileStore, FileSettingsStore, UpdateScheduler, UpdateTrigger, decrypt_backup,
     write_encrypted_backup,
@@ -25,7 +29,7 @@ use verge_core::{
 };
 use verge_domain::{
     AppCommand, AppCommandOutput, AppCommandResult, AppError, ApplicationSettings,
-    ApplicationSettingsSnapshot, ErrorCode, Profile, RealtimeEvent, RuntimeCommand,
+    ApplicationSettingsSnapshot, ErrorCode, LogEvent, Profile, RealtimeEvent, RuntimeCommand,
     RuntimeCommandOutput, RuntimeSettings, SystemProxyCommand, SystemProxyCommandResult,
     TrafficEvent,
 };
@@ -35,6 +39,12 @@ use verge_ipc::{
 use verge_platform::{
     LoginItemService, MacHelperClient, MacSystemProxy, ProcessRunner, SingleInstance, TrayCommand,
     TrayService, TraySnapshot, daemon_socket_path, default_login_item_service,
+    redirect_stderr_to_log,
+};
+use verge_platform::{
+    HELPER_SOCKET_PATH, HelperInstallLayout, MacHelperInstaller,
+    bundled_resources_directory as platform_bundled_resources, bundle_short_version,
+    current_app_bundle, current_uid, discover_bundled_helper,
 };
 use verge_ui::{UiRequest, UiRequestEnvelope, UiResponse, UiResponseEnvelope};
 
@@ -47,6 +57,7 @@ struct BackendConfig {
     secret: String,
     services: Vec<String>,
     recovery_path: PathBuf,
+    helper_socket: PathBuf,
 }
 
 impl BackendConfig {
@@ -109,6 +120,9 @@ impl BackendConfig {
             secret,
             services,
             recovery_path: data_dir.join("system-proxy-recovery.json"),
+            helper_socket: env::var_os("VERGE_HELPER_SOCKET")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(HELPER_SOCKET_PATH)),
             data_dir,
         })
     }
@@ -133,6 +147,11 @@ fn bundled_resources_directory() -> Option<PathBuf> {
         .then(|| contents.join("Resources"))
 }
 
+/// 运行实例版本：读自己 bundle 的 Info.plist；非 .app 运行返回 None。
+fn current_app_version() -> Option<String> {
+    current_app_bundle().and_then(|bundle| bundle_short_version(&bundle).ok())
+}
+
 struct Engine {
     supervisor: CoreSupervisor,
     runtime: MihomoRuntime<TcpControllerTransport>,
@@ -149,10 +168,19 @@ struct Backend {
     update_scheduler: UpdateScheduler,
     profile_fetcher: ReqwestProfileFetcher,
     artifact_fetcher: ReqwestArtifactFetcher,
+    /// 应用自身更新专用下载器（host 白名单含 api.github.com，限额更大）。
+    app_fetcher: ReqwestArtifactFetcher,
+    /// RestartApplication 已拉起新进程，事件循环收尾后退出本进程。
+    restart_requested: bool,
     startup_updates_pending: bool,
     last_update_poll: Instant,
     /// 最近一次流量事件，用于守护进程托盘速度文字的更新。
     last_traffic: Option<TrafficEvent>,
+    /// 全局快捷键注册同步请求通道（守护主线程消费；测试中 None 表示未接线）。
+    hotkey_sync: Option<Sender<Option<String>>>,
+    /// 应用自身运行事件的有界缓冲（引擎状态、IPC、错误等），
+    /// 经实时流发给 GUI 日志页显示（与 Mihomo 内核日志并列）。
+    app_log_buffer: std::collections::VecDeque<LogEvent>,
 }
 
 impl Backend {
@@ -188,15 +216,33 @@ impl Backend {
                     "objects.githubusercontent.com".to_owned(),
                 ],
             )?,
+            app_fetcher: ReqwestArtifactFetcher::new(
+                Duration::from_secs(300),
+                512 * 1024 * 1024,
+                [
+                    "api.github.com".to_owned(),
+                    "github.com".to_owned(),
+                    "release-assets.githubusercontent.com".to_owned(),
+                    "objects.githubusercontent.com".to_owned(),
+                ],
+            )?,
+            restart_requested: false,
             startup_updates_pending: true,
             last_update_poll: Instant::now(),
             last_traffic: None,
+            hotkey_sync: None,
+            app_log_buffer: std::collections::VecDeque::new(),
         };
         if backend.profiles.selected().is_some()
             && let Err(error) = backend.start_selected()
         {
+            backend.log_app(
+                "error",
+                format!("选中配置启动内核失败: {}", error.message),
+            );
             backend.runtime_error = Some(error);
         }
+        backend.log_app("info", "守护进程后端就绪");
         Ok(backend)
     }
 
@@ -248,6 +294,7 @@ impl Backend {
         let selected = self.profiles.selected().cloned().ok_or_else(|| {
             AppError::new(ErrorCode::NotFound, "no selected profile to start Mihomo")
         })?;
+        self.log_app("info", format!("启动内核 (profile={})", selected.as_str()));
         let mut engine = self.build_engine(&selected)?;
         engine
             .supervisor
@@ -330,7 +377,10 @@ impl Backend {
                 let unavailable = self.runtime_unavailable();
                 let result = match &mut self.engine {
                     Some(engine) => {
-                        RuntimeCommandHandler::new(&mut engine.runtime).execute(request.clone())
+                        // TUN 开关需要 helper 协调时由 handler 经 HelperControl 完成。
+                        let helper = MacHelperClient::new(&self.config.helper_socket);
+                        RuntimeCommandHandler::with_helper(&mut engine.runtime, &helper)
+                            .execute(request.clone())
                     }
                     None => Err(unavailable),
                 };
@@ -365,19 +415,28 @@ impl Backend {
             }
             AppCommand::GetApplicationSettings => {
                 return Ok(AppCommandResult {
-                    output: AppCommandOutput::ApplicationSettings(ApplicationSettingsSnapshot {
-                        settings: self.settings.get().clone(),
-                        data_directory: self.config.data_dir.display().to_string(),
-                    }),
+                    output: AppCommandOutput::ApplicationSettings(self.settings_snapshot()),
                     summary: "Application settings loaded".into(),
                 });
             }
             AppCommand::GetHelperStatus => {
                 return Ok(AppCommandResult {
-                    output: AppCommandOutput::HelperStatus(
-                        MacHelperClient::new("/var/run/verge-helper.sock").status(),
-                    ),
+                    output: AppCommandOutput::HelperStatus(self.helper_status()),
                     summary: "Privileged helper status loaded".into(),
+                });
+            }
+            AppCommand::InstallHelper => {
+                let status = self.install_helper()?;
+                return Ok(AppCommandResult {
+                    output: AppCommandOutput::HelperStatus(status),
+                    summary: "Privileged helper installed".into(),
+                });
+            }
+            AppCommand::UninstallHelper => {
+                let status = self.uninstall_helper()?;
+                return Ok(AppCommandResult {
+                    output: AppCommandOutput::HelperStatus(status),
+                    summary: "Privileged helper uninstalled".into(),
                 });
             }
             AppCommand::UpdateApplicationSettings { settings } => {
@@ -398,12 +457,9 @@ impl Backend {
                 });
             }
             AppCommand::ImportApplicationSettings { source } => {
-                let settings = self.import_application_settings(source)?;
+                self.import_application_settings(source)?;
                 return Ok(AppCommandResult {
-                    output: AppCommandOutput::ApplicationSettings(ApplicationSettingsSnapshot {
-                        settings,
-                        data_directory: self.config.data_dir.display().to_string(),
-                    }),
+                    output: AppCommandOutput::ApplicationSettings(self.settings_snapshot()),
                     summary: "Application settings imported".into(),
                 });
             }
@@ -412,10 +468,7 @@ impl Backend {
                 settings.reset_scope(*scope);
                 self.persist_settings(&settings)?;
                 return Ok(AppCommandResult {
-                    output: AppCommandOutput::ApplicationSettings(ApplicationSettingsSnapshot {
-                        settings,
-                        data_directory: self.config.data_dir.display().to_string(),
-                    }),
+                    output: AppCommandOutput::ApplicationSettings(self.settings_snapshot()),
                     summary: "Application settings scope reset to defaults".into(),
                 });
             }
@@ -445,6 +498,30 @@ impl Backend {
                 return Ok(AppCommandResult {
                     output: AppCommandOutput::MihomoUpdated { version },
                     summary: "Mihomo updated and health checked".into(),
+                });
+            }
+            AppCommand::CheckAppUpdate => {
+                let status = self.check_app_update()?;
+                return Ok(AppCommandResult {
+                    output: AppCommandOutput::AppUpdateStatus(status),
+                    summary: "Application update status loaded".into(),
+                });
+            }
+            AppCommand::UpdateApplication => {
+                let version = self.update_application()?;
+                return Ok(AppCommandResult {
+                    output: AppCommandOutput::ApplicationUpdated {
+                        version,
+                        restart_required: true,
+                    },
+                    summary: "Application updated; restart to apply".into(),
+                });
+            }
+            AppCommand::RestartApplication => {
+                self.request_restart()?;
+                return Ok(AppCommandResult {
+                    output: AppCommandOutput::None,
+                    summary: "Application restart initiated".into(),
                 });
             }
             AppCommand::ListProfiles => {
@@ -634,6 +711,45 @@ impl Backend {
         redacted
     }
 
+    fn helper_status(&self) -> verge_domain::HelperStatus {
+        MacHelperClient::new(&self.config.helper_socket).status()
+    }
+
+    /// 安装/修复特权 helper：只在非就绪状态时执行；非 .app 运行给可读错误。
+    /// 安装本身即“清残留 + 重装”，覆盖 NotInstalled 与 Incompatible 两种修复路径。
+    fn install_helper(&mut self) -> Result<verge_domain::HelperStatus, AppError> {
+        if let status @ verge_domain::HelperStatus::Ready { .. } = self.helper_status() {
+            return Ok(status);
+        }
+        let resources = platform_bundled_resources().ok_or_else(|| {
+            AppError::new(
+                ErrorCode::PlatformFailed,
+                "helper installation requires a packaged Verge.app; run apps/verge-gpui/scripts/build-macos-app.sh first",
+            )
+        })?;
+        let bundle = discover_bundled_helper(&resources)?;
+        let mut installer = MacHelperInstaller::new(
+            ProcessRunner,
+            HelperInstallLayout::system(),
+            self.config.data_dir.join("helper-install"),
+            current_uid(),
+        )?;
+        installer.install(&bundle)?;
+        Ok(self.helper_status())
+    }
+
+    /// 卸载特权 helper：移除 LaunchDaemon 与二进制（提权脚本在 installer 内）。
+    fn uninstall_helper(&mut self) -> Result<verge_domain::HelperStatus, AppError> {
+        let mut installer = MacHelperInstaller::new(
+            ProcessRunner,
+            HelperInstallLayout::system(),
+            self.config.data_dir.join("helper-install"),
+            current_uid(),
+        )?;
+        installer.uninstall()?;
+        Ok(self.helper_status())
+    }
+
     /// 导出明文设置文件(带版本号,不含任何 Keychain 密钥或订阅凭据)。
     fn export_application_settings(&self, destination: &str) -> Result<String, AppError> {
         let destination = PathBuf::from(destination);
@@ -691,7 +807,21 @@ impl Backend {
         if settings.launch_at_login != self.settings.get().launch_at_login {
             self.login_item.set_enabled(settings.launch_at_login)?;
         }
-        self.settings.update(settings.clone())
+        let previous_hotkey = self.settings.get().global_hotkey.clone();
+        self.settings.update(settings.clone())?;
+        // 全局快捷键由守护进程持有：设置变更落盘后请求主线程重新注册。
+        // 注册失败不影响设置生效，由守护侧 OS 通知告知用户（守护没有 toast 能力）。
+        if settings.global_hotkey != previous_hotkey {
+            self.queue_hotkey_sync(settings.global_hotkey.as_deref());
+        }
+        Ok(())
+    }
+
+    /// 请求守护主线程同步全局快捷键注册（None = 禁用）。未接线时（测试）静默跳过。
+    fn queue_hotkey_sync(&self, desired: Option<&str>) {
+        if let Some(tx) = &self.hotkey_sync {
+            let _ = tx.send(desired.map(str::to_owned));
+        }
     }
 
     fn export_diagnostics(&mut self, destination: &str) -> Result<String, AppError> {
@@ -722,7 +852,7 @@ impl Backend {
             })
             .collect::<Vec<_>>();
         // helper/系统代理/内核版本都是尽力而为的快照,失败只记录脱敏后的错误文本。
-        let helper = MacHelperClient::new("/var/run/verge-helper.sock").status();
+        let helper = self.helper_status();
         let helper_status = match serde_json::to_value(&helper) {
             Ok(mut value) => {
                 if let Some(message) = value.get_mut("message").and_then(|m| m.as_str()) {
@@ -773,6 +903,7 @@ impl Backend {
     }
 
     fn restore_encrypted_backup(&mut self, passphrase: &str) -> Result<(), AppError> {
+        let previous_hotkey = self.settings.get().global_hotkey.clone();
         let path = self.config.data_dir.join("backups/verge-backup.vgbak");
         let bytes = fs::read(&path)
             .map_err(|error| AppError::new(ErrorCode::StorageFailed, error.to_string()))?;
@@ -811,6 +942,11 @@ impl Backend {
             });
         }
         self.refresh_sensitive_values();
+        // 备份恢复绕过了 persist_settings，全局快捷键变更在这里补齐同步。
+        let restored_hotkey = self.settings.get().global_hotkey.clone();
+        if restored_hotkey != previous_hotkey {
+            self.queue_hotkey_sync(restored_hotkey.as_deref());
+        }
         Ok(())
     }
 
@@ -854,6 +990,78 @@ impl Backend {
         Ok(manifest.version)
     }
 
+    /// 应用设置快照：附带运行实例版本（非 .app 运行为 None，UI 据此提示）。
+    fn settings_snapshot(&self) -> ApplicationSettingsSnapshot {
+        ApplicationSettingsSnapshot {
+            settings: self.settings.get().clone(),
+            data_directory: self.config.data_dir.display().to_string(),
+            app_version: current_app_version(),
+        }
+    }
+
+    /// 检查应用自身更新（只读；非 .app 运行时当前版本为 None，不会误报可更新）。
+    fn check_app_update(&mut self) -> Result<verge_domain::AppUpdateStatus, AppError> {
+        check_app_update(&mut self.app_fetcher, current_app_version().as_deref())
+    }
+
+    /// 应用自身更新事务：非 .app 运行直接给可读错误，其余见
+    /// `verge_application::app_update` 的模块注释（校验、签名、替换与回滚策略）。
+    fn update_application(&mut self) -> Result<String, AppError> {
+        let bundle = current_app_bundle().ok_or_else(|| {
+            AppError::new(
+                ErrorCode::PlatformFailed,
+                "application update requires a packaged Verge.app; build one with apps/verge-gpui/scripts/build-macos-app.sh first",
+            )
+        })?;
+        self.log_app("info", "开始下载并校验应用更新…");
+        let mut archiver = DittoArchiver::new(ProcessRunner);
+        let mut signer = MacCodesign;
+        let mut runner = ProcessRunner;
+        let staging = self.config.data_dir.join("updates/app");
+        let outcome = update_application_bundle(
+            &mut self.app_fetcher,
+            &mut archiver,
+            &mut signer,
+            &mut runner,
+            &bundle,
+            &staging,
+            current_uid(),
+        )?;
+        self.log_app(
+            "info",
+            format!("应用更新 v{} 已就位，重启后生效", outcome.version),
+        );
+        Ok(outcome.version)
+    }
+
+    /// 重启编排（双进程）：先拉起（可能已替换的）bundle 里的 GUI 进程并标记退出；
+    /// 事件循环收尾（停内核、恢复代理、关 IPC）后退出本进程，新进程按既有
+    /// connect-or-spawn 逻辑接管守护角色。
+    fn request_restart(&mut self) -> Result<(), AppError> {
+        let bundle = current_app_bundle().ok_or_else(|| {
+            AppError::new(
+                ErrorCode::PlatformFailed,
+                "application restart requires a packaged Verge.app",
+            )
+        })?;
+        let executable = bundle.join("Contents/MacOS").join(APP_EXECUTABLE_NAME);
+        if !executable.is_file() {
+            return Err(AppError::new(
+                ErrorCode::PlatformFailed,
+                format!("bundle executable is missing: {}", executable.display()),
+            ));
+        }
+        std::process::Command::new(&executable)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|error| AppError::new(ErrorCode::PlatformFailed, error.to_string()))?;
+        self.log_app("info", "新实例已拉起，守护进程退出完成重启");
+        self.restart_requested = true;
+        Ok(())
+    }
+
     fn refresh_sensitive_values(&mut self) {
         let values = self
             .profiles
@@ -890,9 +1098,30 @@ impl Backend {
 
     /// 拉取实时事件缓冲（守护进程事件循环在 RealtimeTick 时调用）。
     /// 返回的事件已经过脱敏；同时记录最近流量供托盘速度文字使用。
+    /// 记录一条应用运行事件：写 stderr（已重定向到日志文件），并推入有界缓冲
+    /// 以便经实时流显示在 GUI 日志页。
+    fn log_app(&mut self, level: &'static str, message: impl std::fmt::Display) {
+        let line = format!("[{level}] {message}");
+        eprintln!("[verge] {line}");
+        self.app_log_buffer.push_back(LogEvent {
+            level: level.to_owned(),
+            payload: line,
+        });
+        const APP_LOG_CAP: usize = 500;
+        while self.app_log_buffer.len() > APP_LOG_CAP {
+            self.app_log_buffer.pop_front();
+        }
+    }
+
     fn drain_realtime_events(&mut self) -> Vec<RealtimeEvent> {
+        // 先把应用自身事件带出去（不依赖引擎）。
+        let app_logs: Vec<RealtimeEvent> = self
+            .app_log_buffer
+            .drain(..)
+            .map(RealtimeEvent::Log)
+            .collect();
         let Some(engine) = self.engine.as_mut() else {
-            return Vec::new();
+            return app_logs;
         };
         let result = RuntimeCommandHandler::new(&mut engine.runtime)
             .execute(RuntimeCommand::DrainRealtime)
@@ -905,11 +1134,13 @@ impl Backend {
                             self.last_traffic = Some(traffic.clone());
                         }
                     }
-                    events
+                    let mut merged = app_logs;
+                    merged.extend(events);
+                    merged
                 }
-                _ => Vec::new(),
+                _ => app_logs,
             },
-            None => Vec::new(),
+            None => app_logs,
         }
     }
 
@@ -921,6 +1152,7 @@ impl Backend {
             application_settings: ApplicationSettingsSnapshot {
                 settings: self.settings.get().clone(),
                 data_directory: self.config.data_dir.display().to_string(),
+                app_version: current_app_version(),
             },
             runtime_settings: self.runtime_settings_snapshot(),
         }
@@ -989,6 +1221,14 @@ pub fn run_daemon() {
             std::process::exit(1);
         }
     };
+    // 双击启动没有终端：先把 stderr 重定向到数据目录日志，daemon 的运行日志落盘可查。
+    if let Err(error) = redirect_stderr_to_log(&config.data_dir) {
+        eprintln!("failed to redirect daemon stderr to log: {error}");
+    }
+    eprintln!(
+        "[verge] daemon starting, data_dir={}",
+        config.data_dir.display()
+    );
     let socket = daemon_socket_path(&config.data_dir);
     let _single_instance = match SingleInstance::acquire(&config.data_dir) {
         Ok(instance) => instance,
@@ -1020,10 +1260,23 @@ pub fn run_daemon() {
         }
     };
     let (tray_updates_tx, tray_updates_rx) = mpsc::channel::<TraySnapshot>();
+    // 全局快捷键：backend 线程发注册同步请求，主线程消费（GlobalHotKeyManager
+    // 必须在主线程创建和调用）；backend 收尾完成后经 shutdown channel 请求
+    // 主线程终止 AppKit 循环，守护进程真正退出。
+    let (hotkey_sync_tx, hotkey_sync_rx) = mpsc::channel::<Option<String>>();
+    let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
     let backend_thread = std::thread::spawn(move || {
-        run_daemon_backend(config, server, server_events, tray_rx, tray_updates_tx);
+        run_daemon_backend(
+            config,
+            server,
+            server_events,
+            tray_rx,
+            tray_updates_tx,
+            hotkey_sync_tx,
+            shutdown_tx,
+        );
     });
-    run_daemon_appkit(tray, tray_updates_rx);
+    run_daemon_appkit(tray, tray_updates_rx, hotkey_sync_rx, shutdown_rx);
     // 主线程返回只发生在 AppKit 终止之后；backend 已完成清理。
     let _ = backend_thread.join();
 }
@@ -1035,6 +1288,8 @@ fn run_daemon_backend(
     server_events: Receiver<IpcServerEvent>,
     tray_rx: Receiver<TrayCommand>,
     tray_updates: Sender<TraySnapshot>,
+    hotkey_sync: Sender<Option<String>>,
+    shutdown: Sender<()>,
 ) {
     let mut backend = match Backend::new(config) {
         Ok(backend) => backend,
@@ -1043,7 +1298,25 @@ fn run_daemon_backend(
             std::process::exit(1);
         }
     };
+    backend.hotkey_sync = Some(hotkey_sync);
+    // 启动即按已持久化设置同步一次全局快捷键注册。
+    backend.queue_hotkey_sync(backend.settings.get().global_hotkey.as_deref());
+    // 启动即推一次托盘快照：菜单文案按已持久化语言贴上。
+    let mut tray_language = backend.settings.get().language.clone();
+    let _ = tray_updates.send(TraySnapshot {
+        language: tray_language.clone(),
+        ..TraySnapshot::default()
+    });
     let (event_tx, event_rx) = mpsc::channel::<DaemonEvent>();
+
+    // 全局快捷键按下事件转发线程（global-hotkey 全局 channel 的消费端）。
+    #[cfg(target_os = "macos")]
+    {
+        let hotkey_tx = event_tx.clone();
+        verge_platform::spawn_hotkey_listener(move || {
+            let _ = hotkey_tx.send(DaemonEvent::HotkeyPressed);
+        });
+    }
 
     // IPC 事件转发线程。
     let ipc_tx = event_tx.clone();
@@ -1093,7 +1366,13 @@ fn run_daemon_backend(
                 conn_id,
                 protocol_version,
                 ..
-            }) => handle_daemon_connected(&server, &backend, conn_id, protocol_version),
+            }) => {
+                backend.log_app(
+                    "info",
+                    format!("GUI 连接 (conn={conn_id}, protocol={protocol_version})"),
+                );
+                handle_daemon_connected(&server, &backend, conn_id, protocol_version);
+            }
             DaemonEvent::Ipc(IpcServerEvent::Request { conn_id, envelope }) => {
                 handle_daemon_request(
                     &mut backend,
@@ -1128,12 +1407,9 @@ fn run_daemon_backend(
                     ClientMessage::Response(UiResponseEnvelope::for_request(&envelope, *response)),
                 );
             }
-            DaemonEvent::Tray(TrayCommand::ShowMainWindow) => {
-                if let Some(primary) = server.primary() {
-                    let _ = server.send(primary, ClientMessage::ActivateWindow);
-                } else {
-                    let _ = spawn_gui_process();
-                }
+            // 全局快捷键按下 = 托盘"Show Verge"：唤醒主 GUI 或拉起 GUI 进程。
+            DaemonEvent::Tray(TrayCommand::ShowMainWindow) | DaemonEvent::HotkeyPressed => {
+                show_main_window(&server);
             }
             DaemonEvent::Tray(TrayCommand::HideMainWindow) => {
                 if let Some(primary) = server.primary() {
@@ -1156,6 +1432,7 @@ fn run_daemon_backend(
                             .last_traffic
                             .as_ref()
                             .map_or(0, |traffic| traffic.down),
+                        language: backend.settings.get().language.clone(),
                     });
                 }
             }
@@ -1169,19 +1446,60 @@ fn run_daemon_backend(
                             system_proxy_enabled: backend.system_proxy_enabled(),
                             upload_bytes_per_second: traffic.up,
                             download_bytes_per_second: traffic.down,
+                            language: backend.settings.get().language.clone(),
                         });
                     }
                 }
             }
             DaemonEvent::PollTick => {
                 if let Some(error) = backend.poll().err() {
+                    backend.log_app("error", format!("内核轮询失败: {}", error.message));
                     backend.fail_runtime(error);
                 }
             }
         }
+        // 语言变化（UpdateSettings / 导入 / 恢复备份等任一路径）时推一次托盘快照，
+        // 主线程据此重贴菜单文案；不需要专门的设置事件通道。
+        let language = backend.settings.get().language.clone();
+        if language != tray_language {
+            tray_language = language;
+            let _ = tray_updates.send(TraySnapshot {
+                system_proxy_enabled: backend.system_proxy_enabled(),
+                upload_bytes_per_second: backend
+                    .last_traffic
+                    .as_ref()
+                    .map_or(0, |traffic| traffic.up),
+                download_bytes_per_second: backend
+                    .last_traffic
+                    .as_ref()
+                    .map_or(0, |traffic| traffic.down),
+                language: tray_language.clone(),
+            });
+        }
+        // RestartApplication 已拉起新实例：随本次事件一起收尾退出。
+        if backend.restart_requested {
+            quit = true;
+        }
     }
     backend.shutdown();
     server.shutdown();
+    if backend.restart_requested {
+        // 新 GUI 进程已在 request_restart 时拉起，会在连接失败后自建守护；
+        // 直接结束进程，AppKit 主线程（托盘）随进程终止。
+        std::process::exit(0);
+    }
+    // 清理完成：请求主线程终止 AppKit 事件循环，守护进程随 main 返回真正退出。
+    let _ = shutdown.send(());
+}
+
+/// 托盘"显示 Verge"与守护侧全局快捷键共用：有主 GUI 则激活其窗口，
+/// 否则拉起新的 GUI 进程（它会经 IPC 连接本守护）。
+fn show_main_window(server: &Arc<IpcServer>) {
+    if let Some(primary) = server.primary() {
+        let _ = server.send(primary, ClientMessage::ActivateWindow);
+    } else {
+        let _ = spawn_gui_process();
+    }
 }
 
 /// 新连接完成握手后的处理：版本校验、主实例裁定、初始快照。
@@ -1311,16 +1629,24 @@ fn handle_daemon_request(
     );
 }
 
-/// 守护进程主线程：无窗口 AppKit 事件循环 + 托盘状态刷新。
+/// 守护进程主线程：无窗口 AppKit 事件循环 + 托盘状态刷新 + 全局快捷键注册。
 ///
-/// TrayService 通过 `MainThreadBound` 绑定主线程；backend 线程的托盘状态
-/// 经 channel 交给本线程的消费线程，再 `get_on_main` 派发回主线程执行
-/// （AppKit 对象只在主线程操作）。消费线程阻塞 `recv`，事件驱动、零轮询。
+/// TrayService 与 HotkeyRegistration 都通过 `MainThreadBound` 绑定主线程
+/// （`GlobalHotKeyManager` 同样要求主线程创建和调用）；backend 线程的请求
+/// 经 channel 交给本线程旁的消费线程，再 `get_on_main` 派发回主线程执行。
+/// 消费线程阻塞 `recv`，事件驱动、零轮询。快捷键注册失败没有 toast 能力，
+/// 用 OS 通知（osascript）告知用户。
 #[cfg(target_os = "macos")]
-fn run_daemon_appkit(tray: TrayService, tray_updates: Receiver<TraySnapshot>) {
+fn run_daemon_appkit(
+    tray: TrayService,
+    tray_updates: Receiver<TraySnapshot>,
+    hotkey_sync: Receiver<Option<String>>,
+    shutdown: Receiver<()>,
+) {
     use dispatch2::MainThreadBound;
     use objc2::MainThreadMarker;
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    use verge_platform::{GlobalHotKeyBackend, HotkeyRegistration, MacNotifier};
 
     let marker = MainThreadMarker::new().expect("daemon main must run on the main thread");
     let app = NSApplication::sharedApplication(marker);
@@ -1334,12 +1660,49 @@ fn run_daemon_appkit(tray: TrayService, tray_updates: Receiver<TraySnapshot>) {
             });
         }
     });
+    match GlobalHotKeyBackend::new() {
+        Ok(backend) => {
+            // MainThreadBound 只提供 &T 访问；注册变更多路复用互斥锁保护。
+            let registration =
+                MainThreadBound::new(std::sync::Mutex::new(HotkeyRegistration::new(backend)), marker);
+            std::thread::spawn(move || {
+                let mut notifier = MacNotifier::new(ProcessRunner);
+                while let Ok(desired) = hotkey_sync.recv() {
+                    let result = registration.get_on_main(|registration| {
+                        registration
+                            .lock()
+                            .expect("hotkey registration mutex poisoned")
+                            .sync(desired.as_deref())
+                    });
+                    if let Err(error) = result {
+                        eprintln!("[verge] [error] 全局快捷键同步失败: {}", error.message);
+                        let _ = notifier.notify("Verge", &error.message);
+                    }
+                }
+            });
+        }
+        Err(error) => {
+            eprintln!("[verge] [error] global hotkey is unavailable: {}", error.message);
+        }
+    }
+    // backend 收尾完成后的退出请求：terminate 结束 app.run()，进程随 main 返回退出。
+    let app_for_shutdown = MainThreadBound::new(app.clone(), marker);
+    std::thread::spawn(move || {
+        if shutdown.recv().is_ok() {
+            app_for_shutdown.get_on_main(|app| app.terminate(None));
+        }
+    });
     app.run();
 }
 
 /// 非 macOS 无托盘型守护。
 #[cfg(not(target_os = "macos"))]
-fn run_daemon_appkit(_tray: TrayService, _tray_updates: Receiver<TraySnapshot>) {
+fn run_daemon_appkit(
+    _tray: TrayService,
+    _tray_updates: Receiver<TraySnapshot>,
+    _hotkey_sync: Receiver<Option<String>>,
+    _shutdown: Receiver<()>,
+) {
     unreachable!("daemon mode is only supported on macOS")
 }
 
@@ -1359,6 +1722,8 @@ enum DaemonEvent {
         response: Box<UiResponse>,
     },
     Tray(TrayCommand),
+    /// 全局快捷键按下（守护进程持有注册，GUI 不在跑时也能呼出主窗口）。
+    HotkeyPressed,
     RealtimeTick,
     PollTick,
 }
@@ -1519,6 +1884,7 @@ mod tests {
             secret: generate_secret().unwrap(),
             services: vec!["Wi-Fi".into()],
             recovery_path: data_dir.join("recovery.json"),
+            helper_socket: data_dir.join("helper.sock"),
             data_dir: data_dir.clone(),
         };
         let mut backend = Backend::new(config).unwrap();
@@ -1589,6 +1955,7 @@ mod tests {
             secret: generate_secret().unwrap(),
             services: vec!["Wi-Fi".into()],
             recovery_path: data_dir.join("recovery.json"),
+            helper_socket: data_dir.join("helper.sock"),
             data_dir: data_dir.clone(),
         };
         (Backend::new(config).unwrap(), data_dir)
@@ -1686,6 +2053,66 @@ mod tests {
         let _ = fs::remove_dir_all(data_dir);
     }
 
+    /// 设置变更（含 scope 重置、备份恢复路径）时守护侧发出热键注册同步请求；
+    /// 值未变化不发请求，避免主线程无谓往返。
+    #[test]
+    fn global_hotkey_change_queues_daemon_registration_sync() {
+        let (mut backend, data_dir) = test_backend("hotkey-sync");
+        let (tx, rx) = mpsc::channel();
+        backend.hotkey_sync = Some(tx);
+
+        // 值未变化：不发同步请求。
+        backend
+            .execute_profile(AppCommand::UpdateApplicationSettings {
+                settings: ApplicationSettings::default(),
+            })
+            .unwrap();
+        assert!(rx.try_recv().is_err());
+
+        // 设置快捷键：同步请求带上原始设置值（规范化在注册侧做）。
+        backend
+            .execute_profile(AppCommand::UpdateApplicationSettings {
+                settings: ApplicationSettings {
+                    global_hotkey: Some("CmdOrCtrl+Shift+V".into()),
+                    ..ApplicationSettings::default()
+                },
+            })
+            .unwrap();
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Some("CmdOrCtrl+Shift+V".to_owned())
+        );
+
+        // System scope 重置清掉快捷键：同步 None 表示禁用。
+        backend
+            .execute_profile(AppCommand::ResetApplicationSettingsScope {
+                scope: verge_domain::SettingsScope::System,
+            })
+            .unwrap();
+        assert_eq!(rx.try_recv().unwrap(), None);
+        assert!(rx.try_recv().is_err());
+        let _ = fs::remove_dir_all(data_dir);
+    }
+
+    /// 未接线（hotkey_sync = None）时设置变更不得失败——同步请求静默跳过。
+    #[test]
+    fn global_hotkey_change_without_sync_channel_still_persists() {
+        let (mut backend, data_dir) = test_backend("hotkey-sync-unwired");
+        backend
+            .execute_profile(AppCommand::UpdateApplicationSettings {
+                settings: ApplicationSettings {
+                    global_hotkey: Some("CmdOrCtrl+Shift+V".into()),
+                    ..ApplicationSettings::default()
+                },
+            })
+            .unwrap();
+        assert_eq!(
+            current_settings(&mut backend).global_hotkey,
+            Some("CmdOrCtrl+Shift+V".into())
+        );
+        let _ = fs::remove_dir_all(data_dir);
+    }
+
     #[test]
     fn diagnostic_export_omits_subscription_urls_secrets_and_yaml() {
         let data_dir = std::env::temp_dir().join(format!(
@@ -1704,6 +2131,7 @@ mod tests {
             secret: "controller-secret-must-not-leak".into(),
             services: vec!["Wi-Fi".into()],
             recovery_path: data_dir.join("recovery.json"),
+            helper_socket: data_dir.join("helper.sock"),
             data_dir: data_dir.clone(),
         };
         let mut backend = Backend::new(config).unwrap();
@@ -1761,6 +2189,7 @@ mod tests {
             secret: generate_secret().unwrap(),
             services: vec!["Wi-Fi".into()],
             recovery_path: data_dir.join("recovery.json"),
+            helper_socket: data_dir.join("helper.sock"),
             data_dir: data_dir.clone(),
         };
         let mut backend = Backend::new(config).unwrap();
@@ -1887,6 +2316,7 @@ mod tests {
             secret: "controller-secret-must-not-leak".into(),
             services: vec!["Wi-Fi".into()],
             recovery_path: data_dir.join("recovery.json"),
+            helper_socket: data_dir.join("helper.sock"),
             data_dir: data_dir.clone(),
         };
         let mut backend = Backend::new(config).unwrap();
@@ -1958,9 +2388,27 @@ mod tests {
         let _ = fs::remove_dir_all(data_dir);
     }
 
+    /// 非 .app 运行（测试进程）：应用更新/重启在触碰任何系统资源前给可读错误。
     #[test]
-    fn shutdown_without_engine_is_clean() {
-        let data_dir = std::env::temp_dir().join(format!(
+    fn app_update_and_restart_outside_a_packaged_app_give_readable_errors() {
+        let (mut backend, data_dir) = test_backend("app-update-unpackaged");
+
+        let error = backend
+            .execute_profile(AppCommand::UpdateApplication)
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::PlatformFailed);
+        assert!(error.message.contains("packaged Verge.app"));
+
+        let error = backend
+            .execute_profile(AppCommand::RestartApplication)
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::PlatformFailed);
+        assert!(!backend.restart_requested);
+        let _ = fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn shutdown_without_engine_is_clean() {        let data_dir = std::env::temp_dir().join(format!(
             "verge-gpui-shutdown-{}-{}",
             std::process::id(),
             SystemTime::now()
@@ -1976,11 +2424,37 @@ mod tests {
             secret: generate_secret().unwrap(),
             services: vec!["Wi-Fi".into()],
             recovery_path: data_dir.join("recovery.json"),
+            helper_socket: data_dir.join("helper.sock"),
             data_dir: data_dir.clone(),
         };
         let mut backend = Backend::new(config).unwrap();
         // 无引擎、无系统代理改动时，shutdown 必须无副作用地完成。
         backend.shutdown();
+        let _ = fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn install_helper_outside_a_packaged_app_gives_a_readable_error() {
+        let (mut backend, data_dir) = test_backend("helper-install-unpackaged");
+        // unix socket 地址有长度上限，用短的不存在路径模拟“未安装”。
+        backend.config.helper_socket = PathBuf::from(format!(
+            "/tmp/verge-helper-missing-{}",
+            std::process::id()
+        ));
+
+        // 测试进程不在 .app 内：必须在发起任何提权动作前报错。
+        let error = backend
+            .execute_profile(AppCommand::InstallHelper)
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::PlatformFailed);
+        assert!(error.message.contains("packaged Verge.app"));
+
+        // 状态查询走配置的 helper socket（不存在 → NotInstalled），不触达真实系统。
+        let status = backend.execute_profile(AppCommand::GetHelperStatus).unwrap();
+        assert!(matches!(
+            status.output,
+            AppCommandOutput::HelperStatus(verge_domain::HelperStatus::NotInstalled)
+        ));
         let _ = fs::remove_dir_all(data_dir);
     }
 
@@ -2008,6 +2482,7 @@ mod tests {
             secret: generate_secret().unwrap(),
             services: vec!["Wi-Fi".into()],
             recovery_path: data_dir.join("recovery.json"),
+            helper_socket: data_dir.join("helper.sock"),
             data_dir: data_dir.clone(),
         };
         let mut backend = Backend::new(config).unwrap();

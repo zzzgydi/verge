@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use global_hotkey::{GlobalHotKeyManager, hotkey::HotKey};
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
 use verge_domain::{AppError, ErrorCode, GlobalHotkeySpec};
 
 /// 全局快捷键注册后端抽象，便于用 fake 测注册/回滚逻辑。
@@ -34,6 +34,20 @@ impl HotkeyBackend for GlobalHotKeyBackend {
             .unregister(parse_normalized(normalized)?)
             .map_err(hotkey_error)
     }
+}
+
+/// 消费 `global-hotkey` 的全局事件通道：每次快捷键按下调用一次回调。
+/// 事件分发由系统 run loop 驱动（守护进程主线程的 AppKit 循环），
+/// 本函数只起独立线程阻塞接收并转发，不占主线程。
+pub fn spawn_hotkey_listener(on_pressed: impl Fn() + Send + 'static) {
+    std::thread::spawn(move || {
+        let receiver = GlobalHotKeyEvent::receiver();
+        while let Ok(event) = receiver.recv() {
+            if event.state == HotKeyState::Pressed {
+                on_pressed();
+            }
+        }
+    });
 }
 
 /// 规范化字符串 → `HotKey`。规范化输出与 `HotKey::from_str` 的语法兼容

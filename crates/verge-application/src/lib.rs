@@ -15,12 +15,14 @@ use verge_core::{
 };
 use verge_domain::{
     AppCommand, AppCommandOutput, AppCommandResult, AppError, CommandActor, CommandContext,
-    CommandRisk, ErrorCode, NetworkSettings, Profile, ProfileId, ProviderKind, ProviderSummary,
-    ProxyEndpoint, ProxyGroup, RealtimeEvent, RealtimeTopic, RuleEntry, RunMode, RuntimeCommand,
-    RuntimeCommandOutput, RuntimeCommandResult, SystemProxyCommand, SystemProxyCommandResult,
-    SystemProxyState,
+    CommandRisk, ErrorCode, HelperStatus, NetworkSettings, Profile, ProfileId, ProviderKind,
+    ProviderSummary, ProxyEndpoint, ProxyGroup, RealtimeEvent, RealtimeTopic, RuleEntry, RunMode,
+    RuntimeCommand, RuntimeCommandOutput, RuntimeCommandResult, SystemProxyCommand,
+    SystemProxyCommandResult, SystemProxyState,
 };
-use verge_platform::SystemProxyPlatform;
+use verge_platform::{HelperControl, SystemProxyPlatform, TunConfig};
+
+pub mod app_update;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CommandPolicy;
@@ -483,11 +485,24 @@ impl<T> Drop for MihomoRuntime<T> {
 
 pub struct RuntimeCommandHandler<'a, C> {
     runtime: &'a mut C,
+    /// helper 协调（TUN 生命周期）。None 表示未接线（如隔离 worker），
+    /// 此时 TUN 开关退化为纯 Mihomo 运行时配置。
+    helper: Option<&'a dyn HelperControl>,
 }
 
 impl<'a, C: RuntimeControl> RuntimeCommandHandler<'a, C> {
     pub fn new(runtime: &'a mut C) -> Self {
-        Self { runtime }
+        Self {
+            runtime,
+            helper: None,
+        }
+    }
+
+    pub fn with_helper(runtime: &'a mut C, helper: &'a dyn HelperControl) -> Self {
+        Self {
+            runtime,
+            helper: Some(helper),
+        }
     }
 
     pub fn execute(&mut self, command: RuntimeCommand) -> Result<RuntimeCommandResult, AppError> {
@@ -521,11 +536,8 @@ impl<'a, C: RuntimeControl> RuntimeCommandHandler<'a, C> {
                 "Network settings loaded",
             ),
             RuntimeCommand::SetNetworkSettings { settings } => {
-                self.runtime.set_network_settings(&settings)?;
-                (
-                    RuntimeCommandOutput::NetworkSettings(settings),
-                    "Network settings changed",
-                )
+                let summary = self.set_network_settings(&settings)?;
+                (RuntimeCommandOutput::NetworkSettings(settings), summary)
             }
             RuntimeCommand::SelectProxy { group, proxy } => {
                 self.runtime.select_proxy(&group, &proxy)?;
@@ -560,6 +572,83 @@ impl<'a, C: RuntimeControl> RuntimeCommandHandler<'a, C> {
             output,
             summary: summary.into(),
         })
+    }
+
+    /// 网络设置写入：TUN 开关在 helper 接线时经 helper 协调。
+    ///
+    /// - 非 TUN 变化（DNS/IPv6）或 TUN 状态未变：直接走 Mihomo 运行时配置；
+    /// - 开启 TUN：helper 必须就绪且声明 tun_lifecycle，先建/配 utun 再下发
+    ///   Mihomo 配置；Mihomo 侧失败时拆除已建设备回滚；
+    /// - 关闭 TUN：先下发 Mihomo 配置，再拆除 helper 管理的设备。
+    fn set_network_settings(
+        &mut self,
+        settings: &NetworkSettings,
+    ) -> Result<&'static str, AppError> {
+        let current = self.runtime.network_settings()?;
+        let Some(helper) = self.helper else {
+            self.runtime.set_network_settings(settings)?;
+            return Ok("Network settings changed");
+        };
+        match (current.tun_enabled, settings.tun_enabled) {
+            (false, true) => {
+                match helper.status() {
+                    HelperStatus::Ready { .. } => {}
+                    HelperStatus::NotInstalled => {
+                        return Err(AppError::new(
+                            ErrorCode::PermissionDenied,
+                            "TUN mode requires the privileged helper; install it from Settings → Privileged Helper",
+                        ));
+                    }
+                    HelperStatus::Incompatible { message } => {
+                        return Err(AppError::new(
+                            ErrorCode::PlatformFailed,
+                            format!(
+                                "TUN mode requires a working privileged helper ({message}); repair it from Settings → Privileged Helper"
+                            ),
+                        ));
+                    }
+                }
+                if !helper.tun_supported()? {
+                    return Err(AppError::new(
+                        ErrorCode::PlatformFailed,
+                        "the installed helper does not support TUN lifecycle; repair or reinstall it from Settings",
+                    ));
+                }
+                let device = helper.enable_tun(&TunConfig::verge_default())?;
+                if let Err(cause) = self.runtime.set_network_settings(settings) {
+                    let rollback = helper.disable_tun(None).err();
+                    return Err(match rollback {
+                        Some(rollback) => AppError::new(
+                            cause.code,
+                            format!(
+                                "{}; helper TUN rollback also failed: {}",
+                                cause.message, rollback.message
+                            ),
+                        ),
+                        None => cause,
+                    });
+                }
+                let _ = &device;
+                Ok("Network settings changed (TUN device prepared by helper)")
+            }
+            (true, false) => {
+                self.runtime.set_network_settings(settings)?;
+                helper.disable_tun(None).map_err(|error| {
+                    AppError::new(
+                        ErrorCode::PlatformFailed,
+                        format!(
+                            "TUN disabled in Mihomo, but helper teardown failed: {}",
+                            error.message
+                        ),
+                    )
+                })?;
+                Ok("Network settings changed (helper TUN device removed)")
+            }
+            _ => {
+                self.runtime.set_network_settings(settings)?;
+                Ok("Network settings changed")
+            }
+        }
     }
 }
 
@@ -1442,6 +1531,8 @@ impl<'a, C: CoreControl> ProfileCommandHandler<'a, C> {
             AppCommand::GetRuntimeSettings
             | AppCommand::GetApplicationSettings
             | AppCommand::GetHelperStatus
+            | AppCommand::InstallHelper
+            | AppCommand::UninstallHelper
             | AppCommand::UpdateApplicationSettings { .. }
             | AppCommand::ExportApplicationSettings { .. }
             | AppCommand::PreviewApplicationSettingsImport { .. }
@@ -1450,7 +1541,10 @@ impl<'a, C: CoreControl> ProfileCommandHandler<'a, C> {
             | AppCommand::ExportDiagnostics { .. }
             | AppCommand::ExportEncryptedBackup { .. }
             | AppCommand::RestoreEncryptedBackup { .. }
-            | AppCommand::UpdateMihomo => {
+            | AppCommand::UpdateMihomo
+            | AppCommand::CheckAppUpdate
+            | AppCommand::UpdateApplication
+            | AppCommand::RestartApplication => {
                 return Err(no_recovery(AppError::new(
                     ErrorCode::InvalidInput,
                     "application settings are owned by the application backend",
@@ -2766,5 +2860,296 @@ mod tests {
         let mut handler = SystemProxyCommandHandler::new(&mut proxy);
         let error = handler.execute(SystemProxyCommand::Disable).unwrap_err();
         assert_eq!(error.code, ErrorCode::PlatformFailed);
+    }
+}
+
+#[cfg(test)]
+mod tun_coordination_tests {
+    use std::cell::RefCell;
+
+    use verge_domain::{AppError, ErrorCode, HelperStatus, NetworkSettings, RunMode};
+    use verge_platform::{HelperControl, TunConfig};
+
+    use super::{RuntimeCommandHandler, RuntimeControl};
+    use verge_domain::{
+        ProviderKind, ProviderSummary, ProxyGroup, RealtimeEvent, RealtimeTopic, RuleEntry,
+    };
+
+    #[derive(Default)]
+    struct TunRuntime {
+        tun_enabled: bool,
+        calls: Vec<String>,
+        fail_set: bool,
+    }
+
+    impl RuntimeControl for TunRuntime {
+        fn mode(&mut self) -> Result<RunMode, AppError> {
+            unimplemented!()
+        }
+        fn set_mode(&mut self, _mode: RunMode) -> Result<(), AppError> {
+            unimplemented!()
+        }
+        fn proxy_groups(&mut self) -> Result<Vec<ProxyGroup>, AppError> {
+            unimplemented!()
+        }
+        fn rules(&mut self) -> Result<Vec<RuleEntry>, AppError> {
+            unimplemented!()
+        }
+        fn providers(&mut self) -> Result<Vec<ProviderSummary>, AppError> {
+            unimplemented!()
+        }
+        fn update_provider(&mut self, _kind: ProviderKind, _name: &str) -> Result<(), AppError> {
+            unimplemented!()
+        }
+        fn network_settings(&mut self) -> Result<NetworkSettings, AppError> {
+            self.calls.push("get".into());
+            Ok(NetworkSettings {
+                tun_enabled: self.tun_enabled,
+                dns_enabled: true,
+                ipv6_enabled: false,
+            })
+        }
+        fn set_network_settings(&mut self, settings: &NetworkSettings) -> Result<(), AppError> {
+            self.calls.push(format!("set:{}", settings.tun_enabled));
+            if self.fail_set {
+                return Err(AppError::new(ErrorCode::CoreRejectedConfig, "mihomo rejected tun"));
+            }
+            self.tun_enabled = settings.tun_enabled;
+            Ok(())
+        }
+        fn select_proxy(&mut self, _group: &str, _proxy: &str) -> Result<(), AppError> {
+            unimplemented!()
+        }
+        fn delay(&mut self, _proxy: &str, _url: &str, _timeout_ms: u32) -> Result<u32, AppError> {
+            unimplemented!()
+        }
+        fn close_connection(&mut self, _id: &str) -> Result<(), AppError> {
+            unimplemented!()
+        }
+        fn start_realtime(&mut self, _topics: &[RealtimeTopic]) -> Result<(), AppError> {
+            unimplemented!()
+        }
+        fn stop_realtime(&mut self) {
+            unimplemented!()
+        }
+        fn drain_realtime(&mut self) -> Vec<RealtimeEvent> {
+            unimplemented!()
+        }
+    }
+
+    struct FakeHelper {
+        status: HelperStatus,
+        tun_supported: bool,
+        calls: RefCell<Vec<String>>,
+        fail_enable: bool,
+        fail_disable: bool,
+    }
+
+    impl FakeHelper {
+        fn ready() -> Self {
+            Self {
+                status: HelperStatus::Ready { protocol_version: 1 },
+                tun_supported: true,
+                calls: RefCell::new(Vec::new()),
+                fail_enable: false,
+                fail_disable: false,
+            }
+        }
+    }
+
+    impl HelperControl for FakeHelper {
+        fn status(&self) -> HelperStatus {
+            self.status.clone()
+        }
+
+        fn tun_supported(&self) -> Result<bool, AppError> {
+            self.calls.borrow_mut().push("capabilities".into());
+            Ok(self.tun_supported)
+        }
+
+        fn enable_tun(&self, config: &TunConfig) -> Result<String, AppError> {
+            self.calls
+                .borrow_mut()
+                .push(format!("enable_tun:{}", config.address));
+            if self.fail_enable {
+                return Err(AppError::new(ErrorCode::PlatformFailed, "helper: no root"));
+            }
+            Ok("utun4".into())
+        }
+
+        fn disable_tun(&self, device: Option<&str>) -> Result<(), AppError> {
+            self.calls
+                .borrow_mut()
+                .push(format!("disable_tun:{device:?}"));
+            if self.fail_disable {
+                return Err(AppError::new(ErrorCode::PlatformFailed, "helper: teardown failed"));
+            }
+            Ok(())
+        }
+    }
+
+    fn tun_on() -> NetworkSettings {
+        NetworkSettings {
+            tun_enabled: true,
+            dns_enabled: true,
+            ipv6_enabled: false,
+        }
+    }
+
+    #[test]
+    fn enabling_tun_without_helper_installed_gives_readable_guidance() {
+        let mut runtime = TunRuntime::default();
+        let helper = FakeHelper {
+            status: HelperStatus::NotInstalled,
+            ..FakeHelper::ready()
+        };
+        let mut handler = RuntimeCommandHandler::with_helper(&mut runtime, &helper);
+
+        let error = handler
+            .execute(verge_domain::RuntimeCommand::SetNetworkSettings { settings: tun_on() })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::PermissionDenied);
+        assert!(error.message.contains("privileged helper"));
+        assert!(!runtime.calls.contains(&"set:true".to_owned()));
+        assert!(!helper.calls.borrow().iter().any(|call| call.starts_with("enable_tun")));
+    }
+
+    #[test]
+    fn enabling_tun_with_ready_helper_runs_helper_before_mihomo() {
+        let mut runtime = TunRuntime::default();
+        let helper = FakeHelper::ready();
+        let mut handler = RuntimeCommandHandler::with_helper(&mut runtime, &helper);
+
+        let result = handler
+            .execute(verge_domain::RuntimeCommand::SetNetworkSettings { settings: tun_on() })
+            .unwrap();
+
+        assert!(result.summary.contains("helper"));
+        assert!(runtime.tun_enabled);
+        assert_eq!(
+            helper.calls.borrow().as_slice(),
+            ["capabilities", "enable_tun:198.18.0.1"]
+        );
+        assert_eq!(runtime.calls, ["get", "set:true"]);
+    }
+
+    #[test]
+    fn mihomo_failure_after_helper_enable_rolls_back_the_device() {
+        let mut runtime = TunRuntime {
+            fail_set: true,
+            ..TunRuntime::default()
+        };
+        let helper = FakeHelper::ready();
+        let mut handler = RuntimeCommandHandler::with_helper(&mut runtime, &helper);
+
+        let error = handler
+            .execute(verge_domain::RuntimeCommand::SetNetworkSettings { settings: tun_on() })
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::CoreRejectedConfig);
+        assert_eq!(
+            helper.calls.borrow().as_slice(),
+            ["capabilities", "enable_tun:198.18.0.1", "disable_tun:None"]
+        );
+        assert!(!runtime.tun_enabled);
+    }
+
+    #[test]
+    fn helper_enable_failure_keeps_mihomo_untouched() {
+        let mut runtime = TunRuntime::default();
+        let helper = FakeHelper {
+            fail_enable: true,
+            ..FakeHelper::ready()
+        };
+        let mut handler = RuntimeCommandHandler::with_helper(&mut runtime, &helper);
+
+        let error = handler
+            .execute(verge_domain::RuntimeCommand::SetNetworkSettings { settings: tun_on() })
+            .unwrap_err();
+
+        assert!(error.message.contains("no root"));
+        assert_eq!(runtime.calls, ["get"]);
+    }
+
+    #[test]
+    fn helper_without_tun_capability_is_rejected_with_repair_guidance() {
+        let mut runtime = TunRuntime::default();
+        let helper = FakeHelper {
+            tun_supported: false,
+            ..FakeHelper::ready()
+        };
+        let mut handler = RuntimeCommandHandler::with_helper(&mut runtime, &helper);
+
+        let error = handler
+            .execute(verge_domain::RuntimeCommand::SetNetworkSettings { settings: tun_on() })
+            .unwrap_err();
+
+        assert!(error.message.contains("does not support TUN lifecycle"));
+        assert_eq!(runtime.calls, ["get"]);
+    }
+
+    #[test]
+    fn disabling_tun_updates_mihomo_then_tears_down_helper_devices() {
+        let mut runtime = TunRuntime {
+            tun_enabled: true,
+            ..TunRuntime::default()
+        };
+        let helper = FakeHelper::ready();
+        let mut handler = RuntimeCommandHandler::with_helper(&mut runtime, &helper);
+
+        handler
+            .execute(verge_domain::RuntimeCommand::SetNetworkSettings {
+                settings: NetworkSettings {
+                    tun_enabled: false,
+                    dns_enabled: true,
+                    ipv6_enabled: false,
+                },
+            })
+            .unwrap();
+
+        assert_eq!(runtime.calls, ["get", "set:false"]);
+        assert_eq!(helper.calls.borrow().as_slice(), ["disable_tun:None"]);
+        assert!(!runtime.tun_enabled);
+    }
+
+    #[test]
+    fn non_tun_changes_do_not_touch_the_helper() {
+        let mut runtime = TunRuntime::default();
+        let helper = FakeHelper::ready();
+        let mut handler = RuntimeCommandHandler::with_helper(&mut runtime, &helper);
+
+        handler
+            .execute(verge_domain::RuntimeCommand::SetNetworkSettings {
+                settings: NetworkSettings {
+                    tun_enabled: false,
+                    dns_enabled: false,
+                    ipv6_enabled: true,
+                },
+            })
+            .unwrap();
+
+        assert!(helper.calls.borrow().is_empty());
+        assert_eq!(runtime.calls, ["get", "set:false"]);
+    }
+
+    #[test]
+    fn incompatible_helper_gives_repair_guidance() {
+        let mut runtime = TunRuntime::default();
+        let helper = FakeHelper {
+            status: HelperStatus::Incompatible {
+                message: "protocol mismatch".into(),
+            },
+            ..FakeHelper::ready()
+        };
+        let mut handler = RuntimeCommandHandler::with_helper(&mut runtime, &helper);
+
+        let error = handler
+            .execute(verge_domain::RuntimeCommand::SetNetworkSettings { settings: tun_on() })
+            .unwrap_err();
+
+        assert!(error.message.contains("protocol mismatch"));
+        assert!(error.message.contains("repair"));
+        assert_eq!(runtime.calls, ["get"]);
     }
 }

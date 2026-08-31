@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use verge_domain::{
-    AppCommand, AppCommandOutput, AppCommandResult, AppError, ApplicationSettings,
+    AppCommand, AppCommandOutput, AppCommandResult, AppError, AppUpdateStatus, ApplicationSettings,
     ApplicationSettingsSnapshot, CommandContext, CommandRisk, ConnectionSnapshot, HelperStatus,
     LogEvent, MemoryEvent, NetworkSettings, Profile, ProfileId, ProfileSource, ProviderKind,
     ProviderSummary, ProxyEndpoint, ProxyGroup, RealtimeEvent, RealtimeTopic, RuleEntry, RunMode,
@@ -182,6 +182,16 @@ pub enum UiAction {
         passphrase: String,
     },
     UpdateMihomo,
+    /// 检查应用自身更新（只读，返回当前/最新版本与是否有更新）。
+    CheckAppUpdate,
+    /// 下载并替换当前 .app（高权限写入，需确认弹窗 + 显式授权；重启后生效）。
+    UpdateApplication,
+    /// 重启应用使更新生效（高权限写入，需确认弹窗 + 显式授权）。
+    RestartApplication,
+    /// 安装/修复特权 helper（高权限写入，提权由系统授权弹窗完成）。
+    InstallHelper,
+    /// 卸载特权 helper（破坏性系统变更，需确认弹窗 + 显式授权）。
+    UninstallHelper,
     LoadProfileYaml(ProfileId),
     ImportProfile {
         id: ProfileId,
@@ -321,6 +331,21 @@ impl UiAction {
                 UiRequest::Profile(AppCommand::GetApplicationSettings),
             ],
             Self::UpdateMihomo => vec![UiRequest::Profile(AppCommand::UpdateMihomo)],
+            Self::CheckAppUpdate => vec![UiRequest::Profile(AppCommand::CheckAppUpdate)],
+            // 更新与重启是单命令事务；失败时错误 toast 已足够，不做跟随刷新。
+            Self::UpdateApplication => vec![UiRequest::Profile(AppCommand::UpdateApplication)],
+            Self::RestartApplication => {
+                vec![UiRequest::Profile(AppCommand::RestartApplication)]
+            }
+            // 安装/卸载完成后立刻刷新 Helper 状态行。
+            Self::InstallHelper => vec![
+                UiRequest::Profile(AppCommand::InstallHelper),
+                UiRequest::Profile(AppCommand::GetHelperStatus),
+            ],
+            Self::UninstallHelper => vec![
+                UiRequest::Profile(AppCommand::UninstallHelper),
+                UiRequest::Profile(AppCommand::GetHelperStatus),
+            ],
             Self::LoadProfileYaml(id) => {
                 vec![UiRequest::Profile(AppCommand::GetProfileYaml { id })]
             }
@@ -462,6 +487,10 @@ pub struct UiState {
     pub network_settings: Option<NetworkSettings>,
     pub helper_status: Option<HelperStatus>,
     pub mihomo_version: Option<String>,
+    /// 最近一次应用更新检查结果（当前/最新版本与是否有更新）。
+    pub app_update: Option<AppUpdateStatus>,
+    /// 已下载并就位、等待重启生效的应用版本。
+    pub app_update_installed: Option<String>,
     pub last_diagnostic_path: Option<String>,
     /// 最近一次设置导入预览的结果,确认弹窗据此展示差异。
     pub settings_import_preview: Option<SettingsImportPreview>,
@@ -586,6 +615,14 @@ impl UiState {
             }
             AppCommandOutput::MihomoUpdated { version } => {
                 self.mihomo_version = Some(version);
+            }
+            AppCommandOutput::AppUpdateStatus(status) => {
+                self.app_update = Some(status);
+            }
+            AppCommandOutput::ApplicationUpdated { version, .. } => {
+                // 更新已就位：清掉检查快照，UI 改显示“重启生效”状态。
+                self.app_update_installed = Some(version);
+                self.app_update = None;
             }
             AppCommandOutput::Profiles { profiles, selected } => {
                 self.profiles = profiles;
@@ -727,6 +764,13 @@ fn request_key(request: &UiRequest) -> &'static str {
         UiRequest::Profile(AppCommand::GetRuntimeSettings) => "runtime_settings",
         UiRequest::Profile(AppCommand::GetApplicationSettings) => "application_settings",
         UiRequest::Profile(AppCommand::GetHelperStatus) => "helper_status",
+        UiRequest::Profile(AppCommand::CheckAppUpdate) => "app_update",
+        UiRequest::Profile(AppCommand::UpdateApplication | AppCommand::RestartApplication) => {
+            "app_update_write"
+        }
+        UiRequest::Profile(AppCommand::InstallHelper | AppCommand::UninstallHelper) => {
+            "helper_write"
+        }
         UiRequest::Profile(
             AppCommand::UpdateApplicationSettings { .. }
             | AppCommand::ExportApplicationSettings { .. }
@@ -1004,6 +1048,66 @@ mod tests {
         let requests = UiAction::RefreshSettings.requests();
         assert!(requests.contains(&UiRequest::SystemProxy(SystemProxyCommand::GetState)));
         assert!(requests.contains(&UiRequest::Profile(AppCommand::GetRuntimeSettings)));
+    }
+
+    #[test]
+    fn app_update_actions_map_to_typed_commands_and_update_state() {
+        assert_eq!(
+            UiAction::CheckAppUpdate.requests(),
+            [UiRequest::Profile(AppCommand::CheckAppUpdate)]
+        );
+        assert!(!is_write_request(&UiAction::CheckAppUpdate.requests()[0]));
+        for action in [UiAction::UpdateApplication, UiAction::RestartApplication] {
+            let requests = action.requests();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(request_key(&requests[0]), "app_update_write");
+            assert!(is_write_request(&requests[0]));
+        }
+
+        let mut state = UiState::default();
+        state.apply_profile(
+            &AppCommand::CheckAppUpdate,
+            AppCommandResult {
+                output: AppCommandOutput::AppUpdateStatus(AppUpdateStatus {
+                    current_version: Some("0.1.0".into()),
+                    latest_version: "0.2.0".into(),
+                    update_available: true,
+                    asset_url: "https://github.com/zzzgydi/verge/releases/download/v0.2.0/Verge-macos-arm64.zip".into(),
+                }),
+                summary: "checked".into(),
+            },
+        );
+        assert!(state.app_update.as_ref().unwrap().update_available);
+        state.apply_profile(
+            &AppCommand::UpdateApplication,
+            AppCommandResult {
+                output: AppCommandOutput::ApplicationUpdated {
+                    version: "0.2.0".into(),
+                    restart_required: true,
+                },
+                summary: "updated".into(),
+            },
+        );
+        assert_eq!(state.app_update_installed.as_deref(), Some("0.2.0"));
+        assert!(state.app_update.is_none());
+    }
+
+    #[test]
+    fn helper_install_and_uninstall_actions_refresh_status_afterwards() {
+        for (action, command) in [
+            (UiAction::InstallHelper, AppCommand::InstallHelper),
+            (UiAction::UninstallHelper, AppCommand::UninstallHelper),
+        ] {
+            let requests = action.requests();
+            assert_eq!(
+                requests,
+                [
+                    UiRequest::Profile(command),
+                    UiRequest::Profile(AppCommand::GetHelperStatus)
+                ]
+            );
+            assert_eq!(request_key(&requests[0]), "helper_write");
+        }
     }
 
     #[test]

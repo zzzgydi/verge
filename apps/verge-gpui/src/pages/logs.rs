@@ -9,16 +9,17 @@ use gpui_component::{
     v_flex, v_virtual_list,
 };
 
-use crate::view::MainView;
+use crate::{i18n::{self, tr}, view::MainView};
 
 use super::page_title;
 
+/// (文案 key, 级别过滤值)。
 const LEVELS: [(&str, Option<&'static str>); 5] = [
-    ("全部", None),
-    ("信息", Some("info")),
-    ("警告", Some("warning")),
-    ("错误", Some("error")),
-    ("调试", Some("debug")),
+    ("logs.level.all", None),
+    ("logs.level.info", Some("info")),
+    ("logs.level.warning", Some("warning")),
+    ("logs.level.error", Some("error")),
+    ("logs.level.debug", Some("debug")),
 ];
 
 /// 日志行高。虚拟列表要求渲染行高与 item_sizes 逐像素一致。
@@ -67,22 +68,23 @@ fn render_log_row(row: &LogRow, cx: &Context<MainView>) -> AnyElement {
 }
 
 pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
+    let lang = view.lang();
     let filter = view.log_filter;
     let filter_label = LEVELS
         .iter()
         .find(|(_, level)| *level == filter)
-        .map_or("全部", |(label, _)| label);
+        .map_or(tr(lang, "logs.level.all"), |(key, _)| tr(lang, key));
 
     let view_entity = cx.entity();
     let filter_button = Button::new("log-level-filter")
         .small()
         .outline()
-        .label(format!("级别：{filter_label}"))
+        .label(i18n::fmt_logs_filter(lang, filter_label))
         .dropdown_menu({
             let view_entity = view_entity.clone();
             move |menu, _, _| {
-            LEVELS.into_iter().fold(menu, |menu, (label, level)| {
-                menu.item(PopupMenuItem::new(label).on_click({
+            LEVELS.into_iter().fold(menu, |menu, (key, level)| {
+                menu.item(PopupMenuItem::new(tr(lang, key)).on_click({
                     let view = view_entity.clone();
                     move |_, _, cx| {
                         view.update(cx, |this, cx| {
@@ -98,7 +100,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
     let mut content = v_flex().size_full().gap_2().child(
         h_flex()
             .justify_between()
-            .child(page_title("日志"))
+            .child(page_title(tr(lang, "logs.title")))
             .child(filter_button),
     );
 
@@ -106,17 +108,17 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
     if rows.is_empty() {
         let empty = super::EmptyState::new(
             gpui_component::IconName::SquareTerminal,
-            "没有符合条件的日志",
+            tr(lang, "logs.empty.title"),
             if filter.is_some() {
-                "当前级别过滤下暂无日志，可清除过滤或等待新日志。"
+                tr(lang, "logs.empty.filtered")
             } else {
-                "内核产生日志后会显示在这里。"
+                tr(lang, "logs.empty.unfiltered")
             },
         );
         content = content.child(if filter.is_some() {
             empty.action(
                 Button::new("clear-log-filter")
-                    .label("清除过滤")
+                    .label(tr(lang, "logs.clear_filter"))
                     .small()
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| {

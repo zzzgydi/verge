@@ -73,6 +73,10 @@ pub enum AppCommand {
     GetRuntimeSettings,
     GetApplicationSettings,
     GetHelperStatus,
+    /// 安装/修复特权 helper（持久化系统变更，需 macOS 管理员授权）。
+    InstallHelper,
+    /// 卸载特权 helper（移除 LaunchDaemon 与二进制，不可自动恢复）。
+    UninstallHelper,
     UpdateApplicationSettings {
         settings: ApplicationSettings,
     },
@@ -98,6 +102,12 @@ pub enum AppCommand {
         passphrase: String,
     },
     UpdateMihomo,
+    /// 检查应用自身更新（GitHub Releases），只读，不写任何系统状态。
+    CheckAppUpdate,
+    /// 下载、校验并替换当前 .app（高风险写入，UI 需确认；重启后生效）。
+    UpdateApplication,
+    /// 退出守护进程并以新安装的 .app 重启（高风险写入，UI 需确认）。
+    RestartApplication,
     ListProfiles,
     GetProfileYaml {
         id: ProfileId,
@@ -246,6 +256,11 @@ pub enum AppCommandOutput {
     },
     MihomoUpdated {
         version: String,
+    },
+    AppUpdateStatus(AppUpdateStatus),
+    ApplicationUpdated {
+        version: String,
+        restart_required: bool,
     },
     Profiles {
         profiles: Vec<Profile>,
@@ -520,6 +535,22 @@ const fn default_log_limit() -> u16 {
 pub struct ApplicationSettingsSnapshot {
     pub settings: ApplicationSettings,
     pub data_directory: String,
+    /// 运行实例的版本（打包 .app 读 Info.plist；非打包运行为 None）。
+    #[serde(default)]
+    pub app_version: Option<String>,
+}
+
+/// 应用自身更新检查的结果快照。
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AppUpdateStatus {
+    /// 当前运行实例版本；非 .app 运行（开发模式）为 None。
+    pub current_version: Option<String>,
+    /// GitHub Releases 最新正式版版本。
+    pub latest_version: String,
+    /// 最新版是否比当前版本新（无当前版本时恒为 false，禁止盲目更新）。
+    pub update_available: bool,
+    /// 发布资产下载地址（`Verge-macos-arm64.zip`，见 verge-application::app_update 注释）。
+    pub asset_url: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -829,7 +860,8 @@ impl AppCommand {
             | Self::ListProfiles
             | Self::GetProfileYaml { .. }
             | Self::GetMergeConfig
-            | Self::GetMergedProfileYaml { .. } => CommandRisk::ReadOnly,
+            | Self::GetMergedProfileYaml { .. }
+            | Self::CheckAppUpdate => CommandRisk::ReadOnly,
             Self::ImportProfile { .. }
             | Self::ImportRemoteProfile { .. }
             | Self::SelectProfile { .. }
@@ -843,10 +875,13 @@ impl AppCommand {
             | Self::ResetApplicationSettingsScope { .. }
             | Self::ExportDiagnostics { .. }
             | Self::ExportEncryptedBackup { .. } => CommandRisk::LowRiskWrite,
-            Self::UpdateMihomo => CommandRisk::PrivilegedWrite,
-            Self::DeleteProfile { .. } | Self::RestoreEncryptedBackup { .. } => {
-                CommandRisk::Destructive
-            }
+            Self::UpdateMihomo
+            | Self::InstallHelper
+            | Self::UpdateApplication
+            | Self::RestartApplication => CommandRisk::PrivilegedWrite,
+            Self::UninstallHelper
+            | Self::DeleteProfile { .. }
+            | Self::RestoreEncryptedBackup { .. } => CommandRisk::Destructive,
         }
     }
 }
@@ -910,6 +945,20 @@ mod tests {
             id: ProfileId::parse("daily").unwrap(),
         };
         assert_eq!(command.risk(), CommandRisk::Destructive);
+        // helper 安装是高权限写入（管理员授权），卸载是破坏性系统变更。
+        assert_eq!(AppCommand::InstallHelper.risk(), CommandRisk::PrivilegedWrite);
+        assert_eq!(AppCommand::UninstallHelper.risk(), CommandRisk::Destructive);
+        // 应用自身更新：检查只读，替换与重启是高权限写入（UI 确认 + CommandBus 授权）。
+        assert_eq!(AppCommand::CheckAppUpdate.risk(), CommandRisk::ReadOnly);
+        assert_eq!(
+            AppCommand::UpdateApplication.risk(),
+            CommandRisk::PrivilegedWrite
+        );
+        assert_eq!(
+            AppCommand::RestartApplication.risk(),
+            CommandRisk::PrivilegedWrite
+        );
+        assert_eq!(AppCommand::GetHelperStatus.risk(), CommandRisk::ReadOnly);
         assert_eq!(
             RuntimeCommand::SetMode {
                 mode: RunMode::Global,

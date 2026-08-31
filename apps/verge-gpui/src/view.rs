@@ -29,6 +29,7 @@ use verge_domain::{
 use verge_ui::{CoreStatus, Page, UiAction, UiRequestEnvelope, UiState};
 
 use crate::{
+    i18n::{self, Lang, tr},
     pages::{self, connections::ConnectionsDelegate},
 };
 
@@ -106,12 +107,24 @@ pub struct MainView {
     log_limit_applied: Option<u16>,
     /// 已同步进全局快捷键输入框的值，语义同 `log_limit_applied`。
     global_hotkey_applied: Option<Option<String>>,
+    /// 输入框占位文案当前使用的语言；语言切换后由 sync_form_inputs 重设。
+    placeholders_lang: Option<Lang>,
     _subscriptions: Vec<Subscription>,
     next_request_id: u64,
     next_operation_id: u64,
 }
 
 impl MainView {
+    /// 当前界面语言：从设置快照取；设置未加载时回退英文（与 domain 默认值一致）。
+    pub fn lang(&self) -> Lang {
+        Lang::from_code(
+            self.state
+                .application_settings
+                .as_ref()
+                .map_or("en", |snapshot| snapshot.settings.language.as_str()),
+        )
+    }
+
     pub fn new(
         requests: mpsc::Sender<UiRequestEnvelope>,
         window: &mut Window,
@@ -158,39 +171,47 @@ impl MainView {
                 }
             },
         );
+        // 创建时设置尚未到达，占位文案先用英文；sync_form_inputs 会按实际语言重设。
+        let lang = Lang::En;
         Self {
             state: UiState::default(),
             requests,
-            profile_id: cx.new(|cx| InputState::new(window, cx).placeholder("配置 ID（如 daily）")),
-            profile_name: cx.new(|cx| InputState::new(window, cx).placeholder("显示名称")),
+            profile_id: cx.new(|cx| {
+                InputState::new(window, cx).placeholder(tr(lang, "placeholder.profile_id"))
+            }),
+            profile_name: cx.new(|cx| {
+                InputState::new(window, cx).placeholder(tr(lang, "placeholder.profile_name"))
+            }),
             profile_url: cx.new(|cx| {
                 InputState::new(window, cx).placeholder("https://example.com/profile.yaml")
             }),
             profile_interval: cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("更新间隔（秒）")
+                    .placeholder(tr(lang, "placeholder.profile_interval"))
                     .default_value("3600")
             }),
             profile_user_agent: cx.new(|cx| {
-                InputState::new(window, cx).placeholder("可选，如 ClashX/1.0（留空用默认）")
+                InputState::new(window, cx)
+                    .placeholder(tr(lang, "placeholder.profile_user_agent"))
             }),
             backup_passphrase: cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("备份口令（至少 12 个字符）")
+                    .placeholder(tr(lang, "placeholder.backup_passphrase"))
                     .masked(true)
             }),
             settings_import_path: cx.new(|cx| {
-                InputState::new(window, cx).placeholder("设置导出文件的绝对路径")
+                InputState::new(window, cx)
+                    .placeholder(tr(lang, "placeholder.settings_import_path"))
             }),
             log_limit,
             pac_url: cx.new(|cx| {
                 InputState::new(window, cx).placeholder("http://127.0.0.1:7890/proxy.pac")
             }),
             proxy_bypass: cx.new(|cx| {
-                InputState::new(window, cx).placeholder("以逗号分隔，如 *.local, 192.168.0.0/16")
+                InputState::new(window, cx).placeholder(tr(lang, "placeholder.proxy_bypass"))
             }),
             global_hotkey: cx.new(|cx| {
-                InputState::new(window, cx).placeholder("如 CmdOrCtrl+Shift+V，留空即禁用")
+                InputState::new(window, cx).placeholder(tr(lang, "placeholder.global_hotkey"))
             }),
             profile_yaml: cx.new(|cx| {
                 TextareaState::new(window, cx).default_value(
@@ -211,14 +232,49 @@ impl MainView {
             applied_theme: None,
             log_limit_applied: None,
             global_hotkey_applied: None,
+            placeholders_lang: Some(lang),
             _subscriptions: vec![log_limit_subscription],
             next_request_id: 1,
             next_operation_id: 1,
         }
     }
 
+    /// 输入框占位文案随语言切换更新（InputState 只在创建时带占位，语言变了要显式重设）。
+    fn sync_placeholders(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let lang = self.lang();
+        if self.placeholders_lang == Some(lang) {
+            return;
+        }
+        self.placeholders_lang = Some(lang);
+        let fields: [(Entity<InputState>, &'static str); 8] = [
+            (self.profile_id.clone(), "placeholder.profile_id"),
+            (self.profile_name.clone(), "placeholder.profile_name"),
+            (self.profile_interval.clone(), "placeholder.profile_interval"),
+            (
+                self.profile_user_agent.clone(),
+                "placeholder.profile_user_agent",
+            ),
+            (
+                self.backup_passphrase.clone(),
+                "placeholder.backup_passphrase",
+            ),
+            (
+                self.settings_import_path.clone(),
+                "placeholder.settings_import_path",
+            ),
+            (self.proxy_bypass.clone(), "placeholder.proxy_bypass"),
+            (self.global_hotkey.clone(), "placeholder.global_hotkey"),
+        ];
+        for (input, key) in fields {
+            input.update(cx, |input, cx| {
+                input.set_placeholder(tr(lang, key), window, cx)
+            });
+        }
+    }
+
     /// 设置变化后把日志缓冲、全局快捷键同步进输入框；输入框聚焦（用户正在编辑）时跳过，失焦后补同步。
     pub fn sync_form_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_placeholders(window, cx);
         let Some(snapshot) = self.state.application_settings.clone() else {
             return;
         };
@@ -452,6 +508,7 @@ impl MainView {
 
     /// 导入配置对话框：表单字段持有 MainView 上的输入状态，确认后 dispatch。
     pub fn open_import_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let lang = self.lang();
         let view = cx.entity();
         let id_input = self.profile_id.clone();
         let name_input = self.profile_name.clone();
@@ -463,42 +520,42 @@ impl MainView {
             let view_local = view.clone();
             let view_remote = view.clone();
             dialog
-                .title("导入配置")
+                .title(tr(lang, "dialog.import.title"))
                 .width(rems(35.).to_pixels(window.rem_size()))
                 .child(
                     v_form()
                         .child(
                             field()
-                                .label("配置 ID")
+                                .label(tr(lang, "dialog.import.id"))
                                 .required(true)
                                 .child(Input::new(&id_input)),
                         )
                         .child(
                             field()
-                                .label("显示名称")
+                                .label(tr(lang, "dialog.import.name"))
                                 .required(true)
                                 .child(Input::new(&name_input)),
                         )
                         .child(
                             field()
-                                .label("订阅地址")
-                                .description("填写订阅地址后可作为远程配置导入，按间隔自动更新")
+                                .label(tr(lang, "dialog.import.url"))
+                                .description(tr(lang, "dialog.import.url.desc"))
                                 .child(Input::new(&url_input)),
                         )
                         .child(
                             field()
-                                .label("更新间隔（秒）")
+                                .label(tr(lang, "dialog.import.interval"))
                                 .child(Input::new(&interval_input)),
                         )
                         .child(
                             field()
                                 .label("User-Agent")
-                                .description("订阅下载请求的 UA，留空使用默认值")
+                                .description(tr(lang, "dialog.import.user_agent.desc"))
                                 .child(Input::new(&ua_input)),
                         )
                         .child(
                             field()
-                                .label("本地 YAML 内容")
+                                .label(tr(lang, "dialog.import.yaml"))
                                 .child(Textarea::new(&yaml_input).h_32()),
                         ),
                 )
@@ -508,12 +565,12 @@ impl MainView {
                         .justify_end()
                         .child(
                             Button::new("cancel")
-                                .label("取消")
+                                .label(tr(lang, "common.cancel"))
                                 .on_click(|_, window, cx| window.close_dialog(cx)),
                         )
                         .child(
                             Button::new("import-local")
-                                .label("导入本地配置")
+                                .label(tr(lang, "dialog.import.local"))
                                 .outline()
                                 .on_click(move |_, window, cx| {
                                     match view_local.update(cx, |this, cx| this.import_profile(cx))
@@ -528,7 +585,7 @@ impl MainView {
                         )
                         .child(
                             Button::new("import-remote")
-                                .label("导入远程配置")
+                                .label(tr(lang, "dialog.import.remote"))
                                 .primary()
                                 .on_click(move |_, window, cx| {
                                     match view_remote
@@ -554,26 +611,27 @@ impl MainView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let lang = self.lang();
         let view = cx.entity();
         let interval_input = self.profile_interval.clone();
         window.open_dialog(cx, move |dialog, window, _| {
             let view = view.clone();
             let id = id.clone();
             dialog
-                .title(format!("更新间隔 · {name}"))
+                .title(i18n::fmt_titled(lang, "dialog.interval.title", &name))
                 .width(rems(26.).to_pixels(window.rem_size()))
                 .child(
                     v_form().child(
                         field()
-                            .label("更新间隔（秒）")
-                            .description("仅对远程配置生效")
+                            .label(tr(lang, "dialog.import.interval"))
+                            .description(tr(lang, "dialog.interval.desc"))
                             .child(Input::new(&interval_input)),
                     ),
                 )
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text("保存")
-                        .cancel_text("取消")
+                        .ok_text(tr(lang, "common.save"))
+                        .cancel_text(tr(lang, "common.cancel"))
                         .show_cancel(true),
                 )
                 .on_ok(move |_, window, cx| {
@@ -599,19 +657,20 @@ impl MainView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let lang = self.lang();
         let view = cx.entity();
         window.open_alert_dialog(cx, move |alert, _, _| {
             let view = view.clone();
             let id = id.clone();
             alert
                 .confirm()
-                .title(format!("删除“{name}”？"))
-                .description("该配置的本地文件将被移除，此操作不可恢复。")
+                .title(i18n::fmt_delete_profile_title(lang, &name))
+                .description(tr(lang, "dialog.delete_profile.desc"))
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text("删除")
+                        .ok_text(tr(lang, "common.delete"))
                         .ok_variant(gpui_component::button::ButtonVariant::Danger)
-                        .cancel_text("取消")
+                        .cancel_text(tr(lang, "common.cancel"))
                         .show_cancel(true),
                 )
                 .on_ok(move |_, _, cx| {
@@ -625,18 +684,19 @@ impl MainView {
 
     /// 恢复加密备份的确认弹窗（覆盖现有配置）。
     pub fn confirm_restore_backup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let lang = self.lang();
         let view = cx.entity();
         window.open_alert_dialog(cx, move |alert, _, _| {
             let view = view.clone();
             alert
                 .confirm()
-                .title("恢复加密备份？")
-                .description("现有配置将被备份内容覆盖，此操作不可恢复。")
+                .title(tr(lang, "dialog.restore_backup.title"))
+                .description(tr(lang, "dialog.restore_backup.desc"))
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text("恢复")
+                        .ok_text(tr(lang, "dialog.restore_backup.ok"))
                         .ok_variant(gpui_component::button::ButtonVariant::Danger)
-                        .cancel_text("取消")
+                        .cancel_text(tr(lang, "common.cancel"))
                         .show_cancel(true),
                 )
                 .on_ok(move |_, window, cx| {
@@ -654,25 +714,115 @@ impl MainView {
         });
     }
 
-    /// 恢复默认值的确认弹窗：只重置指定作用域，不动配置、备份和其它设置。
-    pub fn confirm_reset_scope(
-        &mut self,
-        scope: SettingsScope,
-        label: &'static str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// 卸载特权 Helper 的确认弹窗（移除系统级 LaunchDaemon 与二进制，TUN 将不可用）。
+    pub fn confirm_uninstall_helper(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let lang = self.lang();
         let view = cx.entity();
         window.open_alert_dialog(cx, move |alert, _, _| {
             let view = view.clone();
             alert
                 .confirm()
-                .title(format!("恢复{label}默认值？"))
-                .description("只重置该作用域的设置字段，配置、备份和其它设置不受影响。")
+                .title(tr(lang, "dialog.uninstall_helper.title"))
+                .description(tr(lang, "dialog.uninstall_helper.desc"))
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text("恢复默认")
-                        .cancel_text("取消")
+                        .ok_text(tr(lang, "settings.system.helper.uninstall"))
+                        .ok_variant(gpui_component::button::ButtonVariant::Danger)
+                        .cancel_text(tr(lang, "common.cancel"))
+                        .show_cancel(true),
+                )
+                .on_ok(move |_, _, cx| {
+                    view.update(cx, |this, cx| {
+                        this.dispatch_confirmed(UiAction::UninstallHelper, cx);
+                    });
+                    true
+                })
+        });
+    }
+
+    /// 应用更新的确认弹窗（替换当前 .app，重启后生效；失败自动还原现有安装）。
+    pub fn confirm_update_application(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let lang = self.lang();
+        let view = cx.entity();
+        let latest = self
+            .state
+            .app_update
+            .as_ref()
+            .map(|status| status.latest_version.clone())
+            .unwrap_or_default();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let view = view.clone();
+            alert
+                .confirm()
+                .title(i18n::fmt_update_app_title(lang, &latest))
+                .description(tr(lang, "dialog.update_app.desc"))
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(tr(lang, "settings.app.update.download"))
+                        .cancel_text(tr(lang, "common.cancel"))
+                        .show_cancel(true),
+                )
+                .on_ok(move |_, _, cx| {
+                    view.update(cx, |this, cx| {
+                        this.dispatch_confirmed(UiAction::UpdateApplication, cx);
+                    });
+                    true
+                })
+        });
+    }
+
+    /// 重启应用的确认弹窗（守护进程与 GUI 都退出，新实例接管）。
+    pub fn confirm_restart_application(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let lang = self.lang();
+        let view = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let view = view.clone();
+            alert
+                .confirm()
+                .title(tr(lang, "dialog.restart.title"))
+                .description(tr(lang, "dialog.restart.desc"))
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(tr(lang, "dialog.restart.ok"))
+                        .cancel_text(tr(lang, "common.cancel"))
+                        .show_cancel(true),
+                )
+                .on_ok(move |_, _, cx| {
+                    view.update(cx, |this, cx| {
+                        this.dispatch_confirmed(UiAction::RestartApplication, cx);
+                    });
+                    true
+                })
+        });
+    }
+
+    /// 恢复默认值的确认弹窗：只重置指定作用域，不动配置、备份和其它设置。
+    pub fn confirm_reset_scope(
+        &mut self,
+        scope: SettingsScope,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let lang = self.lang();
+        let scope_label = tr(
+            lang,
+            match scope {
+                SettingsScope::Appearance => "settings.scope.appearance",
+                SettingsScope::Network => "settings.scope.network",
+                SettingsScope::System => "settings.scope.system",
+            },
+        );
+        let view = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let view = view.clone();
+            alert
+                .confirm()
+                .title(i18n::fmt_reset_scope_title(lang, scope_label))
+                .description(tr(lang, "dialog.reset_scope.desc"))
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(tr(lang, "dialog.reset_scope.ok"))
+                        .cancel_text(tr(lang, "common.cancel"))
                         .show_cancel(true),
                 )
                 .on_ok(move |_, _, cx| {
@@ -688,7 +838,10 @@ impl MainView {
     pub fn preview_settings_import(&mut self, cx: &mut Context<Self>) -> Result<(), AppError> {
         let source = self.settings_import_path.read(cx).value().trim().to_string();
         if source.is_empty() {
-            let error = AppError::new(ErrorCode::InvalidInput, "请先填写设置文件的绝对路径");
+            let error = AppError::new(
+                ErrorCode::InvalidInput,
+                tr(self.lang(), "settings_import.empty_path"),
+            );
             self.state.set_error(error.clone());
             cx.notify();
             return Err(error);
@@ -713,6 +866,7 @@ impl MainView {
             return;
         };
         self.pending_settings_import = None;
+        let lang = self.lang();
         let view = cx.entity();
         window.open_dialog(cx, move |dialog, window, _| {
             let view = view.clone();
@@ -722,25 +876,34 @@ impl MainView {
                 changes = changes.child(
                     div()
                         .text_sm()
-                        .child("与当前设置一致，导入后没有字段变化。"),
+                        .child(tr(lang, "dialog.import_settings.no_changes")),
                 );
             } else {
                 for change in &preview.changes {
                     changes = changes.child(
-                        div()
-                            .text_sm()
-                            .child(format!("{}：{} → {}", change.field, change.old, change.new)),
+                        div().text_sm().child(i18n::fmt_field_change(
+                            lang,
+                            &change.field,
+                            &change.old,
+                            &change.new,
+                        )),
                     );
                 }
             }
             dialog
-                .title("导入设置")
+                .title(tr(lang, "dialog.import_settings.title"))
                 .width(rems(30.).to_pixels(window.rem_size()))
-                .child(v_form().child(field().label("字段差异").child(changes)))
+                .child(
+                    v_form().child(
+                        field()
+                            .label(tr(lang, "dialog.import_settings.field_diff"))
+                            .child(changes),
+                    ),
+                )
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text("应用导入")
-                        .cancel_text("取消")
+                        .ok_text(tr(lang, "dialog.import_settings.ok"))
+                        .cancel_text(tr(lang, "common.cancel"))
                         .show_cancel(true),
                 )
                 .on_ok(move |_, _, cx| {
@@ -759,10 +922,11 @@ impl MainView {
 
     /// 点击后立即打开 YAML Sheet；加载完成后由响应轮询填入编辑器。
     pub fn open_yaml_sheet(&mut self, id: ProfileId, window: &mut Window, cx: &mut Context<Self>) {
+        let lang = self.lang();
         self.sheet_state
             .update(cx, |state, _| state.pending_yaml = Some(id.clone()));
         self.yaml_editor.update(cx, |editor, cx| {
-            editor.set_value("正在加载配置 YAML…", window, cx)
+            editor.set_value(tr(lang, "sheet.yaml.loading"), window, cx)
         });
         let sheet_state = self.sheet_state.clone();
         let view = cx.entity();
@@ -776,7 +940,7 @@ impl MainView {
             let mono = mono.clone();
             let loading = sheet_state.read(cx).pending_yaml.as_ref() == Some(&id);
             sheet
-                .title(format!("配置 YAML · {}", id.as_str()))
+                .title(i18n::fmt_titled(lang, "sheet.yaml.title", id.as_str()))
                 .size(rems(32.))
                 .child(
                     div()
@@ -792,7 +956,7 @@ impl MainView {
                         .justify_end()
                         .child(
                             Button::new("copy-yaml")
-                                .label("复制")
+                                .label(tr(lang, "common.copy"))
                                 .ghost()
                                 .disabled(loading)
                                 .on_click({
@@ -801,7 +965,7 @@ impl MainView {
                                         let yaml = editor.read(cx).value().to_string();
                                         cx.write_to_clipboard(ClipboardItem::new_string(yaml));
                                         window.push_notification(
-                                            Notification::success("已复制到剪贴板"),
+                                            Notification::success(tr(lang, "common.copied")),
                                             cx,
                                         );
                                     }
@@ -809,7 +973,7 @@ impl MainView {
                         )
                         .child(
                             Button::new("save-yaml")
-                                .label("保存到该配置")
+                                .label(tr(lang, "sheet.yaml.save"))
                                 .primary()
                                 .disabled(loading)
                                 .on_click({
@@ -823,12 +987,12 @@ impl MainView {
                                             let id = id.clone();
                                             alert
                                                 .confirm()
-                                                .title(format!("保存到“{}”？", id.as_str()))
-                                                .description("编辑器内容将覆盖该配置的现有 YAML。")
+                                                .title(i18n::fmt_save_yaml_title(lang, id.as_str()))
+                                                .description(tr(lang, "sheet.yaml.confirm_desc"))
                                                 .button_props(
                                                     DialogButtonProps::default()
-                                                        .ok_text("保存")
-                                                        .cancel_text("取消")
+                                                        .ok_text(tr(lang, "common.save"))
+                                                        .cancel_text(tr(lang, "common.cancel"))
                                                         .show_cancel(true),
                                                 )
                                                 .on_ok(move |_, window, cx| {
@@ -887,7 +1051,7 @@ impl MainView {
             .update(cx, |state, _| state.pending_yaml = None);
         self.yaml_editor.update(cx, |editor, cx| {
             editor.set_value(
-                format!("无法加载配置 YAML：\n{}", error.message),
+                i18n::fmt_load_failed(self.lang(), "sheet.yaml.load_failed", &error.message),
                 window,
                 cx,
             )
@@ -896,10 +1060,11 @@ impl MainView {
 
     /// 点击后立即打开 Merge 配置 Sheet；加载完成后由响应轮询填入编辑器。
     pub fn open_merge_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let lang = self.lang();
         self.sheet_state
             .update(cx, |state, _| state.pending_merge = true);
         self.merge_editor.update(cx, |editor, cx| {
-            editor.set_value("正在加载 Merge 配置…", window, cx)
+            editor.set_value(tr(lang, "sheet.merge.loading"), window, cx)
         });
         let view = cx.entity();
         let sheet_state = self.sheet_state.clone();
@@ -912,7 +1077,7 @@ impl MainView {
             let mono = mono.clone();
             let loading = sheet_state.read(cx).pending_merge;
             sheet
-                .title("全局 Merge 配置")
+                .title(tr(lang, "sheet.merge.title"))
                 .size(rems(32.))
                 .child(
                     v_flex()
@@ -923,7 +1088,7 @@ impl MainView {
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("对激活配置的顶层键做受控合并：override / merge / prepend / append / remove。"),
+                                .child(tr(lang, "sheet.merge.desc")),
                         )
                         .child(
                             div()
@@ -940,7 +1105,7 @@ impl MainView {
                         .justify_end()
                         .child(
                             Button::new("save-merge")
-                                .label("保存 Merge 配置")
+                                .label(tr(lang, "sheet.merge.save"))
                                 .primary()
                                 .disabled(loading)
                                 .on_click({
@@ -951,14 +1116,12 @@ impl MainView {
                                             let view = view.clone();
                                             alert
                                                 .confirm()
-                                                .title("保存 Merge 配置？")
-                                                .description(
-                                                    "将立即应用到当前激活配置，校验或健康检查失败会自动回退。",
-                                                )
+                                                .title(tr(lang, "sheet.merge.confirm_title"))
+                                                .description(tr(lang, "sheet.merge.confirm_desc"))
                                                 .button_props(
                                                     DialogButtonProps::default()
-                                                        .ok_text("保存")
-                                                        .cancel_text("取消")
+                                                        .ok_text(tr(lang, "common.save"))
+                                                        .cancel_text(tr(lang, "common.cancel"))
                                                         .show_cancel(true),
                                                 )
                                                 .on_ok(move |_, _, cx| {
@@ -1004,7 +1167,7 @@ impl MainView {
             .update(cx, |state, _| state.pending_merge = false);
         self.merge_editor.update(cx, |editor, cx| {
             editor.set_value(
-                format!("无法加载 Merge 配置：\n{}", error.message),
+                i18n::fmt_load_failed(self.lang(), "sheet.merge.load_failed", &error.message),
                 window,
                 cx,
             )
@@ -1013,10 +1176,11 @@ impl MainView {
 
     /// 点击后立即打开合并结果 Sheet（只读）；加载完成后由响应轮询填入内容。
     pub fn open_merged_sheet(&mut self, id: ProfileId, window: &mut Window, cx: &mut Context<Self>) {
+        let lang = self.lang();
         self.sheet_state
             .update(cx, |state, _| state.pending_merged = Some(id.clone()));
         self.merged_editor.update(cx, |editor, cx| {
-            editor.set_value("正在生成合并结果…", window, cx)
+            editor.set_value(tr(lang, "sheet.merged.loading"), window, cx)
         });
         let sheet_state = self.sheet_state.clone();
         let editor = self.merged_editor.clone();
@@ -1028,7 +1192,7 @@ impl MainView {
             let sheet_state = sheet_state.clone();
             let loading = sheet_state.read(cx).pending_merged.is_some();
             sheet
-                .title(format!("合并结果 · {}", id.as_str()))
+                .title(i18n::fmt_titled(lang, "sheet.merged.title", id.as_str()))
                 .size(rems(32.))
                 .child(
                     div()
@@ -1041,7 +1205,7 @@ impl MainView {
                 .footer(
                     h_flex().gap_2().justify_end().child(
                         Button::new("copy-merged")
-                            .label("复制")
+                            .label(tr(lang, "common.copy"))
                             .ghost()
                             .disabled(loading)
                             .on_click({
@@ -1050,7 +1214,7 @@ impl MainView {
                                     let yaml = editor.read(cx).value().to_string();
                                     cx.write_to_clipboard(ClipboardItem::new_string(yaml));
                                     window.push_notification(
-                                        Notification::success("已复制到剪贴板"),
+                                        Notification::success(tr(lang, "common.copied")),
                                         cx,
                                     );
                                 }
@@ -1085,7 +1249,7 @@ impl MainView {
             .update(cx, |state, _| state.pending_merged = None);
         self.merged_editor.update(cx, |editor, cx| {
             editor.set_value(
-                format!("无法生成合并结果：\n{}", error.message),
+                i18n::fmt_load_failed(self.lang(), "sheet.merged.load_failed", &error.message),
                 window,
                 cx,
             )
@@ -1093,6 +1257,7 @@ impl MainView {
     }
 
     fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let lang = self.lang();
         let collapsed = self.sidebar_collapsed;
         let item = |page: Page, label: &'static str, icon: IconName, cx: &mut Context<Self>| {
             SidebarMenuItem::new(label)
@@ -1103,15 +1268,15 @@ impl MainView {
                 }))
         };
         let proxy_menu = SidebarMenu::new().children([
-            item(Page::Home, "概览", IconName::LayoutDashboard, cx),
-            item(Page::Proxies, "代理", IconName::Globe, cx),
-            item(Page::Rules, "规则", IconName::BookOpen, cx),
-            item(Page::Connections, "连接", IconName::Network, cx),
+            item(Page::Home, tr(lang, "home.title"), IconName::LayoutDashboard, cx),
+            item(Page::Proxies, tr(lang, "proxies.title"), IconName::Globe, cx),
+            item(Page::Rules, tr(lang, "rules.title"), IconName::BookOpen, cx),
+            item(Page::Connections, tr(lang, "connections.title"), IconName::Network, cx),
         ]);
         let system_menu = SidebarMenu::new().children([
-            item(Page::Profiles, "配置", IconName::File, cx),
-            item(Page::Logs, "日志", IconName::SquareTerminal, cx),
-            item(Page::Settings, "设置", IconName::Settings, cx),
+            item(Page::Profiles, tr(lang, "profiles.title"), IconName::File, cx),
+            item(Page::Logs, tr(lang, "logs.title"), IconName::SquareTerminal, cx),
+            item(Page::Settings, tr(lang, "settings.title"), IconName::Settings, cx),
         ]);
 
         let header = h_flex()
@@ -1124,7 +1289,7 @@ impl MainView {
                         .flex_1()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child("导航"),
+                        .child(tr(lang, "nav.header")),
                 )
             })
             .child(
@@ -1137,9 +1302,11 @@ impl MainView {
             );
 
         let (status_text, status_color) = match self.state.core_status {
-            CoreStatus::Running => ("内核运行中", cx.theme().success),
-            CoreStatus::Offline => ("内核离线", cx.theme().danger),
-            CoreStatus::Unknown => ("状态未知", cx.theme().muted_foreground),
+            CoreStatus::Running => (tr(lang, "status.core_running"), cx.theme().success),
+            CoreStatus::Offline => (tr(lang, "status.core_offline"), cx.theme().danger),
+            CoreStatus::Unknown => {
+                (tr(lang, "status.core_unknown"), cx.theme().muted_foreground)
+            }
         };
         let dot = div()
             .size_2()
@@ -1165,21 +1332,22 @@ impl MainView {
             .collapsible(SidebarCollapsible::Icon)
             .collapsed(collapsed)
             .header(header)
-            .child(SidebarGroup::new("代理").child(proxy_menu))
-            .child(SidebarGroup::new("系统").child(system_menu))
+            .child(SidebarGroup::new(tr(lang, "nav.group.proxy")).child(proxy_menu))
+            .child(SidebarGroup::new(tr(lang, "nav.group.system")).child(system_menu))
             .footer(footer)
     }
 
     fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let lang = self.lang();
         let preference = self
             .state
             .application_settings
             .as_ref()
             .map_or(ThemePreference::System, |snapshot| snapshot.settings.theme);
         let (icon, tooltip) = match preference {
-            ThemePreference::System => (IconName::Palette, "主题：跟随系统（点击切换）"),
-            ThemePreference::Light => (IconName::Sun, "主题：浅色（点击切换）"),
-            ThemePreference::Dark => (IconName::Moon, "主题：深色（点击切换）"),
+            ThemePreference::System => (IconName::Palette, tr(lang, "titlebar.theme.system")),
+            ThemePreference::Light => (IconName::Sun, tr(lang, "titlebar.theme.light")),
+            ThemePreference::Dark => (IconName::Moon, tr(lang, "titlebar.theme.dark")),
         };
         TitleBar::new()
             .child(
@@ -1202,19 +1370,20 @@ impl MainView {
     }
 
     fn status_bar(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+        let lang = self.lang();
         let core_status = match self.state.core_status {
-            CoreStatus::Running => "内核运行中",
-            CoreStatus::Offline => "内核离线",
-            CoreStatus::Unknown => "内核状态未知",
+            CoreStatus::Running => tr(lang, "status.core_running"),
+            CoreStatus::Offline => tr(lang, "status.core_offline"),
+            CoreStatus::Unknown => tr(lang, "status.core_state_unknown"),
         };
         let mode = self
             .state
             .mode
-            .map(pages::home::mode_label)
-            .unwrap_or("模式未知");
+            .map(|mode| pages::home::mode_label(lang, mode))
+            .unwrap_or_else(|| tr(lang, "status.mode_unknown"));
         let connections = self.state.connections.as_ref().map_or_else(
-            || "连接等待中".to_owned(),
-            |snapshot| format!("连接 {}", snapshot.connection_count),
+            || tr(lang, "status.connections_waiting").to_owned(),
+            |snapshot| i18n::fmt_statusbar_connections(lang, snapshot.connection_count),
         );
         // 流量与内存留给首页统计卡（避免状态栏与首页信息重复）。
         StatusBar::new()
@@ -1307,7 +1476,10 @@ impl Render for MainView {
                             this.child(
                                 div().px_4().pt_4().child(
                                     Alert::error("global-operation-error", error.message.clone())
-                                        .title(format!("操作未完成 · {:?}", error.code))
+                                        .title(i18n::fmt_alert_title(
+                                            self.lang(),
+                                            &format!("{:?}", error.code),
+                                        ))
                                         .on_close(cx.listener(|this, _, _, cx| {
                                             this.state.clear_error();
                                             cx.notify();

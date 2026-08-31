@@ -761,11 +761,15 @@ impl FileProfileStore {
                 mapping
                     .get(serde_yaml::Value::String(key.into()))
                     .and_then(serde_yaml::Value::as_u64)
+                    // Mihomo 语义：端口为 0 表示禁用该端口。mixed-port: 0 时
+                    // 继续看 port；全部为 0 或无端口时给出明确错误，而不是
+                    // 把 0 传给 ProxyEndpoint 产生误导性的校验错误。
+                    .filter(|port| *port != 0)
             })
             .ok_or_else(|| {
                 AppError::new(
                     ErrorCode::ValidationFailed,
-                    "profile must define mixed-port or port for system proxy",
+                    "profile must define a non-zero mixed-port or port for system proxy",
                 )
             })?;
         let port = u16::try_from(port).map_err(|_| {
@@ -792,6 +796,8 @@ impl FileProfileStore {
             mapping
                 .get(serde_yaml::Value::String(key.into()))
                 .and_then(serde_yaml::Value::as_u64)
+                // 同样跳过 0：mixed-port: 0 时回落到 socks-port。
+                .filter(|port| *port != 0)
         });
         port.map(|port| {
             u16::try_from(port)
@@ -2075,6 +2081,84 @@ mod tests {
     }
 
     #[test]
+    fn system_proxy_endpoint_skips_zero_mixed_port_and_uses_port() {
+        let directory = TestDir::new("proxy-endpoint-zero-mixed");
+        let mut store = FileProfileStore::open(&directory.0).unwrap();
+        let id = ProfileId::parse("zero-mixed").unwrap();
+        store
+            .import(
+                Profile::new(
+                    id.clone(),
+                    "Zero Mixed",
+                    ProfileSource::Local,
+                    UpdatePolicy::Manual,
+                    100,
+                    None,
+                )
+                .unwrap(),
+                "mixed-port: 0\nport: 7890\n",
+            )
+            .unwrap();
+        assert_eq!(
+            store.system_proxy_endpoint(&id).unwrap(),
+            ProxyEndpoint::new("127.0.0.1", 7890).unwrap()
+        );
+    }
+
+    #[test]
+    fn system_proxy_endpoint_rejects_all_zero_ports_with_clear_error() {
+        let directory = TestDir::new("proxy-endpoint-all-zero");
+        let mut store = FileProfileStore::open(&directory.0).unwrap();
+        let id = ProfileId::parse("all-zero").unwrap();
+        store
+            .import(
+                Profile::new(
+                    id.clone(),
+                    "All Zero",
+                    ProfileSource::Local,
+                    UpdatePolicy::Manual,
+                    100,
+                    None,
+                )
+                .unwrap(),
+                "mixed-port: 0\nport: 0\n",
+            )
+            .unwrap();
+        let error = store.system_proxy_endpoint(&id).unwrap_err();
+        assert_eq!(error.code, ErrorCode::ValidationFailed);
+        assert!(
+            error.message.contains("non-zero"),
+            "错误信息应提示 non-zero：{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn system_proxy_socks_endpoint_skips_zero_mixed_port() {
+        let directory = TestDir::new("socks-endpoint-zero-mixed");
+        let mut store = FileProfileStore::open(&directory.0).unwrap();
+        let id = ProfileId::parse("zero-mixed-socks").unwrap();
+        store
+            .import(
+                Profile::new(
+                    id.clone(),
+                    "Zero Mixed Socks",
+                    ProfileSource::Local,
+                    UpdatePolicy::Manual,
+                    100,
+                    None,
+                )
+                .unwrap(),
+                "mixed-port: 0\nsocks-port: 7891\n",
+            )
+            .unwrap();
+        assert_eq!(
+            store.system_proxy_socks_endpoint(&id).unwrap(),
+            Some(ProxyEndpoint::new("127.0.0.1", 7891).unwrap())
+        );
+    }
+
+    #[test]
     fn system_proxy_endpoint_reads_merged_port() {
         let directory = TestDir::new("merge-proxy-endpoint");
         let mut store = FileProfileStore::open(&directory.0).unwrap();
@@ -2092,4 +2176,53 @@ mod tests {
             ProxyEndpoint::new("127.0.0.1", 7899).unwrap()
         );
     }
+// 临时诊断：各种 YAML 变体下 system_proxy_endpoint 的解析结果
+#[test]
+fn endpoint_parsing_never_yields_zero_port_errors() {
+    // 回归：任何合法/常见 YAML 写法都不应产生 "proxy endpoint must have a
+    // valid host and non-zero port"（该错误只应在端口为 0 时出现，而 0 端口
+    // 在 Mihomo 语义里表示禁用，应回落或给出明确配置错误）。
+    let directory = TestDir::new("endpoint-parsing-matrix");
+    let mut store = FileProfileStore::open(&directory.0).unwrap();
+    let cases: [(&str, &str, Option<u16>); 6] = [
+        ("mixed-normal", "mixed-port: 7890\nmode: rule\n", Some(7890)),
+        ("mixed-zero-port-fallback", "mixed-port: 0\nport: 7890\n", Some(7890)),
+        ("port-only", "port: 7890\n", Some(7890)),
+        ("hex-port", "mixed-port: 0x1ED2\n", Some(7890)),
+        ("mixed-zero-only", "mixed-port: 0\nmode: rule\n", None),
+        ("missing-port", "mode: rule\n", None),
+    ];
+    for (id, yaml, expected) in cases {
+        let pid = ProfileId::parse(id).unwrap();
+        store
+            .import(
+                Profile::new(
+                    pid.clone(),
+                    id,
+                    ProfileSource::Local,
+                    UpdatePolicy::Manual,
+                    100,
+                    None,
+                )
+                .unwrap(),
+                yaml,
+            )
+            .unwrap();
+        match store.system_proxy_endpoint(&pid) {
+            Ok(endpoint) => {
+                assert_eq!(Some(endpoint.port), expected, "[{id}] 端口不符合预期");
+            }
+            Err(error) => {
+                assert_eq!(error.code, ErrorCode::ValidationFailed, "[{id}] 错误码");
+                assert!(
+                    !error.message.contains("proxy endpoint must have a valid host"),
+                    "[{id}] 不应出现 ProxyEndpoint 校验错误：{}",
+                    error.message
+                );
+                assert_eq!(expected, None, "[{id}] 预期有端口却报错：{}", error.message);
+            }
+        }
+    }
+}
+
 }

@@ -9,10 +9,12 @@ publish = false
 fs2 = "0.4"
 libc = "0.2"
 serde_json = "1.0"
+sha2 = "0.10"
 verge-domain = { path = "../verge-domain" }
 verge-helper-protocol = { path = "../verge-helper-protocol" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+global-hotkey = "0.8"
 image = { version = "0.25", default-features = false, features = ["png"] }
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"

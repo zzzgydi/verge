@@ -14,15 +14,40 @@ use verge_domain::{
     AppError, AutoProxyState, ErrorCode, HelperStatus, ProxyEndpoint, ProxyProtocolState,
     SystemProxyServiceState, SystemProxyState,
 };
-use verge_helper_protocol::{HelperRequest, HelperResponse, MAX_REQUEST_BYTES, PROTOCOL_VERSION};
+use verge_helper_protocol::{
+    HelperRequest, HelperResponse, MAX_REQUEST_BYTES, PROTOCOL_VERSION,
+};
+pub use verge_helper_protocol::TunConfig;
+
+mod app_bundle;
+pub use app_bundle::{
+    bundle_short_version, current_app_bundle, directory_writable,
+};
+
+mod helper_install;
+pub use helper_install::{
+    HELPER_LABEL, HELPER_SOCKET_PATH, HelperBundle, HelperInstallLayout, MacHelperInstaller,
+    bundled_resources_directory, current_uid, discover_bundled_helper, run_privileged_script,
+    shell_quote,
+};
 
 #[cfg(target_os = "macos")]
 mod tray;
 #[cfg(target_os = "macos")]
 pub use tray::{TrayCommand, TrayService, TraySnapshot};
 
+#[cfg(target_os = "macos")]
+mod hotkey;
+#[cfg(target_os = "macos")]
+pub use hotkey::{
+    GlobalHotKeyBackend, HotkeyBackend, HotkeyRegistration, spawn_hotkey_listener,
+};
+
 mod daemon;
-pub use daemon::{daemon_socket_path, run_accessory_appkit_loop, spawn_daemon};
+pub use daemon::{
+    daemon_socket_path, redirect_stderr, redirect_stderr_to_log, run_accessory_appkit_loop,
+    spawn_daemon,
+};
 
 #[cfg(target_os = "macos")]
 mod login_item;
@@ -96,6 +121,52 @@ impl MacHelperClient {
         }
     }
 
+    /// helper 自述的能力集（协议版本 + TUN 生命周期支持）。
+    pub fn capabilities(&self) -> Result<HelperCapabilities, AppError> {
+        match self.exchange(&HelperRequest::GetCapabilities) {
+            Ok(HelperResponse::Capabilities {
+                protocol_version,
+                tun_lifecycle,
+            }) => Ok(HelperCapabilities {
+                protocol_version,
+                tun_lifecycle,
+            }),
+            Ok(HelperResponse::Error { code, message }) => Err(helper_call_error(&code, &message)),
+            Ok(response) => Err(platform_error(format!(
+                "unexpected helper response: {response:?}"
+            ))),
+            Err(error) => Err(platform_io_error(error)),
+        }
+    }
+
+    /// 请 helper 创建并配置 TUN 设备，返回实际设备名。
+    pub fn enable_tun(&self, config: &TunConfig) -> Result<String, AppError> {
+        match self.exchange(&HelperRequest::EnableTun {
+            config: config.clone(),
+        }) {
+            Ok(HelperResponse::TunEnabled { device }) => Ok(device),
+            Ok(HelperResponse::Error { code, message }) => Err(helper_call_error(&code, &message)),
+            Ok(response) => Err(platform_error(format!(
+                "unexpected helper response: {response:?}"
+            ))),
+            Err(error) => Err(platform_io_error(error)),
+        }
+    }
+
+    /// 拆除 helper 管理的 TUN 设备；None 表示全部拆除。
+    pub fn disable_tun(&self, device: Option<&str>) -> Result<(), AppError> {
+        match self.exchange(&HelperRequest::DisableTun {
+            device: device.map(str::to_owned),
+        }) {
+            Ok(HelperResponse::TunDisabled) => Ok(()),
+            Ok(HelperResponse::Error { code, message }) => Err(helper_call_error(&code, &message)),
+            Ok(response) => Err(platform_error(format!(
+                "unexpected helper response: {response:?}"
+            ))),
+            Err(error) => Err(platform_io_error(error)),
+        }
+    }
+
     fn exchange(&self, request: &HelperRequest) -> io::Result<HelperResponse> {
         let mut stream = UnixStream::connect(&self.socket)?;
         stream.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
@@ -108,6 +179,47 @@ impl MacHelperClient {
             .read_line(&mut response)?;
         serde_json::from_str(&response).map_err(io::Error::other)
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HelperCapabilities {
+    pub protocol_version: u32,
+    pub tun_lifecycle: bool,
+}
+
+/// 应用层面对的 helper 抽象：状态、能力、TUN 生命周期。
+/// 真实实现是 MacHelperClient；测试注入 fake。
+pub trait HelperControl {
+    fn status(&self) -> HelperStatus;
+    fn tun_supported(&self) -> Result<bool, AppError>;
+    fn enable_tun(&self, config: &TunConfig) -> Result<String, AppError>;
+    fn disable_tun(&self, device: Option<&str>) -> Result<(), AppError>;
+}
+
+impl HelperControl for MacHelperClient {
+    fn status(&self) -> HelperStatus {
+        MacHelperClient::status(self)
+    }
+
+    fn tun_supported(&self) -> Result<bool, AppError> {
+        Ok(self.capabilities()?.tun_lifecycle)
+    }
+
+    fn enable_tun(&self, config: &TunConfig) -> Result<String, AppError> {
+        MacHelperClient::enable_tun(self, config)
+    }
+
+    fn disable_tun(&self, device: Option<&str>) -> Result<(), AppError> {
+        MacHelperClient::disable_tun(self, device)
+    }
+}
+
+fn helper_call_error(code: &str, message: &str) -> AppError {
+    let code = match code {
+        "unauthorized_peer" => ErrorCode::PermissionDenied,
+        _ => ErrorCode::PlatformFailed,
+    };
+    AppError::new(code, format!("helper: {message}"))
 }
 
 #[derive(Debug)]
@@ -832,7 +944,8 @@ mod tests {
         let uid = unsafe { libc::getuid() };
         let server = std::thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
-            verge_helper::serve_connection(stream, uid).unwrap();
+            let tun = verge_helper::shared_tun_backend(verge_helper::MacTun::default());
+            verge_helper::serve_connection(stream, uid, &tun).unwrap();
         });
         assert_eq!(
             MacHelperClient::new(&socket).status(),
@@ -840,6 +953,61 @@ mod tests {
                 protocol_version: PROTOCOL_VERSION,
             }
         );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn helper_client_maps_tun_responses_and_errors() {
+        use std::os::unix::net::UnixListener;
+
+        struct FakeTun;
+
+        impl verge_helper::TunBackend for FakeTun {
+            fn tun_lifecycle_supported(&self) -> bool {
+                true
+            }
+
+            fn enable_tun(
+                &mut self,
+                _config: &verge_helper::ValidatedTun,
+            ) -> Result<String, verge_helper::HelperFailure> {
+                Ok("utun4".into())
+            }
+
+            fn disable_tun(
+                &mut self,
+                _device: Option<&str>,
+            ) -> Result<(), verge_helper::HelperFailure> {
+                Err(verge_helper::HelperFailure {
+                    code: "tun_not_managed",
+                    message: "device is not managed by this helper".into(),
+                })
+            }
+        }
+
+        let directory = TestDir::new();
+        let socket = directory.0.join("helper.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        // SAFETY: getuid has no preconditions.
+        let uid = unsafe { libc::getuid() };
+        let server = std::thread::spawn(move || {
+            let tun = verge_helper::shared_tun_backend(FakeTun);
+            for stream in listener.incoming().take(3) {
+                verge_helper::serve_connection(stream.unwrap(), uid, &tun).unwrap();
+            }
+        });
+        let client = MacHelperClient::new(&socket);
+
+        let capabilities = client.capabilities().unwrap();
+        assert_eq!(capabilities.protocol_version, PROTOCOL_VERSION);
+        assert!(capabilities.tun_lifecycle);
+        assert_eq!(
+            client.enable_tun(&TunConfig::verge_default()).unwrap(),
+            "utun4"
+        );
+        let error = client.disable_tun(Some("utun9")).unwrap_err();
+        assert_eq!(error.code, ErrorCode::PlatformFailed);
+        assert!(error.message.contains("not managed"));
         server.join().unwrap();
     }
 

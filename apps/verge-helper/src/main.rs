@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use verge_helper::{prepare_socket_path, restrict_socket, serve_connection};
+use verge_helper::{MacTun, prepare_socket_path, restrict_socket, serve_connection, shared_tun_backend};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = env::args().skip(1);
@@ -25,11 +25,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     prepare_socket_path(&socket)?;
     let listener = UnixListener::bind(&socket)?;
     restrict_socket(&socket)?;
+    // TUN 设备状态跨连接共享（fd 由 helper 进程持有，连接关闭不销毁设备）。
+    let tun = shared_tun_backend(MacTun::default());
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
+                let tun = tun.clone();
                 std::thread::spawn(move || {
-                    let _ = serve_connection(stream, allowed_uid);
+                    let _ = serve_connection(stream, allowed_uid, &tun);
                 });
             }
             Err(error) => eprintln!("helper accept failed: {error}"),

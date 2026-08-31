@@ -13,33 +13,64 @@ use gpui_component::{
 use verge_domain::{Connection, ConnectionSnapshot};
 use verge_ui::UiAction;
 
-use crate::{format, view::MainView};
+use crate::{
+    format,
+    i18n::{self, Lang, tr},
+    view::MainView,
+};
 
 use super::{muted, page_title};
+
+/// 列名对应的 i18n key（与 columns 的声明顺序一致）。
+const COLUMN_KEYS: [&str; 7] = [
+    "connections.col.process",
+    "connections.col.target",
+    "connections.col.rule",
+    "connections.col.chains",
+    "connections.col.upload",
+    "connections.col.download",
+    "connections.col.actions",
+];
 
 /// 连接表的 delegate：持有快照数据，右键菜单和按钮通过 channel 回到 MainView dispatch。
 pub struct ConnectionsDelegate {
     pub connections: Vec<Connection>,
     columns: Vec<Column>,
     actions: mpsc::Sender<UiAction>,
+    language: Lang,
 }
 
 impl ConnectionsDelegate {
     pub fn new(actions: mpsc::Sender<UiAction>) -> Self {
+        // 创建时设置尚未到达，列名先用英文；语言确定后由 render 里的 set_language 重设。
+        let language = Lang::En;
         Self {
             connections: Vec::new(),
             // 7 列总宽控制在内容区（约 850px）内，避免横向挤压。
             columns: vec![
-                Column::new("process", "进程").width(110.),
-                Column::new("target", "目标").width(170.),
-                Column::new("rule", "规则").width(130.),
-                Column::new("chains", "链路").width(140.),
-                Column::new("upload", "上传").width(80.).text_right(),
-                Column::new("download", "下载").width(80.).text_right(),
-                Column::new("actions", "操作").width(60.),
+                Column::new("process", tr(language, COLUMN_KEYS[0])).width(110.),
+                Column::new("target", tr(language, COLUMN_KEYS[1])).width(170.),
+                Column::new("rule", tr(language, COLUMN_KEYS[2])).width(130.),
+                Column::new("chains", tr(language, COLUMN_KEYS[3])).width(140.),
+                Column::new("upload", tr(language, COLUMN_KEYS[4])).width(80.).text_right(),
+                Column::new("download", tr(language, COLUMN_KEYS[5])).width(80.).text_right(),
+                Column::new("actions", tr(language, COLUMN_KEYS[6])).width(60.),
             ],
             actions,
+            language,
         }
+    }
+
+    /// 语言切换后重设列名；返回是否有变化（调用方据此 refresh 表格）。
+    pub fn set_language(&mut self, language: Lang) -> bool {
+        if self.language == language {
+            return false;
+        }
+        self.language = language;
+        for (column, key) in self.columns.iter_mut().zip(COLUMN_KEYS) {
+            column.name = tr(language, key).into();
+        }
+        true
     }
 }
 
@@ -76,7 +107,7 @@ impl TableDelegate for ConnectionsDelegate {
         };
         match col_ix {
             0 => text(if connection.process.is_empty() {
-                "未知进程".into()
+                tr(self.language, "connections.unknown_process").into()
             } else {
                 connection.process.clone()
             }),
@@ -102,7 +133,7 @@ impl TableDelegate for ConnectionsDelegate {
                 format!("{} {}", connection.rule, connection.rule_payload)
             }),
             3 => text(if connection.chains.is_empty() {
-                "直连".into()
+                tr(self.language, "connections.direct").into()
             } else {
                 connection.chains.join(" → ")
             }),
@@ -120,7 +151,7 @@ impl TableDelegate for ConnectionsDelegate {
                 let id = connection.id.clone();
                 let actions = self.actions.clone();
                 Button::new(SharedString::from(format!("close-conn-{}", connection.id)))
-                    .label("关闭")
+                    .label(tr(self.language, "connections.close"))
                     .xsmall()
                     .ghost()
                     .on_click(move |_, _, _| {
@@ -144,34 +175,43 @@ impl TableDelegate for ConnectionsDelegate {
         };
         let id = connection.id.clone();
         let actions = self.actions.clone();
-        menu.item(PopupMenuItem::new("关闭连接").on_click(move |_, _, _| {
-            let _ = actions.send(UiAction::CloseConnection(id.clone()));
-        }))
+        menu.item(
+            PopupMenuItem::new(tr(self.language, "connections.close_menu")).on_click(
+                move |_, _, _| {
+                    let _ = actions.send(UiAction::CloseConnection(id.clone()));
+                },
+            ),
+        )
     }
 }
 
 pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
+    let lang = view.lang();
     let snapshot: Option<ConnectionSnapshot> = view.state.connections.clone();
-    // 快照内容没变就不 refresh，避免每帧重建表格。
+    // 快照内容没变就不 refresh，避免每帧重建表格；语言切换（列名变化）也要 refresh。
     let connections = snapshot
         .as_ref()
         .map(|snapshot| snapshot.connections.clone())
         .unwrap_or_default();
     view.connections_table.update(cx, |table, cx| {
+        let mut dirty = table.delegate_mut().set_language(lang);
         if table.delegate().connections != connections {
             table.delegate_mut().connections = connections;
+            dirty = true;
+        }
+        if dirty {
             table.refresh(cx);
         }
     });
 
     let summary = view.state.connections.as_ref().map_or_else(
-        || "等待连接快照…".to_owned(),
+        || tr(lang, "connections.waiting").to_owned(),
         |connections| {
-            format!(
-                "{} 条活跃连接 · 累计上传 {} · 累计下载 {}",
+            i18n::fmt_connections_summary(
+                lang,
                 connections.connection_count,
-                format::bytes(connections.upload_total),
-                format::bytes(connections.download_total)
+                &format::bytes(connections.upload_total),
+                &format::bytes(connections.download_total),
             )
         },
     );
@@ -182,7 +222,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         .child(
             h_flex()
                 .justify_between()
-                .child(page_title("连接"))
+                .child(page_title(tr(lang, "connections.title")))
                 .child(muted(summary, cx)),
         )
         .child(

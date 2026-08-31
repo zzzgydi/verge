@@ -11,7 +11,6 @@ publish = false
 futures = "0.3"
 getrandom = "0.4"
 serde_json = "1.0"
-global-hotkey = "0.8"
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit"] }
 gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "0e2fb7acdf1d40d4db3d458da3893fe9865e901e" }

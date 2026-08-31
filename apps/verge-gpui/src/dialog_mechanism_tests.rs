@@ -12,6 +12,7 @@ use std::sync::mpsc;
 use gpui::{AppContext as _, Styled as _, TestAppContext, VisualTestContext};
 use gpui_component::{ActiveTheme as _, Root, WindowExt as _};
 
+use crate::i18n::Lang;
 use crate::view::MainView;
 
 type ViewHolder = Rc<RefCell<Option<gpui::Entity<MainView>>>>;
@@ -112,4 +113,46 @@ fn merged_sheet_opens_and_renders(cx: &mut TestAppContext) {
         )
     });
     assert!(has_sheet && layer, "merged sheet 应打开且渲染层存在");
+}
+
+/// 语言切换：设置写入后 MainView::lang 立即反映新语言，sync_form_inputs
+/// 同步重设输入框占位（状态驱动，无需重启；占位内容正确性由 i18n 查表测试覆盖）。
+#[gpui::test]
+fn language_switch_updates_view_language(cx: &mut TestAppContext) {
+    use verge_domain::{ApplicationSettings, ApplicationSettingsSnapshot};
+
+    let (_, view_holder, cx) = setup(cx);
+    let view = view_holder.borrow().clone().expect("view should be created");
+
+    // 设置未加载时回退英文（与 domain 默认语言一致）。
+    cx.update(|_, cx| {
+        view.update(cx, |view, _| assert_eq!(view.lang(), Lang::En));
+    });
+
+    // 写入 zh-CN 设置并同步表单：语言随即切换。
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state.application_settings = Some(ApplicationSettingsSnapshot {
+                settings: ApplicationSettings {
+                    language: "zh-CN".into(),
+                    ..Default::default()
+                },
+                data_directory: "/tmp/verge-i18n-test".into(),
+                app_version: None,
+            });
+            view.sync_form_inputs(window, cx);
+            assert_eq!(view.lang(), Lang::ZhCn);
+        });
+    });
+
+    // 切回英文同样即时生效。
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            if let Some(snapshot) = view.state.application_settings.as_mut() {
+                snapshot.settings.language = "en".into();
+            }
+            view.sync_form_inputs(window, cx);
+            assert_eq!(view.lang(), Lang::En);
+        });
+    });
 }

@@ -10,7 +10,7 @@ use gpui_component::{
 use verge_domain::ProviderKind;
 use verge_ui::UiAction;
 
-use crate::view::MainView;
+use crate::{i18n::{self, tr}, view::MainView};
 
 use super::{muted, page_title};
 
@@ -18,19 +18,20 @@ use super::{muted, page_title};
 const RULE_ROW_HEIGHT: f32 = 28.;
 
 pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
+    let lang = view.lang();
     let mono = cx.theme().mono_font_family.clone();
     let refreshing = view.is_pending(&["rules", "providers"]);
 
     let mut providers = v_flex().gap_1();
     if view.state.providers.is_empty() && !refreshing {
-        providers = providers.child(muted("暂无 Provider。", cx));
+        providers = providers.child(muted(tr(lang, "rules.providers.empty"), cx));
     }
     for provider in &view.state.providers {
         let name = provider.name.clone();
         let kind = provider.kind;
         let kind_label = match kind {
-            ProviderKind::Proxy => "代理",
-            ProviderKind::Rule => "规则",
+            ProviderKind::Proxy => tr(lang, "rules.provider_kind.proxy"),
+            ProviderKind::Rule => tr(lang, "rules.provider_kind.rule"),
         };
         providers = providers.child(
             h_flex()
@@ -40,12 +41,13 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 .child(
                     super::selectable_text(
                         format!("provider-{kind:?}-{name}"),
-                        format!(
-                            "{kind_label} · {} · {} · {} 条 · 更新于 {}",
-                            provider.name,
-                            provider.vehicle,
+                        i18n::fmt_provider_summary(
+                            lang,
+                            kind_label,
+                            &provider.name,
+                            &provider.vehicle,
                             provider.item_count,
-                            provider.updated_at
+                            &provider.updated_at,
                         ),
                     )
                     .text_sm()
@@ -53,7 +55,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 )
                 .child(
                     Button::new(format!("update-provider-{kind:?}-{name}"))
-                        .label("更新")
+                        .label(tr(lang, "rules.update"))
                         .xsmall()
                         .ghost()
                         .loading(view.is_pending(&["provider_write"]))
@@ -76,12 +78,12 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         } else {
             super::EmptyState::new(
                 gpui_component::IconName::BookOpen,
-                "暂无规则",
-                "启用配置后点击“刷新”加载规则列表。",
+                tr(lang, "rules.empty.title"),
+                tr(lang, "rules.empty.desc"),
             )
             .action(
                 Button::new("empty-refresh-rules")
-                    .label("刷新")
+                    .label(tr(lang, "common.refresh"))
                     .small()
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -137,16 +139,19 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         .size_full()
         .gap_4()
         .child(
-            h_flex().justify_between().child(page_title("规则")).child(
-                Button::new("refresh-rules")
-                    .label("刷新")
-                    .small()
-                    .ghost()
-                    .loading(refreshing)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.dispatch(UiAction::RefreshRules, cx);
-                    })),
-            ),
+            h_flex()
+                .justify_between()
+                .child(page_title(tr(lang, "rules.title")))
+                .child(
+                    Button::new("refresh-rules")
+                        .label(tr(lang, "common.refresh"))
+                        .small()
+                        .ghost()
+                        .loading(refreshing)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.dispatch(UiAction::RefreshRules, cx);
+                        })),
+                ),
         )
         .child(
             GroupBox::new()
@@ -160,7 +165,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 .flex_1()
                 .min_h_0()
                 .gap_4()
-                .child(muted("规则", cx))
+                .child(muted(tr(lang, "rules.section"), cx))
                 .child(rules),
         )
         .into_any_element()

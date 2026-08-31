@@ -8,7 +8,7 @@ use gpui_component::{
 };
 use verge_ui::UiAction;
 
-use crate::view::MainView;
+use crate::{i18n::tr, view::MainView};
 
 use super::page_title;
 
@@ -81,7 +81,10 @@ fn render_row(row: &ProxyRow, view: &MainView, cx: &mut Context<MainView>) -> An
                 .and_then(|candidate| candidate.selected.as_deref())
                 == Some(proxy.as_str());
             let delay = view.state.delays.get(proxy).copied();
-            let delay_text = delay.map_or_else(|| "测速".to_owned(), |ms| format!("{ms} ms"));
+            let delay_text = delay.map_or_else(
+                || tr(view.lang(), "proxies.test_delay").to_owned(),
+                |ms| format!("{ms} ms"),
+            );
             let delay_color = delay_color(delay, cx);
             let select_group = group.clone();
             let select_proxy = proxy.clone();
@@ -147,17 +150,21 @@ fn render_row(row: &ProxyRow, view: &MainView, cx: &mut Context<MainView>) -> An
 }
 
 pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
+    let lang = view.lang();
     let refreshing = view.is_pending(&["proxy_groups"]);
-    let header = h_flex().justify_between().child(page_title("代理")).child(
-        Button::new("refresh-proxies")
-            .label("刷新")
-            .small()
-            .ghost()
-            .loading(refreshing)
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.dispatch(UiAction::RefreshProxies, cx);
-            })),
-    );
+    let header = h_flex()
+        .justify_between()
+        .child(page_title(tr(lang, "proxies.title")))
+        .child(
+            Button::new("refresh-proxies")
+                .label(tr(lang, "common.refresh"))
+                .small()
+                .ghost()
+                .loading(refreshing)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.dispatch(UiAction::RefreshProxies, cx);
+                })),
+        );
 
     if view.state.proxy_groups.is_empty() {
         let body = if refreshing {
@@ -165,12 +172,12 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         } else {
             super::EmptyState::new(
                 IconName::Globe,
-                "暂无代理组",
-                "启用配置后，这里会显示代理组和节点。",
+                tr(lang, "proxies.empty.title"),
+                tr(lang, "proxies.empty.desc"),
             )
             .action(
                 Button::new("goto-profiles")
-                    .label("前往配置")
+                    .label(tr(lang, "proxies.empty.action"))
                     .small()
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| {

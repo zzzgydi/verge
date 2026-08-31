@@ -1,19 +1,15 @@
-use std::{
-    path::Path,
-    sync::mpsc,
-    time::Duration,
-};
+use std::{path::Path, time::Duration};
 
 use futures::StreamExt;
 use gpui::*;
 use gpui_component::{
     ActiveTheme as _, Root, TitleBar, WindowExt as _, notification::Notification,
 };
-use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
+use i18n::{Lang, tr};
 use verge_domain::{AppCommand, RuntimeCommand, SystemProxyCommand};
 use verge_ipc::{ClientEvent, ConnectError, IpcClient};
 use verge_platform::{
-    MacNotifier, ProcessRunner, daemon_socket_path, spawn_daemon,
+    MacNotifier, ProcessRunner, daemon_socket_path, redirect_stderr_to_log, spawn_daemon,
 };
 use verge_ui::{UiAction, UiResponse};
 use view::{
@@ -22,7 +18,7 @@ use view::{
 };
 
 mod format;
-mod hotkey;
+mod i18n;
 mod pages;
 mod view;
 
@@ -41,6 +37,10 @@ fn main() {
             return;
         }
     };
+    // 双击启动没有终端，GUI 进程 stderr 也落盘到数据目录日志。
+    if let Err(error) = redirect_stderr_to_log(&data_directory) {
+        eprintln!("failed to redirect GUI stderr to log: {error}");
+    }
     // 守护优先：先连守护进程，不在则拉起并等待就绪。
     let client = match connect_or_start_daemon(&daemon_socket_path(&data_directory)) {
         Ok(client) => client,
@@ -72,38 +72,13 @@ fn main() {
                 KeyBinding::new(&format!("{modifier}-7"), GoToSettings, Some("Verge")),
                 KeyBinding::new(&format!("{modifier}-r"), RefreshPage, Some("Verge")),
             ]);
-            // 全局快捷键：macOS 要求 GlobalHotKeyManager 在主线程创建和调用；
-            // 事件经 futures channel 由 GPUI 协程事件驱动消费（无轮询）。
-            let (hotkey_event_tx, mut hotkey_event_rx) =
-                futures::channel::mpsc::unbounded::<()>();
-            let mut hotkeys = match hotkey::GlobalHotKeyBackend::new() {
-                Ok(backend) => {
-                    std::thread::spawn(move || {
-                        let receiver = GlobalHotKeyEvent::receiver();
-                        while let Ok(event) = receiver.recv() {
-                            if event.state == HotKeyState::Pressed
-                                && hotkey_event_tx.unbounded_send(()).is_err()
-                            {
-                                return;
-                            }
-                        }
-                    });
-                    Some(hotkey::HotkeyRegistration::new(backend))
-                }
-                Err(error) => {
-                    eprintln!("global hotkey is unavailable: {}", error.message);
-                    None
-                }
-            };
             let mut notifier = MacNotifier::new(ProcessRunner);
-            let (view_tx, view_rx) = mpsc::channel();
             let window_options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1100.), px(720.)), cx)),
                 window_min_size: Some(size(px(960.), px(640.))),
                 ..TitleBar::window_options()
             };
-            let window = cx
-                .open_window(window_options, |window, cx| {
+            cx.open_window(window_options, |window, cx| {
                     window.set_window_title("Verge");
                     let view = cx.new(|cx| MainView::new(request_tx, window, cx));
                     view.update(cx, |view, cx| {
@@ -111,7 +86,6 @@ fn main() {
                         view.sync_theme(window, cx);
                     });
                     let weak_view = view.downgrade();
-                    let _ = view_tx.send(weak_view.clone());
                     // IPC 事件驱动消费：Welcome / Response / RealtimeBatch / 窗口控制。
                     // 窗口句柄通过 weak_view.update_in 获取，协程不持有 WindowHandle。
                     cx.spawn(async move |cx| {
@@ -165,60 +139,48 @@ fn main() {
                                             result: Err(_),
                                         }
                                     );
-                                    if let Some((title, body)) =
-                                        notification_for(&envelope.response)
+                                    // toast / OS 通知文案按当前设置语言生成，语言从视图状态取，
+                                    // 因此移进 update_in 闭包内计算。
+                                    let response = envelope.response.clone();
+                                    let mut os_notification = None;
                                     {
-                                        let _ = notifier.notify(title, body);
-                                    }
-                                    let toast = toast_for(&envelope.response);
-                                    let _ = weak_view.update_in(cx, |view, window, cx| {
-                                        view.state.apply_response_envelope(envelope);
-                                        if let Some(error) = &yaml_load_error {
-                                            view.fail_yaml_sheet(error, window, cx);
-                                        }
-                                        if let Some(error) = &merge_load_error {
-                                            view.fail_merge_sheet(error, window, cx);
-                                        }
-                                        if let Some(error) = &merged_load_error {
-                                            view.fail_merged_sheet(error, window, cx);
-                                        }
-                                        if import_preview_failed {
-                                            view.fail_import_preview();
-                                        }
-                                        // 设置响应可能改了主题偏好，顺势同步一次。
-                                        view.sync_theme(window, cx);
-                                        // 设置首次到达后同步一次表单初值。
-                                        view.sync_form_inputs(window, cx);
-                                        // “查看 YAML”在加载完成后打开 Sheet。
-                                        view.maybe_open_yaml_sheet(window, cx);
-                                        // Merge 配置与合并结果 Sheet 同样在加载完成后填充。
-                                        view.maybe_open_merge_sheet(window, cx);
-                                        view.maybe_open_merged_sheet(window, cx);
-                                        // 设置导入预览到达后打开差异确认弹窗。
-                                        view.maybe_open_import_preview_dialog(window, cx);
-                                        if let Some(toast) = toast {
-                                            window.push_notification(toast, cx);
-                                        }
-                                        cx.notify();
-                                    });
-                                    // 设置快照（首次到达或变更）后同步全局快捷键注册。
-                                    if let Some(service) = &mut hotkeys {
-                                        let _ = weak_view.update_in(cx, |view, window, cx| {
-                                            let desired = view
-                                                .state
-                                                .application_settings
-                                                .as_ref()
-                                                .and_then(|snapshot| {
-                                                    snapshot.settings.global_hotkey.clone()
-                                                });
-                                            if let Err(error) = service.sync(desired.as_deref()) {
-                                                window.push_notification(
-                                                    Notification::error(error.message)
-                                                        .autohide(false),
-                                                    cx,
-                                                );
+                                        let os_notification_slot = &mut os_notification;
+                                        let _ = weak_view.update_in(cx, move |view, window, cx| {
+                                            let lang = view.lang();
+                                            *os_notification_slot = notification_for(lang, &response);
+                                            let toast = toast_for(lang, &response);
+                                            view.state.apply_response_envelope(envelope);
+                                            if let Some(error) = &yaml_load_error {
+                                                view.fail_yaml_sheet(error, window, cx);
                                             }
+                                            if let Some(error) = &merge_load_error {
+                                                view.fail_merge_sheet(error, window, cx);
+                                            }
+                                            if let Some(error) = &merged_load_error {
+                                                view.fail_merged_sheet(error, window, cx);
+                                            }
+                                            if import_preview_failed {
+                                                view.fail_import_preview();
+                                            }
+                                            // 设置响应可能改了主题偏好，顺势同步一次。
+                                            view.sync_theme(window, cx);
+                                            // 设置首次到达后同步一次表单初值。
+                                            view.sync_form_inputs(window, cx);
+                                            // “查看 YAML”在加载完成后打开 Sheet。
+                                            view.maybe_open_yaml_sheet(window, cx);
+                                            // Merge 配置与合并结果 Sheet 同样在加载完成后填充。
+                                            view.maybe_open_merge_sheet(window, cx);
+                                            view.maybe_open_merged_sheet(window, cx);
+                                            // 设置导入预览到达后打开差异确认弹窗。
+                                            view.maybe_open_import_preview_dialog(window, cx);
+                                            if let Some(toast) = toast {
+                                                window.push_notification(toast, cx);
+                                            }
+                                            cx.notify();
                                         });
+                                    }
+                                    if let Some((title, body)) = os_notification {
+                                        let _ = notifier.notify(title, body);
                                     }
                                 }
                                 ClientEvent::RealtimeBatch(events) => {
@@ -255,26 +217,6 @@ fn main() {
                     cx.new(|cx| Root::new(view, window, cx).bg(cx.theme().background))
                 })
                 .expect("failed to open Verge window");
-            let weak_view = view_rx
-                .recv()
-                .expect("main view should be created with the window");
-            // 全局快捷键“显示/隐藏主窗口”：事件驱动消费（open_window 之后才有 WindowHandle）。
-            cx.spawn(async move |cx| {
-                while hotkey_event_rx.next().await.is_some() {
-                    cx.update(|cx| {
-                        let active = window
-                            .update(cx, |_, window, _| window.is_window_active())
-                            .unwrap_or(false);
-                        if active {
-                            cx.hide();
-                        } else {
-                            show_main_window(&window, cx);
-                        }
-                    });
-                }
-            })
-            .detach();
-            let _ = weak_view;
         });
 }
 
@@ -325,13 +267,7 @@ fn connect_or_start_daemon(socket: &Path) -> Result<IpcClient, String> {
     Err("Verge daemon did not become ready in time".into())
 }
 
-/// 托盘“显示 Verge”与全局快捷键共用的窗口激活逻辑。
-fn show_main_window(window: &WindowHandle<Root>, cx: &mut App) {
-    cx.activate(true);
-    let _ = window.update(cx, |_, window, _| window.activate_window());
-}
-
-fn notification_for(response: &UiResponse) -> Option<(&'static str, &'static str)> {
+fn notification_for(lang: Lang, response: &UiResponse) -> Option<(&'static str, &'static str)> {
     let UiResponse::Profile {
         request,
         result: Ok(_),
@@ -347,68 +283,83 @@ fn notification_for(response: &UiResponse) -> Option<(&'static str, &'static str
         | AppCommand::UpdateMergeConfig { .. }
         | AppCommand::UpdateRemoteProfile { .. }
         | AppCommand::SetProfileUpdatePolicy { .. }
-        | AppCommand::DeleteProfile { .. } => Some(("Verge", "配置操作已完成")),
-        AppCommand::ExportDiagnostics { .. } => Some(("Verge", "脱敏诊断已导出")),
+        | AppCommand::DeleteProfile { .. } => Some(("Verge", tr(lang, "notify.profile_done"))),
+        AppCommand::ExportDiagnostics { .. } => {
+            Some(("Verge", tr(lang, "notify.diagnostics_exported")))
+        }
         _ => None,
     }
 }
 
 /// 错误 toast 附带的恢复指引，按错误码给出下一步。
-fn recovery_hint(error: &verge_domain::AppError) -> Option<&'static str> {
+fn recovery_hint(lang: Lang, error: &verge_domain::AppError) -> Option<&'static str> {
     use verge_domain::ErrorCode;
-    match error.code {
-        ErrorCode::InvalidInput | ErrorCode::ValidationFailed => Some("请检查输入后重试"),
-        ErrorCode::NotFound => Some("目标可能已被移除，请刷新后重试"),
-        ErrorCode::Conflict => Some("请刷新确认当前状态后重试"),
-        ErrorCode::PermissionDenied => Some("该操作需要明确确认后才能执行"),
-        ErrorCode::CoreUnavailable => Some("请先在“设置”页安装或更新 Mihomo 内核"),
-        ErrorCode::CoreRejectedConfig => Some("请检查配置 YAML 后重试"),
-        ErrorCode::StorageFailed | ErrorCode::PlatformFailed => None,
-    }
+    let key = match error.code {
+        ErrorCode::InvalidInput | ErrorCode::ValidationFailed => "hint.invalid_input",
+        ErrorCode::NotFound => "hint.not_found",
+        ErrorCode::Conflict => "hint.conflict",
+        ErrorCode::PermissionDenied => "hint.permission_denied",
+        ErrorCode::CoreUnavailable => "hint.core_unavailable",
+        ErrorCode::CoreRejectedConfig => "hint.core_rejected",
+        ErrorCode::StorageFailed | ErrorCode::PlatformFailed => return None,
+    };
+    Some(tr(lang, key))
 }
 
 /// 应用内 toast：结果不可见的写操作成功给成功提示（自动隐藏），失败给错误提示并附恢复指引（不自动隐藏）。
 /// 结果在界面上直接可见的操作（切换模式、切换节点、开关网络设置等）不再弹成功 toast。
-fn toast_for(response: &UiResponse) -> Option<Notification> {
+fn toast_for(lang: Lang, response: &UiResponse) -> Option<Notification> {
     let ok = |message: &'static str| Notification::success(message);
     let fail = |error: &verge_domain::AppError| {
-        let message = match recovery_hint(error) {
-            Some(hint) => format!("{}。{hint}。", error.message),
-            None => error.message.clone(),
-        };
+        let message = i18n::fmt_toast_error(lang, &error.message, recovery_hint(lang, error));
         Notification::error(message).autohide(false)
     };
     match response {
         UiResponse::Profile { request, result } => {
             let success = match request {
                 AppCommand::ImportProfile { .. } | AppCommand::ImportRemoteProfile { .. } => {
-                    Some("配置已导入")
+                    Some(tr(lang, "toast.profile_imported"))
                 }
-                AppCommand::SelectProfile { .. } => Some("已启用配置"),
-                AppCommand::UpdateProfileYaml { .. } => Some("配置 YAML 已保存"),
-                AppCommand::UpdateMergeConfig { .. } => Some("Merge 配置已保存"),
-                AppCommand::UpdateRemoteProfile { .. } => Some("远程配置已更新"),
-                AppCommand::SetProfileUpdatePolicy { .. } => Some("更新策略已保存"),
-                AppCommand::DeleteProfile { .. } => Some("配置已删除"),
-                AppCommand::ExportDiagnostics { .. } => Some("诊断已导出"),
-                AppCommand::ExportApplicationSettings { .. } => Some("设置已导出"),
-                AppCommand::ImportApplicationSettings { .. } => Some("设置已导入"),
-                AppCommand::ResetApplicationSettingsScope { .. } => Some("已恢复默认设置"),
-                AppCommand::ExportEncryptedBackup { .. } => Some("加密备份已导出"),
-                AppCommand::RestoreEncryptedBackup { .. } => Some("备份已恢复"),
-                AppCommand::UpdateMihomo => Some("Mihomo 内核已更新"),
-                // UpdateApplicationSettings：设置页的选中态即结果，不再弹 toast。
+                AppCommand::SelectProfile { .. } => Some(tr(lang, "toast.profile_selected")),
+                AppCommand::UpdateProfileYaml { .. } => Some(tr(lang, "toast.yaml_saved")),
+                AppCommand::UpdateMergeConfig { .. } => Some(tr(lang, "toast.merge_saved")),
+                AppCommand::UpdateRemoteProfile { .. } => Some(tr(lang, "toast.remote_updated")),
+                AppCommand::SetProfileUpdatePolicy { .. } => Some(tr(lang, "toast.policy_saved")),
+                AppCommand::DeleteProfile { .. } => Some(tr(lang, "toast.profile_deleted")),
+                AppCommand::ExportDiagnostics { .. } => {
+                    Some(tr(lang, "toast.diagnostics_exported"))
+                }
+                AppCommand::ExportApplicationSettings { .. } => {
+                    Some(tr(lang, "toast.settings_exported"))
+                }
+                AppCommand::ImportApplicationSettings { .. } => {
+                    Some(tr(lang, "toast.settings_imported"))
+                }
+                AppCommand::ResetApplicationSettingsScope { .. } => {
+                    Some(tr(lang, "toast.settings_reset"))
+                }
+                AppCommand::ExportEncryptedBackup { .. } => {
+                    Some(tr(lang, "toast.backup_exported"))
+                }
+                AppCommand::RestoreEncryptedBackup { .. } => {
+                    Some(tr(lang, "toast.backup_restored"))
+                }
+                AppCommand::UpdateMihomo => Some(tr(lang, "toast.mihomo_updated")),
+                AppCommand::UpdateApplication => Some(tr(lang, "toast.app_updated")),
+                AppCommand::RestartApplication => Some(tr(lang, "toast.app_restarting")),
+                // UpdateApplicationSettings / CheckAppUpdate：结果在界面上直接可见，不再弹 toast。
                 _ => None,
             };
             match result {
                 Ok(_) => success.map(ok),
-                // 设置保存的成功 toast 免了，但失败必须提示。
+                // 设置保存/更新检查的成功 toast 免了，但失败必须提示。
                 Err(error)
                     if success.is_some()
                         || matches!(
                             request,
                             AppCommand::UpdateApplicationSettings { .. }
                                 | AppCommand::PreviewApplicationSettingsImport { .. }
+                                | AppCommand::CheckAppUpdate
                         ) =>
                 {
                     Some(fail(error))
@@ -418,7 +369,9 @@ fn toast_for(response: &UiResponse) -> Option<Notification> {
         }
         UiResponse::Runtime { request, result } => {
             let success = match request {
-                RuntimeCommand::UpdateProvider { .. } => Some("Provider 已更新"),
+                RuntimeCommand::UpdateProvider { .. } => {
+                    Some(tr(lang, "toast.provider_updated"))
+                }
                 // SetMode / SelectProxy / SetNetworkSettings / CloseConnection 的结果
                 // 在界面上直接可见，不再弹成功 toast。
                 _ => None,

@@ -36,8 +36,14 @@ contents="$bundle/Contents"
 /bin/cp "$repo_dir/target/release/verge-helper" "$contents/Resources/helper/verge-helper"
 /bin/chmod 755 "$contents/MacOS/verge-gpui" "$contents/Resources/bin/mihomo"
 /bin/chmod 755 "$contents/Resources/helper/verge-helper"
+# 构建时记录 helper 预期 SHA-256，安装时按此校验来源二进制。
+/usr/bin/shasum -a 256 "$contents/Resources/helper/verge-helper" | /usr/bin/awk '{print $1}' > "$contents/Resources/helper/verge-helper.sha256"
 /bin/cp "$manifest" "$contents/Resources/mihomo-manifest.json"
 /bin/cp "$app_dir/macos/Info.plist" "$contents/Info.plist"
+# 版本号以 Cargo.toml 为准，打包时写入 plist；应用内更新据此报告/比较当前版本。
+version=$(/usr/bin/sed -n 's/^version = "\(.*\)"/\1/p' "$app_dir/Cargo.toml" | /usr/bin/head -1)
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $version" "$contents/Info.plist"
 
 signing_identity=${VERGE_CODESIGN_IDENTITY:--}
 /usr/bin/codesign --force --deep --options runtime --sign "$signing_identity" "$bundle"

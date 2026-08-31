@@ -14,18 +14,23 @@ use gpui_component::{
 use verge_domain::{HelperStatus, SettingsScope, ThemePreference};
 use verge_ui::UiAction;
 
-use crate::view::MainView;
+use crate::{
+    i18n::{self, Lang, tr},
+    view::MainView,
+};
 
 use super::{muted, page_title};
 
-fn helper_label(view: &MainView) -> String {
+fn helper_label(lang: Lang, view: &MainView) -> String {
     match &view.state.helper_status {
         Some(HelperStatus::Ready { protocol_version }) => {
-            format!("就绪（协议版本 {protocol_version}）")
+            i18n::fmt_helper_ready(lang, *protocol_version)
         }
-        Some(HelperStatus::NotInstalled) => "未安装".into(),
-        Some(HelperStatus::Incompatible { message }) => format!("需要修复：{message}"),
-        None => "未知".into(),
+        Some(HelperStatus::NotInstalled) => tr(lang, "settings.helper.not_installed").into(),
+        Some(HelperStatus::Incompatible { message }) => {
+            i18n::fmt_helper_incompatible(lang, message)
+        }
+        None => tr(lang, "common.unknown").into(),
     }
 }
 
@@ -82,141 +87,154 @@ fn collapsible_group(
 }
 
 pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
+    let lang = view.lang();
     let Some(snapshot) = view.state.application_settings.clone() else {
         return v_flex()
             .gap_4()
-            .child(page_title("设置"))
+            .child(page_title(tr(lang, "settings.title")))
             .child(super::skeleton_rows(4))
             .into_any_element();
     };
     let settings = snapshot.settings;
     let data_directory = snapshot.data_directory;
+    let app_version = snapshot.app_version;
     let diagnostic_path = format!("{data_directory}/diagnostics.json");
     let settings_export_path = format!("{data_directory}/settings-export.json");
-    let helper = helper_label(view);
+    let helper = helper_label(lang, view);
+    // 未安装/不兼容 → 提供“安装/修复”；就绪 → 提供“卸载”（确认弹窗 + 显式授权）。
+    let helper_installable = matches!(
+        view.state.helper_status,
+        Some(HelperStatus::NotInstalled | HelperStatus::Incompatible { .. })
+    );
+    let helper_ready = matches!(view.state.helper_status, Some(HelperStatus::Ready { .. }));
     let mono = cx.theme().mono_font_family.clone();
 
-    let general_group = GroupBox::new().id("settings-general").title("通用").child(
-        v_form()
-            .child(
-                field().label("主题").child(
-                    h_flex().gap_2().children(
-                        [
-                            (ThemePreference::System, "跟随系统"),
-                            (ThemePreference::Light, "浅色"),
-                            (ThemePreference::Dark, "深色"),
-                        ]
-                        .map(|(theme, label)| {
+    let general_group = GroupBox::new()
+        .id("settings-general")
+        .title(tr(lang, "settings.group.general"))
+        .child(
+            v_form()
+                .child(
+                    field().label(tr(lang, "settings.theme")).child(
+                        h_flex().gap_2().children(
+                            [
+                                (ThemePreference::System, tr(lang, "settings.theme.system")),
+                                (ThemePreference::Light, tr(lang, "settings.theme.light")),
+                                (ThemePreference::Dark, tr(lang, "settings.theme.dark")),
+                            ]
+                            .map(|(theme, label)| {
+                                let mut updated = settings.clone();
+                                updated.theme = theme;
+                                Button::new(format!("theme-{theme:?}"))
+                                    .label(label)
+                                    .small()
+                                    .outline()
+                                    .selected(settings.theme == theme)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.dispatch(UiAction::UpdateSettings(updated.clone()), cx);
+                                    }))
+                            }),
+                        ),
+                    ),
+                )
+                .child(
+                    field().label(tr(lang, "settings.language")).child(h_flex().gap_2().children(
+                        [("en", "English"), ("zh-CN", "中文")].map(|(language, label)| {
                             let mut updated = settings.clone();
-                            updated.theme = theme;
-                            Button::new(format!("theme-{theme:?}"))
+                            updated.language = language.into();
+                            Button::new(format!("language-{language}"))
                                 .label(label)
                                 .small()
                                 .outline()
-                                .selected(settings.theme == theme)
+                                .selected(settings.language == language)
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.dispatch(UiAction::UpdateSettings(updated.clone()), cx);
                                 }))
                         }),
-                    ),
-                ),
-            )
-            .child(
-                field().label("语言").child(h_flex().gap_2().children(
-                    [("en", "English"), ("zh-CN", "中文")].map(|(language, label)| {
-                        let mut updated = settings.clone();
-                        updated.language = language.into();
-                        Button::new(format!("language-{language}"))
-                            .label(label)
-                            .small()
-                            .outline()
-                            .selected(settings.language == language)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.dispatch(UiAction::UpdateSettings(updated.clone()), cx);
-                            }))
-                    }),
-                )),
-            )
-            .child(
-                field()
-                    .label("日志缓冲")
-                    .description("100 – 5000 条，超出后丢弃最旧的日志")
-                    .child(NumberInput::new(&view.log_limit)),
-            )
-            .child(field().label("开机启动").description("登录 macOS 后自动启动 Verge，需打包为 .app 才能生效").child({
-                let current = settings.clone();
-                h_flex().child(
-                    Switch::new("switch-launch-at-login")
-                        .checked(settings.launch_at_login)
-                        .on_click(cx.listener(move |this, checked: &bool, _, cx| {
-                            let mut updated = current.clone();
-                            updated.launch_at_login = *checked;
-                            this.dispatch(UiAction::UpdateSettings(updated), cx);
-                        })),
+                    )),
                 )
-            }))
-            .child(
-                field()
-                    .label("全局快捷键")
-                    .description("显示/隐藏主窗口；留空保存即禁用，组合键被占用时会回滚到旧快捷键")
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(Input::new(&view.global_hotkey))
-                            .child(
-                                Button::new("save-global-hotkey")
-                                    .label("保存")
+                .child(
+                    field()
+                        .label(tr(lang, "settings.log_limit"))
+                        .description(tr(lang, "settings.log_limit.desc"))
+                        .child(NumberInput::new(&view.log_limit)),
+                )
+                .child(field().label(tr(lang, "settings.launch_at_login")).description(tr(lang, "settings.launch_at_login.desc")).child({
+                    let current = settings.clone();
+                    h_flex().child(
+                        Switch::new("switch-launch-at-login")
+                            .checked(settings.launch_at_login)
+                            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                                let mut updated = current.clone();
+                                updated.launch_at_login = *checked;
+                                this.dispatch(UiAction::UpdateSettings(updated), cx);
+                            })),
+                    )
+                }))
+                .child(
+                    field()
+                        .label(tr(lang, "settings.global_hotkey"))
+                        .description(tr(lang, "settings.global_hotkey.desc"))
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(Input::new(&view.global_hotkey))
+                                .child(
+                                    Button::new("save-global-hotkey")
+                                        .label(tr(lang, "common.save"))
+                                        .small()
+                                        .outline()
+                                        .loading(view.is_pending(&["application_settings_write"]))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            let value = this
+                                                .global_hotkey
+                                                .read(cx)
+                                                .value()
+                                                .trim()
+                                                .to_string();
+                                            let Some(snapshot) =
+                                                this.state.application_settings.clone()
+                                            else {
+                                                return;
+                                            };
+                                            let mut updated = snapshot.settings;
+                                            updated.global_hotkey =
+                                                if value.is_empty() { None } else { Some(value) };
+                                            this.dispatch(UiAction::UpdateSettings(updated), cx);
+                                        })),
+                                ),
+                        ),
+                )
+                .child(
+                    field()
+                        .label(tr(lang, "settings.reset_default"))
+                        .description(tr(lang, "settings.reset_default.desc"))
+                        .child(h_flex().gap_2().children(
+                            [
+                                (SettingsScope::Appearance, tr(lang, "settings.scope.appearance")),
+                                (SettingsScope::Network, tr(lang, "settings.scope.network")),
+                                (SettingsScope::System, tr(lang, "settings.scope.system")),
+                            ]
+                            .map(|(scope, label)| {
+                                Button::new(format!("reset-scope-{scope:?}"))
+                                    .label(label)
                                     .small()
                                     .outline()
-                                    .loading(view.is_pending(&["application_settings_write"]))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        let value = this
-                                            .global_hotkey
-                                            .read(cx)
-                                            .value()
-                                            .trim()
-                                            .to_string();
-                                        let Some(snapshot) =
-                                            this.state.application_settings.clone()
-                                        else {
-                                            return;
-                                        };
-                                        let mut updated = snapshot.settings;
-                                        updated.global_hotkey =
-                                            if value.is_empty() { None } else { Some(value) };
-                                        this.dispatch(UiAction::UpdateSettings(updated), cx);
-                                    })),
-                            ),
-                    ),
-            )
-            .child(
-                field()
-                    .label("恢复默认")
-                    .description("按作用域恢复默认值，不影响配置和备份")
-                    .child(h_flex().gap_2().children(
-                        [
-                            (SettingsScope::Appearance, "外观"),
-                            (SettingsScope::Network, "网络"),
-                            (SettingsScope::System, "系统"),
-                        ]
-                        .map(|(scope, label)| {
-                            Button::new(format!("reset-scope-{scope:?}"))
-                                .label(label)
-                                .small()
-                                .outline()
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.confirm_reset_scope(scope, label, window, cx);
-                                }))
-                        }),
-                    )),
-            ),
-    );
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.confirm_reset_scope(scope, window, cx);
+                                    }))
+                            }),
+                        )),
+                ),
+        );
 
-    let mut network_group = GroupBox::new().id("settings-network").title("网络");
+    let mut network_group = GroupBox::new()
+        .id("settings-network")
+        .title(tr(lang, "settings.group.network"));
     if let Some(network) = view.state.network_settings.clone() {
         network_group = network_group.child(
             v_form()
-                .child(field().label("TUN 模式").child({
+                .child(field().label(tr(lang, "settings.network.tun")).child({
                     let n = network.clone();
                     h_flex().child(
                         Switch::new("switch-tun")
@@ -254,7 +272,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 })),
         );
     } else {
-        network_group = network_group.child(muted("网络设置尚未加载。", cx));
+        network_group = network_group.child(muted(tr(lang, "settings.network.not_loaded"), cx));
     }
 
     let proxy_state = view.state.system_proxy.clone();
@@ -288,18 +306,18 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
 
     let proxy_group = GroupBox::new()
         .id("settings-system-proxy")
-        .title("系统代理")
+        .title(tr(lang, "settings.group.proxy"))
         .child(if proxy_state.is_some() {
             v_form()
                 .child(
                     field()
-                        .label("SOCKS 代理")
+                        .label(tr(lang, "settings.proxy.socks"))
                         .description(match &socks_current {
-                            Some((true, endpoint)) => format!("当前：{endpoint}"),
+                            Some((true, endpoint)) => i18n::fmt_current(lang, endpoint),
                             _ if socks_runtime_endpoint.is_none() => {
-                                "配置未声明 mixed-port 或 socks-port，无法启用".into()
+                                tr(lang, "settings.proxy.socks.unavailable").into()
                             }
-                            _ => "使用配置的 mixed-port 或 socks-port".into(),
+                            _ => tr(lang, "settings.proxy.socks.available").into(),
                         })
                         .child(h_flex().child({
                             let socks_runtime_endpoint = socks_runtime_endpoint.clone();
@@ -331,12 +349,13 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 )
                 .child(
                     field()
-                        .label("自动代理（PAC）")
+                        .label(tr(lang, "settings.proxy.pac"))
                         .description(match &pac_current {
-                            Some(state) if state.enabled => {
-                                format!("当前：{}", state.url.as_deref().unwrap_or("已启用"))
-                            }
-                            _ => "未设置".into(),
+                            Some(state) if state.enabled => i18n::fmt_current(
+                                lang,
+                                state.url.as_deref().unwrap_or(tr(lang, "settings.proxy.pac.enabled")),
+                            ),
+                            _ => tr(lang, "settings.proxy.not_set").into(),
                         })
                         .child(
                             h_flex()
@@ -344,7 +363,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 .child(Input::new(&view.pac_url))
                                 .child(
                                     Button::new("apply-pac")
-                                        .label("启用")
+                                        .label(tr(lang, "common.enable"))
                                         .small()
                                         .outline()
                                         .loading(view.is_pending(&["system_proxy"]))
@@ -364,7 +383,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                     |this| {
                                         this.child(
                                             Button::new("disable-pac")
-                                                .label("关闭")
+                                                .label(tr(lang, "common.disable"))
                                                 .small()
                                                 .outline()
                                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -380,11 +399,11 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 )
                 .child(
                     field()
-                        .label("代理绕过列表")
+                        .label(tr(lang, "settings.proxy.bypass"))
                         .description(if bypass_current.is_empty() {
-                            "未设置；输入框留空保存即清空".into()
+                            tr(lang, "settings.proxy.bypass.empty").into()
                         } else {
-                            format!("当前：{}", bypass_current.join(", "))
+                            i18n::fmt_current(lang, &bypass_current.join(", "))
                         })
                         .child(
                             h_flex()
@@ -392,7 +411,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 .child(Input::new(&view.proxy_bypass))
                                 .child(
                                     Button::new("save-bypass")
-                                        .label("保存")
+                                        .label(tr(lang, "common.save"))
                                         .small()
                                         .outline()
                                         .loading(view.is_pending(&["system_proxy"]))
@@ -413,22 +432,22 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 )
                 .into_any_element()
         } else {
-            muted("系统代理状态尚未加载。", cx).into_any_element()
+            muted(tr(lang, "settings.proxy.not_loaded"), cx).into_any_element()
         });
 
     let core_group = GroupBox::new()
         .id("settings-core")
-        .title("Mihomo 内核")
+        .title(tr(lang, "settings.group.core"))
         .child(
             v_form()
                 .child(
                     field()
-                        .label("内核更新")
-                        .description("下载、校验并更新 Mihomo 内核")
+                        .label(tr(lang, "settings.core.update"))
+                        .description(tr(lang, "settings.core.update.desc"))
                         .child(
                             h_flex().child(
                                 Button::new("update-mihomo")
-                                    .label("立即更新")
+                                    .label(tr(lang, "common.update_now"))
                                     .small()
                                     .outline()
                                     .loading(view.is_pending(&["application_settings_write"]))
@@ -441,101 +460,209 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 .when_some(view.state.mihomo_version.clone(), |form, version| {
                     form.child(
                         field()
-                            .label("当前版本")
-                            .child(muted(format!("已安装并校验：{version}"), cx)),
+                            .label(tr(lang, "settings.core.version"))
+                            .child(muted(i18n::fmt_core_installed(lang, &version), cx)),
                     )
                 }),
         );
 
-    let system_group = GroupBox::new().id("settings-system").title("系统").child(
-        v_form()
-            .child(
-                field().label("数据目录").child(
-                    super::selectable_text("settings-data-dir", data_directory)
-                        .font_family(mono)
-                        .text_sm(),
-                ),
-            )
-            .child(field().label("特权 Helper").child(muted(helper, cx)))
-            .child(
-                field().label("诊断导出").child(
-                    h_flex().child(
-                        Button::new("export-diagnostics")
-                            .label("导出脱敏诊断")
-                            .small()
-                            .outline()
-                            .loading(view.is_pending(&["application_settings_write"]))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.dispatch(
-                                    UiAction::ExportDiagnostics {
-                                        destination: diagnostic_path.clone(),
-                                    },
-                                    cx,
-                                );
-                            })),
-                    ),
-                ),
-            )
-            .child(
-                field()
-                    .label("设置导出")
-                    .description("明文设置文件，不含密钥和订阅凭据，可跨机器迁移")
-                    .child(h_flex().child(
-                        Button::new("export-application-settings")
-                            .label("导出设置")
-                            .small()
-                            .outline()
-                            .loading(view.is_pending(&["application_settings_write"]))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.dispatch(
-                                    UiAction::ExportApplicationSettings {
-                                        destination: settings_export_path.clone(),
-                                    },
-                                    cx,
-                                );
-                            })),
-                    )),
-            )
-            .child(
-                field()
-                    .label("设置导入")
-                    .description("先预览字段差异，确认后才应用")
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(Input::new(&view.settings_import_path))
-                            .child(
-                                Button::new("preview-settings-import")
-                                    .label("预览差异并导入")
-                                    .small()
-                                    .outline()
-                                    .loading(view.is_pending(&["settings_import_preview"]))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        let _ = this.preview_settings_import(cx);
-                                    })),
-                            ),
-                    ),
-            ),
-    );
-
-    let backup_group = GroupBox::new()
-        .id("settings-backup")
-        .title("加密备份")
+    let app_update_group = GroupBox::new()
+        .id("settings-app-update")
+        .title(tr(lang, "settings.group.app_update"))
         .child(
             v_form()
                 .child(
                     field()
-                        .label("备份口令")
-                        .description("导出和恢复使用同一个口令，至少 12 个字符")
+                        .label(tr(lang, "settings.core.version"))
+                        .child(muted(
+                            app_version.map_or_else(
+                                || tr(lang, "settings.app.version_dev").into(),
+                                |version| format!("v{version}"),
+                            ),
+                            cx,
+                        )),
+                )
+                .child(
+                    field()
+                        .label(tr(lang, "settings.app.check"))
+                        .description(tr(lang, "settings.app.check.desc"))
+                        .child(h_flex().child(
+                            Button::new("check-app-update")
+                                .label(tr(lang, "settings.app.check"))
+                                .small()
+                                .outline()
+                                .loading(view.is_pending(&["app_update"]))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.dispatch(UiAction::CheckAppUpdate, cx);
+                                })),
+                        )),
+                )
+                .when_some(view.state.app_update.clone(), |form, status| {
+                    form.child(field().label(tr(lang, "settings.app.latest")).child(muted(
+                        i18n::fmt_app_latest(lang, &status.latest_version, status.update_available),
+                        cx,
+                    )))
+                })
+                .when(
+                    view.state
+                        .app_update
+                        .as_ref()
+                        .is_some_and(|status| status.update_available),
+                    |form| {
+                        form.child(field().label(tr(lang, "settings.app.update")).child(h_flex().child(
+                            Button::new("update-application")
+                                .label(tr(lang, "settings.app.update.download"))
+                                .small()
+                                .outline()
+                                .loading(view.is_pending(&["app_update_write"]))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.confirm_update_application(window, cx);
+                                })),
+                        )))
+                    },
+                )
+                .when_some(view.state.app_update_installed.clone(), |form, version| {
+                    form.child(field().label(tr(lang, "settings.app.pending_restart")).child(
+                        h_flex()
+                            .gap_2()
+                            .child(muted(i18n::fmt_pending_restart(lang, &version), cx))
+                            .child(
+                                Button::new("restart-application")
+                                    .label(tr(lang, "settings.app.restart"))
+                                    .small()
+                                    .primary()
+                                    .loading(view.is_pending(&["app_update_write"]))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.confirm_restart_application(window, cx);
+                                    })),
+                            ),
+                    ))
+                }),
+        );
+
+    let system_group = GroupBox::new()
+        .id("settings-system")
+        .title(tr(lang, "settings.group.system"))
+        .child(
+            v_form()
+                .child(
+                    field().label(tr(lang, "settings.system.data_dir")).child(
+                        super::selectable_text("settings-data-dir", data_directory)
+                            .font_family(mono)
+                            .text_sm(),
+                    ),
+                )
+                .child(
+                    field().label(tr(lang, "settings.system.helper")).child(
+                        h_flex()
+                            .gap_2()
+                            .child(muted(helper, cx))
+                            .when(helper_installable, |row| {
+                                row.child(
+                                    Button::new("install-helper")
+                                        .label(tr(lang, "settings.system.helper.install"))
+                                        .small()
+                                        .outline()
+                                        .loading(view.is_pending(&["helper_write"]))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.dispatch(UiAction::InstallHelper, cx);
+                                        })),
+                                )
+                            })
+                            .when(helper_ready, |row| {
+                                row.child(
+                                    Button::new("uninstall-helper")
+                                        .label(tr(lang, "settings.system.helper.uninstall"))
+                                        .small()
+                                        .outline()
+                                        .danger()
+                                        .loading(view.is_pending(&["helper_write"]))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.confirm_uninstall_helper(window, cx);
+                                        })),
+                                )
+                            }),
+                    ),
+                )
+                .child(
+                    field().label(tr(lang, "settings.system.diagnostics")).child(
+                        h_flex().child(
+                            Button::new("export-diagnostics")
+                                .label(tr(lang, "settings.system.diagnostics.export"))
+                                .small()
+                                .outline()
+                                .loading(view.is_pending(&["application_settings_write"]))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.dispatch(
+                                        UiAction::ExportDiagnostics {
+                                            destination: diagnostic_path.clone(),
+                                        },
+                                        cx,
+                                    );
+                                })),
+                        ),
+                    ),
+                )
+                .child(
+                    field()
+                        .label(tr(lang, "settings.system.settings_export"))
+                        .description(tr(lang, "settings.system.settings_export.desc"))
+                        .child(h_flex().child(
+                            Button::new("export-application-settings")
+                                .label(tr(lang, "settings.system.settings_export.button"))
+                                .small()
+                                .outline()
+                                .loading(view.is_pending(&["application_settings_write"]))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.dispatch(
+                                        UiAction::ExportApplicationSettings {
+                                            destination: settings_export_path.clone(),
+                                        },
+                                        cx,
+                                    );
+                                })),
+                        )),
+                )
+                .child(
+                    field()
+                        .label(tr(lang, "settings.system.settings_import"))
+                        .description(tr(lang, "settings.system.settings_import.desc"))
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(Input::new(&view.settings_import_path))
+                                .child(
+                                    Button::new("preview-settings-import")
+                                        .label(tr(lang, "settings.system.settings_import.button"))
+                                        .small()
+                                        .outline()
+                                        .loading(view.is_pending(&["settings_import_preview"]))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            let _ = this.preview_settings_import(cx);
+                                        })),
+                                ),
+                        ),
+                ),
+        );
+
+    let backup_group = GroupBox::new()
+        .id("settings-backup")
+        .title(tr(lang, "settings.group.backup"))
+        .child(
+            v_form()
+                .child(
+                    field()
+                        .label(tr(lang, "settings.backup.passphrase"))
+                        .description(tr(lang, "settings.backup.passphrase.desc"))
                         .child(Input::new(&view.backup_passphrase).mask_toggle()),
                 )
                 .child(
-                    field().label("备份操作").child(
+                    field().label(tr(lang, "settings.backup.actions")).child(
                         h_flex()
                             .gap_2()
                             .child(
                                 Button::new("export-encrypted-backup")
-                                    .label("导出加密备份")
+                                    .label(tr(lang, "settings.backup.export"))
                                     .small()
                                     .outline()
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -552,7 +679,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                             )
                             .child(
                                 Button::new("restore-encrypted-backup")
-                                    .label("恢复备份")
+                                    .label(tr(lang, "settings.backup.restore"))
                                     .small()
                                     .outline()
                                     .danger()
@@ -564,17 +691,18 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 ),
         )
         .when_some(view.state.last_diagnostic_path.clone(), |group, path| {
-            group.child(muted(format!("已导出：{path}"), cx))
+            group.child(muted(i18n::fmt_exported(lang, &path), cx))
         });
 
     v_flex()
         .gap_3()
-        .child(page_title("设置"))
-        .child(collapsible_group(view, "general", "通用", general_group, cx))
-        .child(collapsible_group(view, "network", "网络", network_group, cx))
-        .child(collapsible_group(view, "proxy", "系统代理", proxy_group, cx))
-        .child(collapsible_group(view, "core", "Mihomo 内核", core_group, cx))
-        .child(collapsible_group(view, "system", "系统", system_group, cx))
-        .child(collapsible_group(view, "backup", "加密备份", backup_group, cx))
+        .child(page_title(tr(lang, "settings.title")))
+        .child(collapsible_group(view, "general", tr(lang, "settings.group.general"), general_group, cx))
+        .child(collapsible_group(view, "network", tr(lang, "settings.group.network"), network_group, cx))
+        .child(collapsible_group(view, "proxy", tr(lang, "settings.group.proxy"), proxy_group, cx))
+        .child(collapsible_group(view, "core", tr(lang, "settings.group.core"), core_group, cx))
+        .child(collapsible_group(view, "app-update", tr(lang, "settings.group.app_update"), app_update_group, cx))
+        .child(collapsible_group(view, "system", tr(lang, "settings.group.system"), system_group, cx))
+        .child(collapsible_group(view, "backup", tr(lang, "settings.group.backup"), backup_group, cx))
         .into_any_element()
 }

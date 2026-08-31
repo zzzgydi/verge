@@ -8162,6 +8162,9 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
  "verge-config",
  "verge-core",
  "verge-domain",
@@ -8207,7 +8210,6 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "getrandom 0.4.3",
- "global-hotkey",
  "gpui",
  "gpui-component",
  "gpui_platform",
@@ -8243,12 +8245,14 @@ name = "verge-platform"
 version = "0.1.0"
 dependencies = [
  "fs2",
+ "global-hotkey",
  "image",
  "libc",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "objc2-service-management",
  "serde_json",
+ "sha2 0.10.9",
  "tray-icon",
  "verge-domain",
  "verge-helper-protocol",
