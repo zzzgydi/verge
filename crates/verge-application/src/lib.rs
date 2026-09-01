@@ -1544,7 +1544,8 @@ impl<'a, C: CoreControl> ProfileCommandHandler<'a, C> {
             | AppCommand::UpdateMihomo
             | AppCommand::CheckAppUpdate
             | AppCommand::UpdateApplication
-            | AppCommand::RestartApplication => {
+            | AppCommand::RestartApplication
+            | AppCommand::QuitApplication => {
                 return Err(no_recovery(AppError::new(
                     ErrorCode::InvalidInput,
                     "application settings are owned by the application backend",
@@ -1565,8 +1566,8 @@ impl<'a, C: CoreControl> ProfileCommandHandler<'a, C> {
                 source,
                 update_policy,
             } => {
-                let profile =
-                    Profile::new(id, name, source, update_policy, now, None).map_err(no_recovery)?;
+                let profile = Profile::new(id, name, source, update_policy, now, None)
+                    .map_err(no_recovery)?;
                 self.profiles.import(profile, &yaml).map_err(no_recovery)?;
                 AppCommandOutput::None
             }
@@ -1819,7 +1820,8 @@ mod tests {
                 ProfileSource::Local,
                 UpdatePolicy::Manual,
                 1_000,
-                    None)
+                None,
+            )
             .unwrap();
             store.import(profile, yaml).unwrap();
         }
@@ -1995,7 +1997,8 @@ mod tests {
                     },
                     UpdatePolicy::Interval { seconds: 300 },
                     100,
-                    None)
+                    None,
+                )
                 .unwrap(),
                 "mode: rule\n",
             )
@@ -2052,12 +2055,18 @@ mod tests {
             "mode: rule\n"
         );
         assert_eq!(
-            fetcher.fetch("file:///tmp/profile.yaml", None).unwrap_err().code,
+            fetcher
+                .fetch("file:///tmp/profile.yaml", None)
+                .unwrap_err()
+                .code,
             ErrorCode::InvalidInput
         );
         let mut limited = ReqwestProfileFetcher::new(Duration::from_secs(2), 4).unwrap();
         assert_eq!(
-            limited.fetch(&serve_once("mode: rule\n"), None).unwrap_err().code,
+            limited
+                .fetch(&serve_once("mode: rule\n"), None)
+                .unwrap_err()
+                .code,
             ErrorCode::ValidationFailed
         );
     }
@@ -2201,7 +2210,8 @@ mod tests {
                     ProfileSource::Local,
                     UpdatePolicy::Manual,
                     100,
-                    None)
+                    None,
+                )
                 .unwrap(),
                 "mode: rule\n",
             )
@@ -2226,7 +2236,8 @@ mod tests {
         let directory = TestDir::new("merge-rollback");
         let (mut store, first, _) = store_with_profiles(&directory.0);
         let mut core = FakeCore::default();
-        core.health.push_back(Err(failure("merged config unhealthy")));
+        core.health
+            .push_back(Err(failure("merged config unhealthy")));
         core.health.push_back(Ok(()));
         let mut handler =
             ConfigCommandHandler::with_runtime_credentials(&mut store, &mut core, credentials());
@@ -2292,10 +2303,7 @@ mod tests {
             .unwrap();
 
         let merged = handler
-            .execute(
-                AppCommand::GetMergedProfileYaml { id: first.clone() },
-                102,
-            )
+            .execute(AppCommand::GetMergedProfileYaml { id: first.clone() }, 102)
             .unwrap();
         assert!(matches!(
             merged.output,
@@ -2373,7 +2381,8 @@ mod tests {
                     ProfileSource::Local,
                     UpdatePolicy::Manual,
                     1_000,
-                    None)
+                    None,
+                )
                 .unwrap(),
                 "mode: direct\n",
             )
@@ -2912,7 +2921,10 @@ mod tun_coordination_tests {
         fn set_network_settings(&mut self, settings: &NetworkSettings) -> Result<(), AppError> {
             self.calls.push(format!("set:{}", settings.tun_enabled));
             if self.fail_set {
-                return Err(AppError::new(ErrorCode::CoreRejectedConfig, "mihomo rejected tun"));
+                return Err(AppError::new(
+                    ErrorCode::CoreRejectedConfig,
+                    "mihomo rejected tun",
+                ));
             }
             self.tun_enabled = settings.tun_enabled;
             Ok(())
@@ -2948,7 +2960,9 @@ mod tun_coordination_tests {
     impl FakeHelper {
         fn ready() -> Self {
             Self {
-                status: HelperStatus::Ready { protocol_version: 1 },
+                status: HelperStatus::Ready {
+                    protocol_version: 1,
+                },
                 tun_supported: true,
                 calls: RefCell::new(Vec::new()),
                 fail_enable: false,
@@ -2982,7 +2996,10 @@ mod tun_coordination_tests {
                 .borrow_mut()
                 .push(format!("disable_tun:{device:?}"));
             if self.fail_disable {
-                return Err(AppError::new(ErrorCode::PlatformFailed, "helper: teardown failed"));
+                return Err(AppError::new(
+                    ErrorCode::PlatformFailed,
+                    "helper: teardown failed",
+                ));
             }
             Ok(())
         }
@@ -3012,7 +3029,13 @@ mod tun_coordination_tests {
         assert_eq!(error.code, ErrorCode::PermissionDenied);
         assert!(error.message.contains("privileged helper"));
         assert!(!runtime.calls.contains(&"set:true".to_owned()));
-        assert!(!helper.calls.borrow().iter().any(|call| call.starts_with("enable_tun")));
+        assert!(
+            !helper
+                .calls
+                .borrow()
+                .iter()
+                .any(|call| call.starts_with("enable_tun"))
+        );
     }
 
     #[test]

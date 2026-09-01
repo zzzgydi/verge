@@ -9,7 +9,10 @@ use gpui_component::{
     v_flex, v_virtual_list,
 };
 
-use crate::{i18n::{self, tr}, view::MainView};
+use crate::{
+    i18n::{self, tr},
+    view::MainView,
+};
 
 use super::page_title;
 
@@ -56,7 +59,10 @@ fn level_color(level: &str, cx: &Context<MainView>) -> Hsla {
 
 fn render_log_row(row: &LogRow, cx: &Context<MainView>) -> AnyElement {
     div()
-        .id(SharedString::from(format!("log-{}-{}", row.level, row.payload)))
+        .id(SharedString::from(format!(
+            "log-{}-{}",
+            row.level, row.payload
+        )))
         .h(px(LOG_ROW_HEIGHT))
         .px_2()
         .flex_shrink_0()
@@ -83,17 +89,17 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         .dropdown_menu({
             let view_entity = view_entity.clone();
             move |menu, _, _| {
-            LEVELS.into_iter().fold(menu, |menu, (key, level)| {
-                menu.item(PopupMenuItem::new(tr(lang, key)).on_click({
-                    let view = view_entity.clone();
-                    move |_, _, cx| {
-                        view.update(cx, |this, cx| {
-                            this.log_filter = level;
-                            cx.notify();
-                        });
-                    }
-                }))
-            })
+                LEVELS.into_iter().fold(menu, |menu, (key, level)| {
+                    menu.item(PopupMenuItem::new(tr(lang, key)).on_click({
+                        let view = view_entity.clone();
+                        move |_, _, cx| {
+                            view.update(cx, |this, cx| {
+                                this.log_filter = level;
+                                cx.notify();
+                            });
+                        }
+                    }))
+                })
             }
         });
 

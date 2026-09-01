@@ -6,9 +6,9 @@ use verge_domain::{
     ApplicationSettingsSnapshot, CommandContext, CommandRisk, ConnectionSnapshot, HelperStatus,
     LogEvent, MemoryEvent, NetworkSettings, Profile, ProfileId, ProfileSource, ProviderKind,
     ProviderSummary, ProxyEndpoint, ProxyGroup, RealtimeEvent, RealtimeTopic, RuleEntry, RunMode,
-    RuntimeCommand, RuntimeCommandOutput, RuntimeCommandResult, RuntimeSettings, SettingsImportPreview,
-    SettingsScope, SystemProxyCommand, SystemProxyCommandResult, SystemProxyState, TrafficEvent,
-    UpdatePolicy,
+    RuntimeCommand, RuntimeCommandOutput, RuntimeCommandResult, RuntimeSettings,
+    SettingsImportPreview, SettingsScope, SystemProxyCommand, SystemProxyCommandResult,
+    SystemProxyState, TrafficEvent, UpdatePolicy,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -431,7 +431,9 @@ impl UiAction {
                 })]
             }
             Self::SetAutoProxy { url } => {
-                vec![UiRequest::SystemProxy(SystemProxyCommand::SetAutoProxy { url })]
+                vec![UiRequest::SystemProxy(SystemProxyCommand::SetAutoProxy {
+                    url,
+                })]
             }
             Self::SetProxyBypass { domains } => {
                 vec![UiRequest::SystemProxy(SystemProxyCommand::SetProxyBypass {
@@ -768,6 +770,7 @@ fn request_key(request: &UiRequest) -> &'static str {
         UiRequest::Profile(AppCommand::UpdateApplication | AppCommand::RestartApplication) => {
             "app_update_write"
         }
+        UiRequest::Profile(AppCommand::QuitApplication) => "application_lifecycle_write",
         UiRequest::Profile(AppCommand::InstallHelper | AppCommand::UninstallHelper) => {
             "helper_write"
         }
@@ -1004,7 +1007,9 @@ mod tests {
         .requests();
         assert!(matches!(
             preview.as_slice(),
-            [UiRequest::Profile(AppCommand::PreviewApplicationSettingsImport { .. })]
+            [UiRequest::Profile(
+                AppCommand::PreviewApplicationSettingsImport { .. }
+            )]
         ));
         assert!(!is_write_request(&preview[0]));
 
@@ -1133,7 +1138,9 @@ mod tests {
         .requests();
         assert!(matches!(
             pac.as_slice(),
-            [UiRequest::SystemProxy(SystemProxyCommand::SetAutoProxy { url: Some(_) })]
+            [UiRequest::SystemProxy(SystemProxyCommand::SetAutoProxy {
+                url: Some(_)
+            })]
         ));
         assert!(is_write_request(&pac[0]));
 
@@ -1143,7 +1150,9 @@ mod tests {
         .requests();
         assert!(matches!(
             bypass.as_slice(),
-            [UiRequest::SystemProxy(SystemProxyCommand::SetProxyBypass { .. })]
+            [UiRequest::SystemProxy(
+                SystemProxyCommand::SetProxyBypass { .. }
+            )]
         ));
         assert!(is_write_request(&bypass[0]));
     }
@@ -1307,7 +1316,9 @@ mod tests {
         let preview = UiAction::LoadMergedYaml(id.clone()).requests();
         assert!(matches!(
             preview.as_slice(),
-            [UiRequest::Profile(AppCommand::GetMergedProfileYaml { id: _ })]
+            [UiRequest::Profile(AppCommand::GetMergedProfileYaml {
+                id: _
+            })]
         ));
 
         let mut state = UiState::default();

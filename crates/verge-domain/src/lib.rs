@@ -108,6 +108,8 @@ pub enum AppCommand {
     UpdateApplication,
     /// 退出守护进程并以新安装的 .app 重启（高风险写入，UI 需确认）。
     RestartApplication,
+    /// 完整退出应用：守护进程先清理系统状态，再结束 GUI 与托盘。
+    QuitApplication,
     ListProfiles,
     GetProfileYaml {
         id: ProfileId,
@@ -879,7 +881,8 @@ impl AppCommand {
             | Self::InstallHelper
             | Self::UpdateApplication
             | Self::RestartApplication => CommandRisk::PrivilegedWrite,
-            Self::UninstallHelper
+            Self::QuitApplication
+            | Self::UninstallHelper
             | Self::DeleteProfile { .. }
             | Self::RestoreEncryptedBackup { .. } => CommandRisk::Destructive,
         }
@@ -946,7 +949,10 @@ mod tests {
         };
         assert_eq!(command.risk(), CommandRisk::Destructive);
         // helper 安装是高权限写入（管理员授权），卸载是破坏性系统变更。
-        assert_eq!(AppCommand::InstallHelper.risk(), CommandRisk::PrivilegedWrite);
+        assert_eq!(
+            AppCommand::InstallHelper.risk(),
+            CommandRisk::PrivilegedWrite
+        );
         assert_eq!(AppCommand::UninstallHelper.risk(), CommandRisk::Destructive);
         // 应用自身更新：检查只读，替换与重启是高权限写入（UI 确认 + CommandBus 授权）。
         assert_eq!(AppCommand::CheckAppUpdate.risk(), CommandRisk::ReadOnly);
@@ -958,6 +964,7 @@ mod tests {
             AppCommand::RestartApplication.risk(),
             CommandRisk::PrivilegedWrite
         );
+        assert_eq!(AppCommand::QuitApplication.risk(), CommandRisk::Destructive);
         assert_eq!(AppCommand::GetHelperStatus.risk(), CommandRisk::ReadOnly);
         assert_eq!(
             RuntimeCommand::SetMode {
@@ -1058,7 +1065,9 @@ mod tests {
             "Alt+F5"
         );
         assert_eq!(
-            GlobalHotkeySpec::parse("Control+Return").unwrap().normalized(),
+            GlobalHotkeySpec::parse("Control+Return")
+                .unwrap()
+                .normalized(),
             "Ctrl+Enter"
         );
         // 键名只能放在最后一个 token。

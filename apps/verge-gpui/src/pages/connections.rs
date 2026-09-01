@@ -52,8 +52,12 @@ impl ConnectionsDelegate {
                 Column::new("target", tr(language, COLUMN_KEYS[1])).width(170.),
                 Column::new("rule", tr(language, COLUMN_KEYS[2])).width(130.),
                 Column::new("chains", tr(language, COLUMN_KEYS[3])).width(140.),
-                Column::new("upload", tr(language, COLUMN_KEYS[4])).width(80.).text_right(),
-                Column::new("download", tr(language, COLUMN_KEYS[5])).width(80.).text_right(),
+                Column::new("upload", tr(language, COLUMN_KEYS[4]))
+                    .width(80.)
+                    .text_right(),
+                Column::new("download", tr(language, COLUMN_KEYS[5]))
+                    .width(80.)
+                    .text_right(),
                 Column::new("actions", tr(language, COLUMN_KEYS[6])).width(60.),
             ],
             actions,

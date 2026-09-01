@@ -73,18 +73,14 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         .traffic
         .as_ref()
         .map_or_else(|| "—".to_owned(), |traffic| format::rate(traffic.down));
-    let memory = view
-        .state
-        .memory
-        .as_ref()
-        .map_or_else(|| tr(lang, "common.unknown").to_owned(), |memory| {
-            format::bytes(memory.inuse)
-        });
-    let connections = view
-        .state
-        .connections
-        .as_ref()
-        .map_or_else(|| "—".to_owned(), |connections| connections.connection_count.to_string());
+    let memory = view.state.memory.as_ref().map_or_else(
+        || tr(lang, "common.unknown").to_owned(),
+        |memory| format::bytes(memory.inuse),
+    );
+    let connections = view.state.connections.as_ref().map_or_else(
+        || "—".to_owned(),
+        |connections| connections.connection_count.to_string(),
+    );
 
     let mode_group = ButtonGroup::new("mode-group")
         .outline()
@@ -121,10 +117,22 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
             h_flex()
                 .gap_3()
                 .child(stat_tile(tr(lang, "home.tile.core"), core_status, cx))
-                .child(stat_tile(tr(lang, "home.tile.upload"), format!("↑ {upload}"), cx))
-                .child(stat_tile(tr(lang, "home.tile.download"), format!("↓ {download}"), cx))
+                .child(stat_tile(
+                    tr(lang, "home.tile.upload"),
+                    format!("↑ {upload}"),
+                    cx,
+                ))
+                .child(stat_tile(
+                    tr(lang, "home.tile.download"),
+                    format!("↓ {download}"),
+                    cx,
+                ))
                 .child(stat_tile(tr(lang, "home.tile.memory"), memory, cx))
-                .child(stat_tile(tr(lang, "home.tile.connections"), connections, cx)),
+                .child(stat_tile(
+                    tr(lang, "home.tile.connections"),
+                    connections,
+                    cx,
+                )),
         )
         .child(
             GroupBox::new()

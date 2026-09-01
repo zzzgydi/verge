@@ -3,10 +3,18 @@ use std::{path::Path, time::Duration};
 use futures::StreamExt;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme as _, Root, TitleBar, WindowExt as _, notification::Notification,
+    ActiveTheme as _, Root, TitleBar, WindowExt as _,
+    input::{Copy, Cut, Paste, Redo, SelectAll, Undo},
+    notification::Notification,
 };
+
+use gpui_component_assets::Assets;
+
 use i18n::{Lang, tr};
-use verge_domain::{AppCommand, RuntimeCommand, SystemProxyCommand};
+use verge_domain::{
+    AppCommand, CommandActor, CommandApproval, CommandContext, CommandRisk, RuntimeCommand,
+    SystemProxyCommand,
+};
 use verge_ipc::{ClientEvent, ConnectError, IpcClient};
 use verge_platform::{
     MacNotifier, ProcessRunner, daemon_socket_path, redirect_stderr_to_log, spawn_daemon,
@@ -24,6 +32,76 @@ mod view;
 
 #[cfg(test)]
 mod dialog_mechanism_tests;
+
+actions!(
+    app_menu,
+    [
+        AboutVerge,
+        CloseWindow,
+        HideVerge,
+        HideOtherApps,
+        ShowAllApps,
+        MinimizeWindow,
+        ZoomWindow,
+        ToggleFullScreen,
+        OpenProjectPage,
+        QuitVerge
+    ]
+);
+
+fn set_app_menus(lang: Lang, cx: &mut App) {
+    cx.set_menus([
+        Menu::new("Verge").items([
+            MenuItem::action(tr(lang, "menu.about"), AboutVerge),
+            MenuItem::separator(),
+            MenuItem::os_submenu(tr(lang, "menu.services"), SystemMenuType::Services),
+            MenuItem::separator(),
+            MenuItem::action(tr(lang, "menu.hide"), HideVerge),
+            MenuItem::action(tr(lang, "menu.hide_others"), HideOtherApps),
+            MenuItem::action(tr(lang, "menu.show_all"), ShowAllApps),
+            MenuItem::separator(),
+            MenuItem::action(tr(lang, "menu.quit"), QuitVerge),
+        ]),
+        Menu::new(tr(lang, "menu.file"))
+            .items([MenuItem::action(tr(lang, "menu.close_window"), CloseWindow)]),
+        Menu::new(tr(lang, "menu.edit")).items([
+            MenuItem::os_action(tr(lang, "menu.undo"), Undo, OsAction::Undo),
+            MenuItem::os_action(tr(lang, "menu.redo"), Redo, OsAction::Redo),
+            MenuItem::separator(),
+            MenuItem::os_action(tr(lang, "menu.cut"), Cut, OsAction::Cut),
+            MenuItem::os_action(tr(lang, "menu.copy"), Copy, OsAction::Copy),
+            MenuItem::os_action(tr(lang, "menu.paste"), Paste, OsAction::Paste),
+            MenuItem::separator(),
+            MenuItem::os_action(tr(lang, "menu.select_all"), SelectAll, OsAction::SelectAll),
+        ]),
+        Menu::new(tr(lang, "menu.window")).items([
+            MenuItem::action(tr(lang, "menu.minimize"), MinimizeWindow),
+            MenuItem::action(tr(lang, "menu.zoom"), ZoomWindow),
+            MenuItem::separator(),
+            MenuItem::action(tr(lang, "menu.full_screen"), ToggleFullScreen),
+        ]),
+        Menu::new(tr(lang, "menu.help")).items([MenuItem::action(
+            tr(lang, "menu.project_page"),
+            OpenProjectPage,
+        )]),
+    ]);
+}
+
+fn quit_request() -> verge_ui::UiRequestEnvelope {
+    verge_ui::UiRequestEnvelope {
+        request_id: 0,
+        operation_id: 0,
+        operation_index: 0,
+        operation_len: 1,
+        context: CommandContext {
+            actor: CommandActor::UserInterface,
+            approval: Some(CommandApproval {
+                max_risk: CommandRisk::Destructive,
+            }),
+        },
+        request: verge_ui::UiRequest::Profile(AppCommand::QuitApplication),
+    }
+}
 
 fn main() {
     // 守护进程分叉：同一可执行文件以 --daemon 参数启动，由 GUI 进程拉起或登录项调用。
@@ -51,11 +129,71 @@ fn main() {
     };
     let request_tx = client.request_sender();
     let mut events = client.into_events();
+
     gpui_platform::application()
         // GUI 进程关掉最后一个窗口即退出；守护进程与托盘不受影响。
         .with_quit_mode(QuitMode::LastWindowClosed)
+        .with_assets(Assets)
         .run(|cx| {
             gpui_component::init(cx);
+            set_app_menus(Lang::En, cx);
+            cx.bind_keys([
+                KeyBinding::new("cmd-q", QuitVerge, None),
+                KeyBinding::new("cmd-w", CloseWindow, None),
+                KeyBinding::new("cmd-h", HideVerge, None),
+                KeyBinding::new("cmd-alt-h", HideOtherApps, None),
+                KeyBinding::new("cmd-m", MinimizeWindow, None),
+                KeyBinding::new("ctrl-cmd-f", ToggleFullScreen, None),
+            ]);
+            cx.on_action(|_: &HideVerge, cx| cx.hide());
+            cx.on_action(|_: &HideOtherApps, cx| cx.hide_other_apps());
+            cx.on_action(|_: &ShowAllApps, cx| cx.unhide_other_apps());
+            cx.on_action(|_: &OpenProjectPage, cx| {
+                cx.open_url("https://github.com/zzzgydi/verge")
+            });
+            cx.on_action(|_: &AboutVerge, cx| {
+                if let Some(handle) = cx.active_window() {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        let answer = window.prompt(
+                            PromptLevel::Info,
+                            "Verge",
+                            Some(concat!("Version ", env!("CARGO_PKG_VERSION"))),
+                            &[PromptButton::ok("OK")],
+                            cx,
+                        );
+                        cx.spawn(async move |_| {
+                            let _ = answer.await;
+                        })
+                        .detach();
+                    });
+                }
+            });
+            cx.on_action(|_: &CloseWindow, cx| {
+                if let Some(handle) = cx.active_window() {
+                    let _ = handle.update(cx, |_, window, _| window.remove_window());
+                }
+            });
+            cx.on_action(|_: &MinimizeWindow, cx| {
+                if let Some(handle) = cx.active_window() {
+                    let _ = handle.update(cx, |_, window, _| window.minimize_window());
+                }
+            });
+            cx.on_action(|_: &ZoomWindow, cx| {
+                if let Some(handle) = cx.active_window() {
+                    let _ = handle.update(cx, |_, window, _| window.zoom_window());
+                }
+            });
+            cx.on_action(|_: &ToggleFullScreen, cx| {
+                if let Some(handle) = cx.active_window() {
+                    let _ = handle.update(cx, |_, window, _| window.toggle_fullscreen());
+                }
+            });
+            let quit_requests = request_tx.clone();
+            cx.on_action(move |_: &QuitVerge, cx| {
+                if quit_requests.send(quit_request()).is_err() {
+                    cx.quit();
+                }
+            });
             // 窗口级快捷键：cmd+1…7 切页面、cmd+r 刷新当前页（“Verge” key context）。
             let modifier = if cfg!(target_os = "macos") {
                 "cmd"
@@ -102,6 +240,7 @@ fn main() {
                                         view.state.application_settings =
                                             Some(initial.application_settings);
                                         view.state.runtime_settings = initial.runtime_settings;
+                                        set_app_menus(view.lang(), cx);
                                         view.sync_theme(window, cx);
                                         view.sync_form_inputs(window, cx);
                                         // 增量补齐：RefreshHome 同时建立实时订阅，
@@ -150,6 +289,7 @@ fn main() {
                                             *os_notification_slot = notification_for(lang, &response);
                                             let toast = toast_for(lang, &response);
                                             view.state.apply_response_envelope(envelope);
+                                            set_app_menus(view.lang(), cx);
                                             if let Some(error) = &yaml_load_error {
                                                 view.fail_yaml_sheet(error, window, cx);
                                             }
@@ -338,9 +478,7 @@ fn toast_for(lang: Lang, response: &UiResponse) -> Option<Notification> {
                 AppCommand::ResetApplicationSettingsScope { .. } => {
                     Some(tr(lang, "toast.settings_reset"))
                 }
-                AppCommand::ExportEncryptedBackup { .. } => {
-                    Some(tr(lang, "toast.backup_exported"))
-                }
+                AppCommand::ExportEncryptedBackup { .. } => Some(tr(lang, "toast.backup_exported")),
                 AppCommand::RestoreEncryptedBackup { .. } => {
                     Some(tr(lang, "toast.backup_restored"))
                 }
@@ -369,9 +507,7 @@ fn toast_for(lang: Lang, response: &UiResponse) -> Option<Notification> {
         }
         UiResponse::Runtime { request, result } => {
             let success = match request {
-                RuntimeCommand::UpdateProvider { .. } => {
-                    Some(tr(lang, "toast.provider_updated"))
-                }
+                RuntimeCommand::UpdateProvider { .. } => Some(tr(lang, "toast.provider_updated")),
                 // SetMode / SelectProxy / SetNetworkSettings / CloseConnection 的结果
                 // 在界面上直接可见，不再弹成功 toast。
                 _ => None,

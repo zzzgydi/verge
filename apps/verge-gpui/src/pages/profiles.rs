@@ -26,9 +26,10 @@ fn policy_summary(lang: Lang, profile: &Profile) -> String {
             "{} · {} {} · {} {}{}",
             format::interval(lang, *seconds),
             tr(lang, "profiles.policy.next"),
-            profile
-                .next_update_at
-                .map_or_else(|| tr(lang, "profiles.policy.unscheduled").into(), |at| at.to_string()),
+            profile.next_update_at.map_or_else(
+                || tr(lang, "profiles.policy.unscheduled").into(),
+                |at| at.to_string()
+            ),
             tr(lang, "profiles.policy.failures"),
             profile.consecutive_failures,
             profile
@@ -168,7 +169,12 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                     let name = name.clone();
                                     move |_, window, cx| {
                                         view.update(cx, |this, cx| {
-                                            this.confirm_delete_profile(id.clone(), name.clone(), window, cx);
+                                            this.confirm_delete_profile(
+                                                id.clone(),
+                                                name.clone(),
+                                                window,
+                                                cx,
+                                            );
                                         });
                                     }
                                 }),
@@ -191,9 +197,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 .gap_2()
                                 .when(selected, |this| {
                                     this.child(
-                                        Tag::success()
-                                            .small()
-                                            .child(tr(lang, "profiles.current")),
+                                        Tag::success().small().child(tr(lang, "profiles.current")),
                                     )
                                 })
                                 .child(

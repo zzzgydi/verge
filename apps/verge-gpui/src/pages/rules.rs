@@ -10,7 +10,10 @@ use gpui_component::{
 use verge_domain::ProviderKind;
 use verge_ui::UiAction;
 
-use crate::{i18n::{self, tr}, view::MainView};
+use crate::{
+    i18n::{self, tr},
+    view::MainView,
+};
 
 use super::{muted, page_title};
 

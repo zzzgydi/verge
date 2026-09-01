@@ -9,15 +9,14 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use verge_application::app_update::{
+    APP_EXECUTABLE_NAME, DittoArchiver, MacCodesign, check_app_update, update_application_bundle,
+};
 use verge_application::{
     ApplicationLifecycle, CommandBus, MihomoRuntime, PlatformSystemProxy, ProfileCommandHandler,
     ProfileFetcher, ProfileUpdateCoordinator, ReqwestArtifactFetcher, ReqwestProfileFetcher,
     RuntimeCommandHandler, RuntimeCredentials, SupervisorControl, SystemProxyCommandHandler,
     SystemProxyControl, download_mihomo_candidate,
-};
-use verge_application::app_update::{
-    APP_EXECUTABLE_NAME, DittoArchiver, MacCodesign, check_app_update,
-    update_application_bundle,
 };
 use verge_config::{
     FileProfileStore, FileSettingsStore, UpdateScheduler, UpdateTrigger, decrypt_backup,
@@ -37,14 +36,14 @@ use verge_ipc::{
     ClientMessage, InitialSnapshot, IpcServer, IpcServerEvent, PROTOCOL_VERSION, ServerError,
 };
 use verge_platform::{
+    HELPER_SOCKET_PATH, HelperInstallLayout, MacHelperInstaller, bundle_short_version,
+    bundled_resources_directory as platform_bundled_resources, current_app_bundle, current_uid,
+    discover_bundled_helper,
+};
+use verge_platform::{
     LoginItemService, MacHelperClient, MacSystemProxy, ProcessRunner, SingleInstance, TrayCommand,
     TrayService, TraySnapshot, daemon_socket_path, default_login_item_service,
     redirect_stderr_to_log,
-};
-use verge_platform::{
-    HELPER_SOCKET_PATH, HelperInstallLayout, MacHelperInstaller,
-    bundled_resources_directory as platform_bundled_resources, bundle_short_version,
-    current_app_bundle, current_uid, discover_bundled_helper,
 };
 use verge_ui::{UiRequest, UiRequestEnvelope, UiResponse, UiResponseEnvelope};
 
@@ -172,6 +171,8 @@ struct Backend {
     app_fetcher: ReqwestArtifactFetcher,
     /// RestartApplication 已拉起新进程，事件循环收尾后退出本进程。
     restart_requested: bool,
+    /// QuitApplication 请求完整退出，事件循环收尾时恢复代理并停止内核。
+    quit_requested: bool,
     startup_updates_pending: bool,
     last_update_poll: Instant,
     /// 最近一次流量事件，用于守护进程托盘速度文字的更新。
@@ -227,6 +228,7 @@ impl Backend {
                 ],
             )?,
             restart_requested: false,
+            quit_requested: false,
             startup_updates_pending: true,
             last_update_poll: Instant::now(),
             last_traffic: None,
@@ -236,10 +238,7 @@ impl Backend {
         if backend.profiles.selected().is_some()
             && let Err(error) = backend.start_selected()
         {
-            backend.log_app(
-                "error",
-                format!("选中配置启动内核失败: {}", error.message),
-            );
+            backend.log_app("error", format!("选中配置启动内核失败: {}", error.message));
             backend.runtime_error = Some(error);
         }
         backend.log_app("info", "守护进程后端就绪");
@@ -522,6 +521,14 @@ impl Backend {
                 return Ok(AppCommandResult {
                     output: AppCommandOutput::None,
                     summary: "Application restart initiated".into(),
+                });
+            }
+            AppCommand::QuitApplication => {
+                self.log_app("info", "收到退出请求，正在清理系统状态");
+                self.quit_requested = true;
+                return Ok(AppCommandResult {
+                    output: AppCommandOutput::None,
+                    summary: "Application quit initiated".into(),
                 });
             }
             AppCommand::ListProfiles => {
@@ -1163,10 +1170,7 @@ impl Backend {
         let selected = self.profiles.selected()?;
         Some(RuntimeSettings {
             system_proxy_services: self.system_proxy.managed_services().to_vec(),
-            system_proxy_endpoint: self
-                .profiles
-                .system_proxy_endpoint(selected)
-                .ok()?,
+            system_proxy_endpoint: self.profiles.system_proxy_endpoint(selected).ok()?,
             system_proxy_socks_endpoint: self
                 .profiles
                 .system_proxy_socks_endpoint(selected)
@@ -1178,12 +1182,7 @@ impl Backend {
     fn system_proxy_enabled(&mut self) -> bool {
         self.system_proxy
             .state()
-            .is_ok_and(|state| {
-                state
-                    .services
-                    .iter()
-                    .any(|service| service.web.enabled)
-            })
+            .is_ok_and(|state| state.services.iter().any(|service| service.web.enabled))
     }
 
     /// 托盘"切换系统代理"：当前开则关，关则按选中配置的端点开启。
@@ -1217,7 +1216,10 @@ pub fn run_daemon() {
     let config = match BackendConfig::from_env() {
         Ok(config) => config,
         Err(error) => {
-            eprintln!("Verge daemon failed to resolve configuration: {}", error.message);
+            eprintln!(
+                "Verge daemon failed to resolve configuration: {}",
+                error.message
+            );
             std::process::exit(1);
         }
     };
@@ -1357,18 +1359,22 @@ fn run_daemon_backend(
     });
     // 实时聚合 tick：100ms 一次，drain 实时缓冲并批量转发。
     let realtime_tx = event_tx.clone();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_millis(100));
-        if realtime_tx.send(DaemonEvent::RealtimeTick).is_err() {
-            break;
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_millis(100));
+            if realtime_tx.send(DaemonEvent::RealtimeTick).is_err() {
+                break;
+            }
         }
     });
     // 健康/调度 tick：1s 一次（supervisor 轮询 + profile 更新调度）。
     let poll_tx = event_tx.clone();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(1));
-        if poll_tx.send(DaemonEvent::PollTick).is_err() {
-            break;
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            if poll_tx.send(DaemonEvent::PollTick).is_err() {
+                break;
+            }
         }
     });
 
@@ -1495,8 +1501,8 @@ fn run_daemon_backend(
                 language: tray_language.clone(),
             });
         }
-        // RestartApplication 已拉起新实例：随本次事件一起收尾退出。
-        if backend.restart_requested {
+        // 重启或退出请求已受理：随本次事件一起收尾退出。
+        if backend.restart_requested || backend.quit_requested {
             quit = true;
         }
     }
@@ -1682,8 +1688,10 @@ fn run_daemon_appkit(
     match GlobalHotKeyBackend::new() {
         Ok(backend) => {
             // MainThreadBound 只提供 &T 访问；注册变更多路复用互斥锁保护。
-            let registration =
-                MainThreadBound::new(std::sync::Mutex::new(HotkeyRegistration::new(backend)), marker);
+            let registration = MainThreadBound::new(
+                std::sync::Mutex::new(HotkeyRegistration::new(backend)),
+                marker,
+            );
             std::thread::spawn(move || {
                 let mut notifier = MacNotifier::new(ProcessRunner);
                 while let Ok(desired) = hotkey_sync.recv() {
@@ -1701,7 +1709,10 @@ fn run_daemon_appkit(
             });
         }
         Err(error) => {
-            eprintln!("[verge] [error] global hotkey is unavailable: {}", error.message);
+            eprintln!(
+                "[verge] [error] global hotkey is unavailable: {}",
+                error.message
+            );
         }
     }
     // backend 收尾完成后的退出请求：terminate 结束 app.run()，进程随 main 返回退出。
@@ -2097,10 +2108,7 @@ mod tests {
                 },
             })
             .unwrap();
-        assert_eq!(
-            rx.try_recv().unwrap(),
-            Some("CmdOrCtrl+Shift+V".to_owned())
-        );
+        assert_eq!(rx.try_recv().unwrap(), Some("CmdOrCtrl+Shift+V".to_owned()));
 
         // System scope 重置清掉快捷键：同步 None 表示禁用。
         backend
@@ -2293,9 +2301,7 @@ mod tests {
         let mut custom = incoming.clone();
         custom.log_limit = 1_000;
         backend
-            .execute_profile(AppCommand::UpdateApplicationSettings {
-                settings: custom,
-            })
+            .execute_profile(AppCommand::UpdateApplicationSettings { settings: custom })
             .unwrap();
         let reset = backend
             .execute_profile(AppCommand::ResetApplicationSettingsScope {
@@ -2427,7 +2433,22 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_without_engine_is_clean() {        let data_dir = std::env::temp_dir().join(format!(
+    fn quit_application_requests_a_clean_daemon_shutdown() {
+        let (mut backend, data_dir) = test_backend("quit-application");
+
+        let result = backend
+            .execute_profile(AppCommand::QuitApplication)
+            .unwrap();
+
+        assert!(backend.quit_requested);
+        assert_eq!(result.output, AppCommandOutput::None);
+        assert_eq!(result.summary, "Application quit initiated");
+        let _ = fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn shutdown_without_engine_is_clean() {
+        let data_dir = std::env::temp_dir().join(format!(
             "verge-gpui-shutdown-{}-{}",
             std::process::id(),
             SystemTime::now()
@@ -2456,10 +2477,8 @@ mod tests {
     fn install_helper_outside_a_packaged_app_gives_a_readable_error() {
         let (mut backend, data_dir) = test_backend("helper-install-unpackaged");
         // unix socket 地址有长度上限，用短的不存在路径模拟“未安装”。
-        backend.config.helper_socket = PathBuf::from(format!(
-            "/tmp/verge-helper-missing-{}",
-            std::process::id()
-        ));
+        backend.config.helper_socket =
+            PathBuf::from(format!("/tmp/verge-helper-missing-{}", std::process::id()));
 
         // 测试进程不在 .app 内：必须在发起任何提权动作前报错。
         let error = backend
@@ -2469,7 +2488,9 @@ mod tests {
         assert!(error.message.contains("packaged Verge.app"));
 
         // 状态查询走配置的 helper socket（不存在 → NotInstalled），不触达真实系统。
-        let status = backend.execute_profile(AppCommand::GetHelperStatus).unwrap();
+        let status = backend
+            .execute_profile(AppCommand::GetHelperStatus)
+            .unwrap();
         assert!(matches!(
             status.output,
             AppCommandOutput::HelperStatus(verge_domain::HelperStatus::NotInstalled)

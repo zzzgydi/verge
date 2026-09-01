@@ -74,7 +74,9 @@ impl SemanticVersion {
         let invalid = || {
             AppError::new(
                 ErrorCode::ValidationFailed,
-                format!("version '{value}' is not a semantic version (expected [v]major.minor[.patch])"),
+                format!(
+                    "version '{value}' is not a semantic version (expected [v]major.minor[.patch])"
+                ),
             )
         };
         let value = value.trim();
@@ -200,9 +202,7 @@ pub fn check_app_update<F: ArtifactFetcher>(
     current_version: Option<&str>,
 ) -> Result<AppUpdateStatus, AppError> {
     let release = parse_latest_release(&fetcher.fetch(APP_RELEASE_API_URL)?)?;
-    let current = current_version
-        .map(SemanticVersion::parse)
-        .transpose()?;
+    let current = current_version.map(SemanticVersion::parse).transpose()?;
     Ok(AppUpdateStatus {
         current_version: current.map(|version| version.to_string()),
         update_available: current.is_some_and(|current| release.version > current),
@@ -248,7 +248,10 @@ impl<R: CommandRunner> BundleArchiver for DittoArchiver<R> {
 
     fn copy_tree(&mut self, source: &Path, destination: &Path) -> Result<(), AppError> {
         self.runner
-            .run("/usr/bin/ditto", &[path_arg(source)?, path_arg(destination)?])
+            .run(
+                "/usr/bin/ditto",
+                &[path_arg(source)?, path_arg(destination)?],
+            )
             .map(|_| ())
     }
 
@@ -394,7 +397,10 @@ where
     fs::create_dir_all(&download_dir).map_err(storage_error)?;
     let bytes = fetcher.fetch(&release.asset_url)?;
     fs::write(&archive, bytes).map_err(storage_error)?;
-    let actual_sha256 = format!("{:x}", Sha256::digest(&fs::read(&archive).map_err(storage_error)?));
+    let actual_sha256 = format!(
+        "{:x}",
+        Sha256::digest(&fs::read(&archive).map_err(storage_error)?)
+    );
     if actual_sha256 != expected_sha256 {
         return Err(AppError::new(
             ErrorCode::ValidationFailed,
@@ -473,7 +479,10 @@ fn swap_bundle<A: BundleArchiver, R: CommandRunner>(
     uid: u32,
 ) -> Result<(), AppError> {
     let parent = target.parent().ok_or_else(|| {
-        AppError::new(ErrorCode::InvalidInput, "app bundle path has no parent directory")
+        AppError::new(
+            ErrorCode::InvalidInput,
+            "app bundle path has no parent directory",
+        )
     })?;
     if directory_writable(parent) {
         swap_bundle_direct(archiver, target, staged)
@@ -537,9 +546,9 @@ fn swap_bundle_privileged<R: CommandRunner>(
 
 /// 命令/脚本参数：绝对路径、UTF-8、无控制字符与单引号（与 shell_quote 同约束）。
 fn path_arg(path: &Path) -> Result<String, AppError> {
-    let value = path.to_str().ok_or_else(|| {
-        AppError::new(ErrorCode::InvalidInput, "path is not valid UTF-8")
-    })?;
+    let value = path
+        .to_str()
+        .ok_or_else(|| AppError::new(ErrorCode::InvalidInput, "path is not valid UTF-8"))?;
     if !path.is_absolute() || value.chars().any(|c| c.is_control() || c == '\'') {
         return Err(AppError::new(
             ErrorCode::InvalidInput,
@@ -652,7 +661,9 @@ mod tests {
             SemanticVersion::parse("0.2").unwrap(),
             SemanticVersion::parse("0.2.0").unwrap()
         );
-        assert!(SemanticVersion::parse("v0.10.0").unwrap() > SemanticVersion::parse("v0.9.9").unwrap());
+        assert!(
+            SemanticVersion::parse("v0.10.0").unwrap() > SemanticVersion::parse("v0.9.9").unwrap()
+        );
         assert_eq!(
             SemanticVersion::parse("1.0.0").unwrap(),
             SemanticVersion::parse("v1.0.0").unwrap()
@@ -671,7 +682,11 @@ mod tests {
         let release = parse_latest_release(&release_json("v0.2.0", false, false)).unwrap();
         assert_eq!(release.version.to_string(), "0.2.0");
         assert!(release.asset_url.ends_with(APP_ASSET_NAME));
-        assert!(release.sha256_url.ends_with(&format!("{APP_ASSET_NAME}.sha256")));
+        assert!(
+            release
+                .sha256_url
+                .ends_with(&format!("{APP_ASSET_NAME}.sha256"))
+        );
     }
 
     #[test]
@@ -712,8 +727,11 @@ mod tests {
     fn sha256_sidecar_accepts_shasum_output_and_rejects_garbage() {
         let digest = "a".repeat(64);
         assert_eq!(
-            parse_sha256_sidecar(&format!("{}  Verge-macos-arm64.zip\n", digest.to_uppercase()))
-                .unwrap(),
+            parse_sha256_sidecar(&format!(
+                "{}  Verge-macos-arm64.zip\n",
+                digest.to_uppercase()
+            ))
+            .unwrap(),
             digest
         );
         for bad in ["", "abc  file.zip", &"g".repeat(64)] {
@@ -788,7 +806,8 @@ mod tests {
 
     impl BundleArchiver for FakeArchiver {
         fn extract_zip(&mut self, _archive: &Path, destination: &Path) -> Result<(), AppError> {
-            self.calls.push(format!("extract:{}", destination.display()));
+            self.calls
+                .push(format!("extract:{}", destination.display()));
             Self::copy_recursive(&self.extract_source, destination);
             Ok(())
         }
@@ -823,7 +842,10 @@ mod tests {
             if self.identities.iter().any(|(m, _)| *m == marker) {
                 Ok(())
             } else {
-                Err(AppError::new(ErrorCode::ValidationFailed, "invalid signature"))
+                Err(AppError::new(
+                    ErrorCode::ValidationFailed,
+                    "invalid signature",
+                ))
             }
         }
 
@@ -848,7 +870,9 @@ mod tests {
     impl CommandRunner for FakeRunner {
         fn run(&mut self, program: &str, args: &[String]) -> Result<String, AppError> {
             self.calls.push((program.to_owned(), args.to_vec()));
-            self.outputs.pop_front().unwrap_or_else(|| Ok(String::new()))
+            self.outputs
+                .pop_front()
+                .unwrap_or_else(|| Ok(String::new()))
         }
     }
 
@@ -949,7 +973,12 @@ mod tests {
         );
         // 可写目录走直接 rename，不触发提权；同卷临时目录已清理。
         assert!(fixture.runner.calls.is_empty());
-        assert!(!fixture.install_dir.join(".verge-update-staged.app").exists());
+        assert!(
+            !fixture
+                .install_dir
+                .join(".verge-update-staged.app")
+                .exists()
+        );
         assert!(!fixture.install_dir.join(".verge-update-old.app").exists());
         assert!(!fixture.staging.join("download").exists());
         assert!(!fixture.staging.join("staged").exists());
@@ -1017,7 +1046,10 @@ mod tests {
     #[test]
     fn foreign_signing_identity_is_rejected_before_replacement() {
         let mut fixture = update_fixture("identity");
-        fixture.signer.identities[1] = ("new-binary".into(), "Developer ID Application: Someone Else (TEAM)".into());
+        fixture.signer.identities[1] = (
+            "new-binary".into(),
+            "Developer ID Application: Someone Else (TEAM)".into(),
+        );
 
         let error = update_application_bundle(
             &mut fixture.fetcher,
@@ -1116,10 +1148,21 @@ mod tests {
         assert!(script.starts_with("do shell script \""));
         assert!(script.ends_with("\" with administrator privileges"));
         for expected in [
-            format!("/bin/mv '{}' '{}'", target.display(), install_dir.join(".verge-update-old.app").display()),
-            format!("/usr/bin/ditto '{}' '{}'", staged.display(), target.display()),
+            format!(
+                "/bin/mv '{}' '{}'",
+                target.display(),
+                install_dir.join(".verge-update-old.app").display()
+            ),
+            format!(
+                "/usr/bin/ditto '{}' '{}'",
+                staged.display(),
+                target.display()
+            ),
             format!("/usr/sbin/chown -R 501 '{}'", target.display()),
-            format!("/bin/rm -rf '{}'", install_dir.join(".verge-update-old.app").display()),
+            format!(
+                "/bin/rm -rf '{}'",
+                install_dir.join(".verge-update-old.app").display()
+            ),
             "rc=$?".to_owned(),
             "exit $rc".to_owned(),
         ] {

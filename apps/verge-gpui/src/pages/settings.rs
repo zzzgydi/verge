@@ -1,13 +1,12 @@
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     collapsible::Collapsible,
     form::{field, v_form},
     group_box::GroupBox,
     h_flex,
     input::{Input, NumberInput},
-    Icon, IconName,
     switch::Switch,
     v_flex,
 };
@@ -67,8 +66,17 @@ fn group_trigger<'a>(
             }
             cx.notify(view_entity.entity_id());
         })
-        .child(Icon::new(icon).size_4().text_color(cx.theme().muted_foreground))
-        .child(div().text_sm().font_weight(gpui::FontWeight::SEMIBOLD).child(title_owned))
+        .child(
+            Icon::new(icon)
+                .size_4()
+                .text_color(cx.theme().muted_foreground),
+        )
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(title_owned),
+        )
 }
 
 /// 把分组包成可折叠组件（默认展开）。
@@ -131,27 +139,35 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                     .outline()
                                     .selected(settings.theme == theme)
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.dispatch(UiAction::UpdateSettings(updated.clone()), cx);
+                                        this.dispatch(
+                                            UiAction::UpdateSettings(updated.clone()),
+                                            cx,
+                                        );
                                     }))
                             }),
                         ),
                     ),
                 )
                 .child(
-                    field().label(tr(lang, "settings.language")).child(h_flex().gap_2().children(
-                        [("en", "English"), ("zh-CN", "中文")].map(|(language, label)| {
-                            let mut updated = settings.clone();
-                            updated.language = language.into();
-                            Button::new(format!("language-{language}"))
-                                .label(label)
-                                .small()
-                                .outline()
-                                .selected(settings.language == language)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.dispatch(UiAction::UpdateSettings(updated.clone()), cx);
-                                }))
-                        }),
-                    )),
+                    field()
+                        .label(tr(lang, "settings.language"))
+                        .child(h_flex().gap_2().children(
+                            [("en", "English"), ("zh-CN", "中文")].map(|(language, label)| {
+                                let mut updated = settings.clone();
+                                updated.language = language.into();
+                                Button::new(format!("language-{language}"))
+                                    .label(label)
+                                    .small()
+                                    .outline()
+                                    .selected(settings.language == language)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.dispatch(
+                                            UiAction::UpdateSettings(updated.clone()),
+                                            cx,
+                                        );
+                                    }))
+                            }),
+                        )),
                 )
                 .child(
                     field()
@@ -159,18 +175,23 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                         .description(tr(lang, "settings.log_limit.desc"))
                         .child(NumberInput::new(&view.log_limit)),
                 )
-                .child(field().label(tr(lang, "settings.launch_at_login")).description(tr(lang, "settings.launch_at_login.desc")).child({
-                    let current = settings.clone();
-                    h_flex().child(
-                        Switch::new("switch-launch-at-login")
-                            .checked(settings.launch_at_login)
-                            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
-                                let mut updated = current.clone();
-                                updated.launch_at_login = *checked;
-                                this.dispatch(UiAction::UpdateSettings(updated), cx);
-                            })),
-                    )
-                }))
+                .child(
+                    field()
+                        .label(tr(lang, "settings.launch_at_login"))
+                        .description(tr(lang, "settings.launch_at_login.desc"))
+                        .child({
+                            let current = settings.clone();
+                            h_flex().child(
+                                Switch::new("switch-launch-at-login")
+                                    .checked(settings.launch_at_login)
+                                    .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                                        let mut updated = current.clone();
+                                        updated.launch_at_login = *checked;
+                                        this.dispatch(UiAction::UpdateSettings(updated), cx);
+                                    })),
+                            )
+                        }),
+                )
                 .child(
                     field()
                         .label(tr(lang, "settings.global_hotkey"))
@@ -209,22 +230,27 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                     field()
                         .label(tr(lang, "settings.reset_default"))
                         .description(tr(lang, "settings.reset_default.desc"))
-                        .child(h_flex().gap_2().children(
-                            [
-                                (SettingsScope::Appearance, tr(lang, "settings.scope.appearance")),
-                                (SettingsScope::Network, tr(lang, "settings.scope.network")),
-                                (SettingsScope::System, tr(lang, "settings.scope.system")),
-                            ]
-                            .map(|(scope, label)| {
-                                Button::new(format!("reset-scope-{scope:?}"))
-                                    .label(label)
-                                    .small()
-                                    .outline()
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.confirm_reset_scope(scope, window, cx);
-                                    }))
-                            }),
-                        )),
+                        .child(
+                            h_flex().gap_2().children(
+                                [
+                                    (
+                                        SettingsScope::Appearance,
+                                        tr(lang, "settings.scope.appearance"),
+                                    ),
+                                    (SettingsScope::Network, tr(lang, "settings.scope.network")),
+                                    (SettingsScope::System, tr(lang, "settings.scope.system")),
+                                ]
+                                .map(|(scope, label)| {
+                                    Button::new(format!("reset-scope-{scope:?}"))
+                                        .label(label)
+                                        .small()
+                                        .outline()
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.confirm_reset_scope(scope, window, cx);
+                                        }))
+                                }),
+                            ),
+                        ),
                 ),
         );
 
@@ -353,7 +379,10 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                         .description(match &pac_current {
                             Some(state) if state.enabled => i18n::fmt_current(
                                 lang,
-                                state.url.as_deref().unwrap_or(tr(lang, "settings.proxy.pac.enabled")),
+                                state
+                                    .url
+                                    .as_deref()
+                                    .unwrap_or(tr(lang, "settings.proxy.pac.enabled")),
                             ),
                             _ => tr(lang, "settings.proxy.not_set").into(),
                         })
@@ -486,16 +515,18 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                     field()
                         .label(tr(lang, "settings.app.check"))
                         .description(tr(lang, "settings.app.check.desc"))
-                        .child(h_flex().child(
-                            Button::new("check-app-update")
-                                .label(tr(lang, "settings.app.check"))
-                                .small()
-                                .outline()
-                                .loading(view.is_pending(&["app_update"]))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.dispatch(UiAction::CheckAppUpdate, cx);
-                                })),
-                        )),
+                        .child(
+                            h_flex().child(
+                                Button::new("check-app-update")
+                                    .label(tr(lang, "settings.app.check"))
+                                    .small()
+                                    .outline()
+                                    .loading(view.is_pending(&["app_update"]))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.dispatch(UiAction::CheckAppUpdate, cx);
+                                    })),
+                            ),
+                        ),
                 )
                 .when_some(view.state.app_update.clone(), |form, status| {
                     form.child(field().label(tr(lang, "settings.app.latest")).child(muted(
@@ -509,34 +540,42 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                         .as_ref()
                         .is_some_and(|status| status.update_available),
                     |form| {
-                        form.child(field().label(tr(lang, "settings.app.update")).child(h_flex().child(
-                            Button::new("update-application")
-                                .label(tr(lang, "settings.app.update.download"))
-                                .small()
-                                .outline()
-                                .loading(view.is_pending(&["app_update_write"]))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.confirm_update_application(window, cx);
-                                })),
-                        )))
+                        form.child(
+                            field().label(tr(lang, "settings.app.update")).child(
+                                h_flex().child(
+                                    Button::new("update-application")
+                                        .label(tr(lang, "settings.app.update.download"))
+                                        .small()
+                                        .outline()
+                                        .loading(view.is_pending(&["app_update_write"]))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.confirm_update_application(window, cx);
+                                        })),
+                                ),
+                            ),
+                        )
                     },
                 )
                 .when_some(view.state.app_update_installed.clone(), |form, version| {
-                    form.child(field().label(tr(lang, "settings.app.pending_restart")).child(
-                        h_flex()
-                            .gap_2()
-                            .child(muted(i18n::fmt_pending_restart(lang, &version), cx))
+                    form.child(
+                        field()
+                            .label(tr(lang, "settings.app.pending_restart"))
                             .child(
-                                Button::new("restart-application")
-                                    .label(tr(lang, "settings.app.restart"))
-                                    .small()
-                                    .primary()
-                                    .loading(view.is_pending(&["app_update_write"]))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.confirm_restart_application(window, cx);
-                                    })),
+                                h_flex()
+                                    .gap_2()
+                                    .child(muted(i18n::fmt_pending_restart(lang, &version), cx))
+                                    .child(
+                                        Button::new("restart-application")
+                                            .label(tr(lang, "settings.app.restart"))
+                                            .small()
+                                            .primary()
+                                            .loading(view.is_pending(&["app_update_write"]))
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.confirm_restart_application(window, cx);
+                                            })),
+                                    ),
                             ),
-                    ))
+                    )
                 }),
         );
 
@@ -585,43 +624,47 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                     ),
                 )
                 .child(
-                    field().label(tr(lang, "settings.system.diagnostics")).child(
-                        h_flex().child(
-                            Button::new("export-diagnostics")
-                                .label(tr(lang, "settings.system.diagnostics.export"))
-                                .small()
-                                .outline()
-                                .loading(view.is_pending(&["application_settings_write"]))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.dispatch(
-                                        UiAction::ExportDiagnostics {
-                                            destination: diagnostic_path.clone(),
-                                        },
-                                        cx,
-                                    );
-                                })),
+                    field()
+                        .label(tr(lang, "settings.system.diagnostics"))
+                        .child(
+                            h_flex().child(
+                                Button::new("export-diagnostics")
+                                    .label(tr(lang, "settings.system.diagnostics.export"))
+                                    .small()
+                                    .outline()
+                                    .loading(view.is_pending(&["application_settings_write"]))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.dispatch(
+                                            UiAction::ExportDiagnostics {
+                                                destination: diagnostic_path.clone(),
+                                            },
+                                            cx,
+                                        );
+                                    })),
+                            ),
                         ),
-                    ),
                 )
                 .child(
                     field()
                         .label(tr(lang, "settings.system.settings_export"))
                         .description(tr(lang, "settings.system.settings_export.desc"))
-                        .child(h_flex().child(
-                            Button::new("export-application-settings")
-                                .label(tr(lang, "settings.system.settings_export.button"))
-                                .small()
-                                .outline()
-                                .loading(view.is_pending(&["application_settings_write"]))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.dispatch(
-                                        UiAction::ExportApplicationSettings {
-                                            destination: settings_export_path.clone(),
-                                        },
-                                        cx,
-                                    );
-                                })),
-                        )),
+                        .child(
+                            h_flex().child(
+                                Button::new("export-application-settings")
+                                    .label(tr(lang, "settings.system.settings_export.button"))
+                                    .small()
+                                    .outline()
+                                    .loading(view.is_pending(&["application_settings_write"]))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.dispatch(
+                                            UiAction::ExportApplicationSettings {
+                                                destination: settings_export_path.clone(),
+                                            },
+                                            cx,
+                                        );
+                                    })),
+                            ),
+                        ),
                 )
                 .child(
                     field()
@@ -697,12 +740,54 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
     v_flex()
         .gap_3()
         .child(page_title(tr(lang, "settings.title")))
-        .child(collapsible_group(view, "general", tr(lang, "settings.group.general"), general_group, cx))
-        .child(collapsible_group(view, "network", tr(lang, "settings.group.network"), network_group, cx))
-        .child(collapsible_group(view, "proxy", tr(lang, "settings.group.proxy"), proxy_group, cx))
-        .child(collapsible_group(view, "core", tr(lang, "settings.group.core"), core_group, cx))
-        .child(collapsible_group(view, "app-update", tr(lang, "settings.group.app_update"), app_update_group, cx))
-        .child(collapsible_group(view, "system", tr(lang, "settings.group.system"), system_group, cx))
-        .child(collapsible_group(view, "backup", tr(lang, "settings.group.backup"), backup_group, cx))
+        .child(collapsible_group(
+            view,
+            "general",
+            tr(lang, "settings.group.general"),
+            general_group,
+            cx,
+        ))
+        .child(collapsible_group(
+            view,
+            "network",
+            tr(lang, "settings.group.network"),
+            network_group,
+            cx,
+        ))
+        .child(collapsible_group(
+            view,
+            "proxy",
+            tr(lang, "settings.group.proxy"),
+            proxy_group,
+            cx,
+        ))
+        .child(collapsible_group(
+            view,
+            "core",
+            tr(lang, "settings.group.core"),
+            core_group,
+            cx,
+        ))
+        .child(collapsible_group(
+            view,
+            "app-update",
+            tr(lang, "settings.group.app_update"),
+            app_update_group,
+            cx,
+        ))
+        .child(collapsible_group(
+            view,
+            "system",
+            tr(lang, "settings.group.system"),
+            system_group,
+            cx,
+        ))
+        .child(collapsible_group(
+            view,
+            "backup",
+            tr(lang, "settings.group.backup"),
+            backup_group,
+            cx,
+        ))
         .into_any_element()
 }

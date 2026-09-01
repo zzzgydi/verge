@@ -34,7 +34,10 @@ fn setup(cx: &mut TestAppContext) -> (gpui::Entity<Root>, ViewHolder, &mut Visua
 #[gpui::test]
 fn import_dialog_opens_and_renders(cx: &mut TestAppContext) {
     let (_, view_holder, cx) = setup(cx);
-    let view = view_holder.borrow().clone().expect("view should be created");
+    let view = view_holder
+        .borrow()
+        .clone()
+        .expect("view should be created");
 
     // 直接调用按钮回调路径（VisualTestContext 上下文，不经 WindowHandle::update，
     // 避免无谓的 root lease）。
@@ -50,13 +53,19 @@ fn import_dialog_opens_and_renders(cx: &mut TestAppContext) {
         )
     });
     assert!(has_dialog, "open_import_dialog 后应有活跃 dialog");
-    assert!(layer, "dialog 打开后渲染层必须存在（MainView 已挂载 overlay）");
+    assert!(
+        layer,
+        "dialog 打开后渲染层必须存在（MainView 已挂载 overlay）"
+    );
 }
 
 #[gpui::test]
 fn yaml_sheet_opens_and_renders(cx: &mut TestAppContext) {
     let (_, view_holder, cx) = setup(cx);
-    let view = view_holder.borrow().clone().expect("view should be created");
+    let view = view_holder
+        .borrow()
+        .clone()
+        .expect("view should be created");
 
     let id = verge_domain::ProfileId::parse("demo").unwrap();
     cx.update(|window, cx| {
@@ -71,13 +80,19 @@ fn yaml_sheet_opens_and_renders(cx: &mut TestAppContext) {
         )
     });
     assert!(has_sheet, "open_yaml_sheet 后应有活跃 sheet");
-    assert!(layer, "sheet 打开后渲染层必须存在（MainView 已挂载 overlay）");
+    assert!(
+        layer,
+        "sheet 打开后渲染层必须存在（MainView 已挂载 overlay）"
+    );
 }
 
 #[gpui::test]
 fn merge_sheet_opens_and_renders_without_reading_main_view(cx: &mut TestAppContext) {
     let (_, view_holder, cx) = setup(cx);
-    let view = view_holder.borrow().clone().expect("view should be created");
+    let view = view_holder
+        .borrow()
+        .clone()
+        .expect("view should be created");
 
     cx.update(|window, cx| {
         view.update(cx, |view, cx| view.open_merge_sheet(window, cx));
@@ -98,7 +113,10 @@ fn merge_sheet_opens_and_renders_without_reading_main_view(cx: &mut TestAppConte
 #[gpui::test]
 fn merged_sheet_opens_and_renders(cx: &mut TestAppContext) {
     let (_, view_holder, cx) = setup(cx);
-    let view = view_holder.borrow().clone().expect("view should be created");
+    let view = view_holder
+        .borrow()
+        .clone()
+        .expect("view should be created");
 
     let id = verge_domain::ProfileId::parse("demo").unwrap();
     cx.update(|window, cx| {
@@ -122,7 +140,10 @@ fn language_switch_updates_view_language(cx: &mut TestAppContext) {
     use verge_domain::{ApplicationSettings, ApplicationSettingsSnapshot};
 
     let (_, view_holder, cx) = setup(cx);
-    let view = view_holder.borrow().clone().expect("view should be created");
+    let view = view_holder
+        .borrow()
+        .clone()
+        .expect("view should be created");
 
     // 设置未加载时回退英文（与 domain 默认语言一致）。
     cx.update(|_, cx| {

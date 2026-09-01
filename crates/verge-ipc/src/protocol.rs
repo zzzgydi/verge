@@ -6,15 +6,14 @@
 
 use serde::{Deserialize, Serialize};
 use verge_domain::{
-    ApplicationSettingsSnapshot, Profile, ProfileId, RealtimeEvent,
-    RuntimeSettings,
+    ApplicationSettingsSnapshot, Profile, ProfileId, RealtimeEvent, RuntimeSettings,
 };
 use verge_ui::{UiRequestEnvelope, UiResponseEnvelope};
 
 /// IPC 协议版本。守护进程与 GUI 进程必须一致；升级不匹配时拒绝连接。
-/// v2：新增应用自身更新命令（CheckAppUpdate / UpdateApplication / RestartApplication）
-/// 与快照字段；应用更新后旧守护进程与新 GUI 的配对靠这个版本号明确拒绝。
-pub const PROTOCOL_VERSION: u32 = 2;
+/// v3：新增 QuitApplication 命令，让 macOS 应用菜单可要求守护进程完成清理后退出。
+/// 应用更新后旧守护进程与新 GUI 的配对靠这个版本号明确拒绝。
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// GUI → Daemon 的消息。
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -49,9 +48,7 @@ pub enum ClientMessage {
     /// 已有 GUI 主实例在运行，本实例应退出（守护进程随后会发 ActivateWindow 给旧实例）。
     Duplicate,
     /// 服务端主动关闭连接（版本不匹配等），GUI 应提示后退出。
-    Closed {
-        reason: String,
-    },
+    Closed { reason: String },
 }
 
 /// 连接握手成功后一次拉全的领域状态快照。

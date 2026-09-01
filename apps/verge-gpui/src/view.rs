@@ -191,8 +191,7 @@ impl MainView {
                     .default_value("3600")
             }),
             profile_user_agent: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder(tr(lang, "placeholder.profile_user_agent"))
+                InputState::new(window, cx).placeholder(tr(lang, "placeholder.profile_user_agent"))
             }),
             backup_passphrase: cx.new(|cx| {
                 InputState::new(window, cx)
@@ -249,7 +248,10 @@ impl MainView {
         let fields: [(Entity<InputState>, &'static str); 8] = [
             (self.profile_id.clone(), "placeholder.profile_id"),
             (self.profile_name.clone(), "placeholder.profile_name"),
-            (self.profile_interval.clone(), "placeholder.profile_interval"),
+            (
+                self.profile_interval.clone(),
+                "placeholder.profile_interval",
+            ),
             (
                 self.profile_user_agent.clone(),
                 "placeholder.profile_user_agent",
@@ -290,7 +292,11 @@ impl MainView {
 
         let hotkey = snapshot.settings.global_hotkey.clone();
         if self.global_hotkey_applied != Some(hotkey.clone())
-            && !self.global_hotkey.read(cx).focus_handle(cx).is_focused(window)
+            && !self
+                .global_hotkey
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
         {
             self.global_hotkey.update(cx, |input, cx| {
                 input.set_value(hotkey.clone().unwrap_or_default(), window, cx)
@@ -836,7 +842,12 @@ impl MainView {
 
     /// 设置导入第一步：发起差异预览，结果回来后由 maybe_open_import_preview_dialog 打开确认弹窗。
     pub fn preview_settings_import(&mut self, cx: &mut Context<Self>) -> Result<(), AppError> {
-        let source = self.settings_import_path.read(cx).value().trim().to_string();
+        let source = self
+            .settings_import_path
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
         if source.is_empty() {
             let error = AppError::new(
                 ErrorCode::InvalidInput,
@@ -858,7 +869,11 @@ impl MainView {
     }
 
     /// 预览结果到达后打开确认弹窗：先展示逐字段差异，用户确认后才真正导入。
-    pub fn maybe_open_import_preview_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn maybe_open_import_preview_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(source) = self.pending_settings_import.clone() else {
             return;
         };
@@ -880,14 +895,12 @@ impl MainView {
                 );
             } else {
                 for change in &preview.changes {
-                    changes = changes.child(
-                        div().text_sm().child(i18n::fmt_field_change(
-                            lang,
-                            &change.field,
-                            &change.old,
-                            &change.new,
-                        )),
-                    );
+                    changes = changes.child(div().text_sm().child(i18n::fmt_field_change(
+                        lang,
+                        &change.field,
+                        &change.old,
+                        &change.new,
+                    )));
                 }
             }
             dialog
@@ -1100,48 +1113,45 @@ impl MainView {
                         ),
                 )
                 .footer(
-                    h_flex()
-                        .gap_2()
-                        .justify_end()
-                        .child(
-                            Button::new("save-merge")
-                                .label(tr(lang, "sheet.merge.save"))
-                                .primary()
-                                .disabled(loading)
-                                .on_click({
+                    h_flex().gap_2().justify_end().child(
+                        Button::new("save-merge")
+                            .label(tr(lang, "sheet.merge.save"))
+                            .primary()
+                            .disabled(loading)
+                            .on_click({
+                                let view = view.clone();
+                                move |_, window, cx| {
                                     let view = view.clone();
-                                    move |_, window, cx| {
+                                    window.open_alert_dialog(cx, move |alert, _, _| {
                                         let view = view.clone();
-                                        window.open_alert_dialog(cx, move |alert, _, _| {
-                                            let view = view.clone();
-                                            alert
-                                                .confirm()
-                                                .title(tr(lang, "sheet.merge.confirm_title"))
-                                                .description(tr(lang, "sheet.merge.confirm_desc"))
-                                                .button_props(
-                                                    DialogButtonProps::default()
-                                                        .ok_text(tr(lang, "common.save"))
-                                                        .cancel_text(tr(lang, "common.cancel"))
-                                                        .show_cancel(true),
-                                                )
-                                                .on_ok(move |_, _, cx| {
-                                                    view.update(cx, |this, cx| {
-                                                        let yaml = this
-                                                            .merge_editor
-                                                            .read(cx)
-                                                            .value()
-                                                            .to_string();
-                                                        this.dispatch(
-                                                            UiAction::SaveMergeConfig { yaml },
-                                                            cx,
-                                                        );
-                                                    });
-                                                    true
-                                                })
-                                        });
-                                    }
-                                }),
-                        ),
+                                        alert
+                                            .confirm()
+                                            .title(tr(lang, "sheet.merge.confirm_title"))
+                                            .description(tr(lang, "sheet.merge.confirm_desc"))
+                                            .button_props(
+                                                DialogButtonProps::default()
+                                                    .ok_text(tr(lang, "common.save"))
+                                                    .cancel_text(tr(lang, "common.cancel"))
+                                                    .show_cancel(true),
+                                            )
+                                            .on_ok(move |_, _, cx| {
+                                                view.update(cx, |this, cx| {
+                                                    let yaml = this
+                                                        .merge_editor
+                                                        .read(cx)
+                                                        .value()
+                                                        .to_string();
+                                                    this.dispatch(
+                                                        UiAction::SaveMergeConfig { yaml },
+                                                        cx,
+                                                    );
+                                                });
+                                                true
+                                            })
+                                    });
+                                }
+                            }),
+                    ),
                 )
         });
         self.dispatch(UiAction::LoadMergeConfig, cx);
@@ -1162,7 +1172,12 @@ impl MainView {
     }
 
     /// Merge 配置加载失败时保留 Sheet，并在编辑器内直接显示错误。
-    pub fn fail_merge_sheet(&mut self, error: &AppError, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn fail_merge_sheet(
+        &mut self,
+        error: &AppError,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.sheet_state
             .update(cx, |state, _| state.pending_merge = false);
         self.merge_editor.update(cx, |editor, cx| {
@@ -1175,7 +1190,12 @@ impl MainView {
     }
 
     /// 点击后立即打开合并结果 Sheet（只读）；加载完成后由响应轮询填入内容。
-    pub fn open_merged_sheet(&mut self, id: ProfileId, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open_merged_sheet(
+        &mut self,
+        id: ProfileId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let lang = self.lang();
         self.sheet_state
             .update(cx, |state, _| state.pending_merged = Some(id.clone()));
@@ -1244,7 +1264,12 @@ impl MainView {
     }
 
     /// 合并结果生成失败时保留 Sheet，并在编辑器内直接显示错误。
-    pub fn fail_merged_sheet(&mut self, error: &AppError, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn fail_merged_sheet(
+        &mut self,
+        error: &AppError,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.sheet_state
             .update(cx, |state, _| state.pending_merged = None);
         self.merged_editor.update(cx, |editor, cx| {
@@ -1268,15 +1293,45 @@ impl MainView {
                 }))
         };
         let proxy_menu = SidebarMenu::new().children([
-            item(Page::Home, tr(lang, "home.title"), IconName::LayoutDashboard, cx),
-            item(Page::Proxies, tr(lang, "proxies.title"), IconName::Globe, cx),
+            item(
+                Page::Home,
+                tr(lang, "home.title"),
+                IconName::LayoutDashboard,
+                cx,
+            ),
+            item(
+                Page::Proxies,
+                tr(lang, "proxies.title"),
+                IconName::Globe,
+                cx,
+            ),
             item(Page::Rules, tr(lang, "rules.title"), IconName::BookOpen, cx),
-            item(Page::Connections, tr(lang, "connections.title"), IconName::Network, cx),
+            item(
+                Page::Connections,
+                tr(lang, "connections.title"),
+                IconName::Network,
+                cx,
+            ),
         ]);
         let system_menu = SidebarMenu::new().children([
-            item(Page::Profiles, tr(lang, "profiles.title"), IconName::File, cx),
-            item(Page::Logs, tr(lang, "logs.title"), IconName::SquareTerminal, cx),
-            item(Page::Settings, tr(lang, "settings.title"), IconName::Settings, cx),
+            item(
+                Page::Profiles,
+                tr(lang, "profiles.title"),
+                IconName::File,
+                cx,
+            ),
+            item(
+                Page::Logs,
+                tr(lang, "logs.title"),
+                IconName::SquareTerminal,
+                cx,
+            ),
+            item(
+                Page::Settings,
+                tr(lang, "settings.title"),
+                IconName::Settings,
+                cx,
+            ),
         ]);
 
         let header = h_flex()
@@ -1304,9 +1359,7 @@ impl MainView {
         let (status_text, status_color) = match self.state.core_status {
             CoreStatus::Running => (tr(lang, "status.core_running"), cx.theme().success),
             CoreStatus::Offline => (tr(lang, "status.core_offline"), cx.theme().danger),
-            CoreStatus::Unknown => {
-                (tr(lang, "status.core_unknown"), cx.theme().muted_foreground)
-            }
+            CoreStatus::Unknown => (tr(lang, "status.core_unknown"), cx.theme().muted_foreground),
         };
         let dot = div()
             .size_2()
