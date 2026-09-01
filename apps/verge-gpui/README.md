@@ -11,8 +11,13 @@ owns the native tray, Mihomo lifecycle, persistence, and long-lived system state
 
 ```bash
 cargo +1.97.1 check -p verge-gpui
-cargo +1.97.1 run -p verge-gpui
+make dev
 ```
+
+Run `make dev` from the repository root. It verifies the pinned Mihomo binary,
+downloads it to `.cache/mihomo/<target>/mihomo` when necessary, and then starts
+the application with `VERGE_MIHOMO_BIN` pointing to that repository cache. Use
+`make mihomo` to prepare the binary without starting the GUI.
 
 Build an Apple Silicon `.app` with the pinned sidecar:
 

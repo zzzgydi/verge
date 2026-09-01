@@ -77,7 +77,21 @@ Clone the repository and run the GPUI application:
 ```bash
 git clone git@github.com:zzzgydi/verge.git
 cd verge
-cargo +1.97.1 run -p verge-gpui
+make dev
+```
+
+`make dev` checks the Mihomo binary first. If it is missing or does not match
+`assets/mihomo/manifest.json`, the script downloads the asset for the current
+platform, verifies both SHA-256 values, installs it under
+`.cache/mihomo/<target>/mihomo`, and passes that path to the application through
+`VERGE_MIHOMO_BIN`. The repository cache is ignored by Git and does not write to
+the user's application data directory. The current development script supports
+Apple Silicon macOS.
+
+To prepare Mihomo without starting the application:
+
+```bash
+make mihomo
 ```
 
 The first GUI process starts the same executable with `--daemon` and connects to it over the local socket. Closing the window leaves the daemon and menu bar item running; use **Quit** from the menu bar to stop the complete application.
@@ -87,7 +101,7 @@ For isolated development data or a local Mihomo binary:
 ```bash
 VERGE_DATA_DIR=/tmp/verge-dev \
 VERGE_MIHOMO_BIN=/absolute/path/to/mihomo \
-cargo +1.97.1 run -p verge-gpui
+make dev
 ```
 
 Useful development overrides:
@@ -96,6 +110,7 @@ Useful development overrides:
 |---|---|
 | `VERGE_DATA_DIR` | Override `~/Library/Application Support/Verge` |
 | `VERGE_MIHOMO_BIN` | Use a specific Mihomo executable |
+| `VERGE_MIHOMO_CACHE_DIR` | Override the repository Mihomo cache directory used by `make dev` |
 | `VERGE_MIHOMO_MANIFEST` | Use a different sidecar manifest |
 | `VERGE_CONTROLLER` | Set a loopback controller address |
 | `VERGE_SECRET` | Set the controller secret |

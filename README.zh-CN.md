@@ -77,7 +77,20 @@ rustup toolchain install 1.97.1 --component rustfmt --component clippy
 ```bash
 git clone git@github.com:zzzgydi/verge.git
 cd verge
-cargo +1.97.1 run -p verge-gpui
+make dev
+```
+
+`make dev` 会先检查 Mihomo。文件不存在或摘要与
+`assets/mihomo/manifest.json` 不一致时，脚本会根据当前平台下载对应资源，
+校验压缩包和可执行文件的 SHA-256，再安装到仓库内的
+`.cache/mihomo/<target>/mihomo`。启动应用时，脚本通过 `VERGE_MIHOMO_BIN`
+传入该路径，不会把开发依赖写入用户的应用数据目录。`.cache/` 已被 Git 忽略。
+目前开发脚本支持 Apple Silicon macOS。
+
+只准备 Mihomo，不启动应用：
+
+```bash
+make mihomo
 ```
 
 第一个 GUI 进程会用 `--daemon` 参数拉起同一个可执行文件，再通过本机 socket 连接守护进程。关闭窗口后，守护进程和菜单栏图标仍会运行；需要完全退出时，请从菜单栏选择“退出”。
@@ -87,7 +100,7 @@ cargo +1.97.1 run -p verge-gpui
 ```bash
 VERGE_DATA_DIR=/tmp/verge-dev \
 VERGE_MIHOMO_BIN=/absolute/path/to/mihomo \
-cargo +1.97.1 run -p verge-gpui
+make dev
 ```
 
 常用开发环境变量：
@@ -96,6 +109,7 @@ cargo +1.97.1 run -p verge-gpui
 |---|---|
 | `VERGE_DATA_DIR` | 覆盖默认的 `~/Library/Application Support/Verge` |
 | `VERGE_MIHOMO_BIN` | 指定 Mihomo 可执行文件 |
+| `VERGE_MIHOMO_CACHE_DIR` | 覆盖 `make dev` 使用的仓库 Mihomo 缓存目录 |
 | `VERGE_MIHOMO_MANIFEST` | 指定 sidecar manifest |
 | `VERGE_CONTROLLER` | 指定回环 controller 地址 |
 | `VERGE_SECRET` | 指定 controller secret |
