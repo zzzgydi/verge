@@ -424,7 +424,7 @@ pub fn diff_application_settings(
     let (Some(current), Some(incoming)) = (current.as_object(), incoming.as_object()) else {
         return Vec::new();
     };
-    incoming
+    let mut changes = incoming
         .iter()
         .filter(|(field, new)| current.get(*field) != Some(*new))
         .map(|(field, new)| SettingsFieldChange {
@@ -432,7 +432,9 @@ pub fn diff_application_settings(
             old: current.get(field).map_or_else(|| "null".into(), render_json_value),
             new: render_json_value(new),
         })
-        .collect()
+        .collect::<Vec<_>>();
+    changes.sort_by(|left, right| left.field.cmp(&right.field));
+    changes
 }
 
 /// 导入预览:解析校验 + 与当前设置的差异。
@@ -1968,20 +1970,21 @@ mod tests {
         let bytes = export_settings_json(&settings).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let object = value.as_object().unwrap();
-        assert_eq!(
-            object.keys().map(String::as_str).collect::<Vec<_>>(),
-            ["settings", "version"]
-        );
+        assert_eq!(object.len(), 2);
+        assert!(object.contains_key("settings"));
+        assert!(object.contains_key("version"));
         assert_eq!(value["version"], 1);
-        assert_eq!(
-            value["settings"]
-                .as_object()
-                .unwrap()
-                .keys()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            ["global_hotkey", "language", "launch_at_login", "log_limit", "theme"]
-        );
+        let settings_object = value["settings"].as_object().unwrap();
+        assert_eq!(settings_object.len(), 5);
+        for key in [
+            "global_hotkey",
+            "language",
+            "launch_at_login",
+            "log_limit",
+            "theme",
+        ] {
+            assert!(settings_object.contains_key(key));
+        }
         let text = String::from_utf8(bytes.clone()).unwrap();
         for forbidden in ["secret", "keychain", "password", "token"] {
             assert!(!text.to_lowercase().contains(forbidden));

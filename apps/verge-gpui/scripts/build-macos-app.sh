@@ -24,16 +24,17 @@ if [ "$actual" != "$expected" ]; then
     exit 1
 fi
 
-cargo build --manifest-path "$app_dir/Cargo.toml" --release --locked
+cargo build --manifest-path "$repo_dir/Cargo.toml" -p verge-gpui --release --locked
 cargo build --manifest-path "$repo_dir/Cargo.toml" -p verge-helper --release --locked
 
 bundle="$repo_dir/dist/Verge.app"
 contents="$bundle/Contents"
 /bin/rm -rf "$bundle"
 /bin/mkdir -p "$contents/MacOS" "$contents/Resources/bin" "$contents/Resources/helper"
-/bin/cp "$app_dir/target/release/verge-gpui" "$contents/MacOS/verge-gpui"
+/bin/cp "$repo_dir/target/release/verge-gpui" "$contents/MacOS/verge-gpui"
 /bin/cp "$VERGE_MIHOMO_BIN" "$contents/Resources/bin/mihomo"
 /bin/cp "$repo_dir/target/release/verge-helper" "$contents/Resources/helper/verge-helper"
+/bin/cp "$repo_dir/assets/icons/icon.icns" "$contents/Resources/AppIcon.icns"
 /bin/chmod 755 "$contents/MacOS/verge-gpui" "$contents/Resources/bin/mihomo"
 /bin/chmod 755 "$contents/Resources/helper/verge-helper"
 # 构建时记录 helper 预期 SHA-256，安装时按此校验来源二进制。

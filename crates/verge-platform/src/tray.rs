@@ -4,7 +4,7 @@ use tray_icon::{
 };
 use verge_domain::{AppError, ErrorCode};
 
-const TRAY_ICON: &[u8] = include_bytes!("../../../src-tauri/icons/tray-logo.png");
+const TRAY_ICON: &[u8] = include_bytes!("../../../assets/icons/tray-logo.png");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TrayCommand {

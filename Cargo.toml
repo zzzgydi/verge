@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "apps/verge-gpui",
     "apps/verge-helper",
     "crates/verge-helper-protocol",
     "crates/verge-application",
@@ -11,7 +12,4 @@ members = [
     "crates/verge-platform",
     "crates/verge-runtime",
     "crates/verge-ui",
-    "src-tauri",
-    "tooling/sb-parser",
 ]
-exclude = ["apps/verge-gpui"]

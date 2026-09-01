@@ -1,0 +1,183 @@
+# Verge
+
+[English](README.md)
+
+Verge 是使用 Rust、GPUI 和 Mihomo 开发的 macOS 原生代理客户端，采用原生界面、常驻守护进程、类型明确的应用命令，以及权限范围受限的 helper。
+
+> 开发状态：项目仍在重写阶段。GPUI 分支已经可以开发和测试，但发布构建目前只支持 macOS 13 及以上的 Apple Silicon 设备。
+
+## 功能
+
+- GPUI 原生界面，支持中文和英文。
+- 菜单栏守护进程常驻；关闭窗口不会停止代理。
+- 从本地 YAML 或远程订阅导入 Mihomo 配置，支持自定义 User-Agent 和定时更新。
+- 支持 Merge 配置、合并结果预览、配置校验、原子写入、健康检查和失败回滚。
+- 支持 Rule、Global、Direct 模式，以及代理组切换和延迟测试。
+- 实时查看流量、内存、连接、规则、provider 和日志。
+- 管理 macOS HTTP、HTTPS、SOCKS、PAC 和 bypass，并保存恢复记录。
+- 通过版本化特权 helper 管理 TUN 生命周期。
+- 支持开机启动、全局快捷键、系统通知、诊断导出、设置导入导出和加密备份。
+- 校验并更新 Mihomo，也可校验签名后更新应用本身。
+
+## 架构
+
+Verge 用同一个可执行文件承载两种模式：
+
+```text
+Verge.app
+  |
+  +-- GUI 模式：GPUI 窗口和临时界面状态
+  |
+  +-- --daemon：菜单栏、命令处理、持久化、Mihomo、系统集成
+          |
+          +-- Unix socket IPC <data_dir>/daemon.sock
+          +-- Mihomo sidecar
+          +-- 管理 TUN 的特权 helper
+```
+
+GUI 通过本机 Unix socket 发送 typed request，不直接调用 Mihomo 或 macOS 系统 API。守护进程持有长期状态，校验并执行命令，管理 Mihomo，再把批量实时事件发回 GUI。
+
+主要模块如下：
+
+| 路径 | 职责 |
+|---|---|
+| `apps/verge-gpui` | GPUI 窗口和守护模式入口 |
+| `apps/verge-helper` | 管理 TUN 的特权 helper |
+| `crates/verge-domain` | 命令、状态、错误码和风险等级 |
+| `crates/verge-config` | Profile、Merge、设置、调度和加密备份 |
+| `crates/verge-core` | Mihomo 进程、REST/WebSocket、配置校验和 sidecar 校验 |
+| `crates/verge-application` | 应用用例、权限检查、更新和回滚 |
+| `crates/verge-platform` | macOS 托盘、系统代理、Keychain、通知、登录项和 helper 安装 |
+| `crates/verge-runtime` | 守护进程组装与事件循环 |
+| `crates/verge-ipc` | 本机 IPC 帧、握手、路由和对端校验 |
+| `crates/verge-ui` | 不依赖 GPUI 的界面状态和 typed action |
+| `assets/icons` | 应用图标和菜单栏图标 |
+| `assets/branding` | 可复用的品牌素材 |
+| `assets/mihomo/manifest.json` | 固定 Mihomo 版本和 SHA-256 |
+
+早期 React/Tauri/sing-box 实现和 Phase 0 spike 工程已经移除。仓库现在只保留一个 Rust workspace，统一管理 GPUI 应用、守护进程、helper 和各层 crate。
+
+## 环境要求
+
+- macOS 13 或更高版本。
+- 当前 `.app` 打包流程要求 Apple Silicon。
+- Xcode Command Line Tools。
+- Rust `1.97.1`，并安装 `rustfmt` 和 `clippy`。
+- 打包和真实契约测试需要 Mihomo `v1.19.26` arm64 二进制。
+
+```bash
+xcode-select --install
+rustup toolchain install 1.97.1 --component rustfmt --component clippy
+```
+
+## 开发
+
+克隆仓库并启动 GPUI 应用：
+
+```bash
+git clone git@github.com:zzzgydi/verge.git
+cd verge
+cargo +1.97.1 run -p verge-gpui
+```
+
+第一个 GUI 进程会用 `--daemon` 参数拉起同一个可执行文件，再通过本机 socket 连接守护进程。关闭窗口后，守护进程和菜单栏图标仍会运行；需要完全退出时，请从菜单栏选择“退出”。
+
+开发时可以隔离数据目录，并指定本地 Mihomo：
+
+```bash
+VERGE_DATA_DIR=/tmp/verge-dev \
+VERGE_MIHOMO_BIN=/absolute/path/to/mihomo \
+cargo +1.97.1 run -p verge-gpui
+```
+
+常用开发环境变量：
+
+| 变量 | 用途 |
+|---|---|
+| `VERGE_DATA_DIR` | 覆盖默认的 `~/Library/Application Support/Verge` |
+| `VERGE_MIHOMO_BIN` | 指定 Mihomo 可执行文件 |
+| `VERGE_MIHOMO_MANIFEST` | 指定 sidecar manifest |
+| `VERGE_CONTROLLER` | 指定回环 controller 地址 |
+| `VERGE_SECRET` | 指定 controller secret |
+| `VERGE_NETWORK_SERVICES` | 指定逗号分隔的 macOS 网络服务 |
+| `VERGE_HELPER_SOCKET` | 指定特权 helper socket |
+
+这些变量只用于开发和测试。不要把真实密钥写进 shell 历史、提交文件或问题报告。
+
+## 构建 macOS 应用
+
+先下载 `assets/mihomo/manifest.json` 指定的 Mihomo，校验压缩包并解压：
+
+```bash
+curl -L \
+  https://github.com/MetaCubeX/mihomo/releases/download/v1.19.26/mihomo-darwin-arm64-v1.19.26.gz \
+  -o /tmp/mihomo-darwin-arm64-v1.19.26.gz
+
+echo "2d9db5acc7c814a31ff0c04df98b6ac333494ab1ab8e95673ad6e80b28ca6b68  /tmp/mihomo-darwin-arm64-v1.19.26.gz" \
+  | shasum -a 256 -c -
+
+gzip -dc /tmp/mihomo-darwin-arm64-v1.19.26.gz > /tmp/mihomo
+chmod 755 /tmp/mihomo
+```
+
+构建并签名应用包：
+
+```bash
+VERGE_MIHOMO_BIN=/tmp/mihomo \
+  apps/verge-gpui/scripts/build-macos-app.sh
+```
+
+产物位于 `dist/Verge.app`。脚本会校验解压后的 Mihomo SHA-256，以 release 模式构建 GUI 和 helper，组装应用包，并执行 `codesign --verify --deep --strict`。默认使用 ad-hoc 签名。
+
+构建候选发布版时，可以指定 Developer ID Application 证书：
+
+```bash
+VERGE_MIHOMO_BIN=/tmp/mihomo \
+VERGE_CODESIGN_IDENTITY="Developer ID Application: Example (TEAMID)" \
+  apps/verge-gpui/scripts/build-macos-app.sh
+```
+
+当前脚本还不负责公证和发布。
+
+## 测试
+
+运行仓库检查：
+
+```bash
+./scripts/check-rust-workspaces.sh
+```
+
+检查脚本会测试统一的 Rust workspace，并对全部 target 执行 `clippy -D warnings`。
+
+真实 Mihomo 契约测试默认忽略：
+
+```bash
+MIHOMO_BIN=/absolute/path/to/mihomo \
+  cargo +1.97.1 test -p verge-core --test mihomo_contract -- --ignored
+
+MIHOMO_BIN=/absolute/path/to/mihomo \
+  cargo +1.97.1 test -p verge-application --test mihomo_runtime_contract -- --ignored
+```
+
+传入的二进制必须符合 `assets/mihomo/manifest.json` 中记录的摘要。
+
+## 使用
+
+1. 构建并打开 `dist/Verge.app`，开发时也可以直接运行 GPUI target。
+2. 打开“配置”，粘贴本地 YAML 内容或填写远程订阅地址。
+3. 启用配置。Verge 会先校验并生成私有运行配置，再启动或重载 Mihomo。
+4. 在“概览”或菜单栏打开系统代理，并选择 Rule、Global 或 Direct 模式。
+5. 在“代理”“规则”“连接”和“日志”中查看实时状态。
+6. 在“设置”中管理 TUN、DNS、IPv6、SOCKS/PAC/bypass、开机启动、快捷键、更新、备份和诊断。
+
+安装或卸载特权 helper、开启 TUN、恢复备份和替换应用都会修改系统状态。Verge 会先请求确认，macOS 也可能要求管理员授权。
+
+应用数据默认保存在 `~/Library/Application Support/Verge`。日志位于该目录下的 `logs/verge.log`。诊断导出会遮盖 controller secret、订阅 URL、认证头和用户主目录。
+
+## 平台状态
+
+领域层和应用层已经通过 adapter 隔离平台 API，但当前可发布实现仍以 macOS 为先。Windows、Linux 和 Intel macOS 暂无安装包。重写方案中的 AI Agent 也尚未写入当前代码。
+
+## 许可证
+
+[GNU General Public License v3.0](LICENSE)

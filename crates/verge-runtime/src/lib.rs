@@ -1249,6 +1249,7 @@ pub fn run_daemon() {
         }
     };
     server.spawn_accept();
+    initialize_daemon_appkit();
     let (tray_tx, tray_rx) = mpsc::channel::<TrayCommand>();
     let tray = match TrayService::new(move |command| {
         let _ = tray_tx.send(command);
@@ -1280,6 +1281,24 @@ pub fn run_daemon() {
     // 主线程返回只发生在 AppKit 终止之后；backend 已完成清理。
     let _ = backend_thread.join();
 }
+
+/// Initialize AppKit before constructing any tray/menu objects.
+///
+/// `tray-icon` reaches into CoreGraphics while building the status item. A daemon
+/// spawned directly from the executable has not gone through LaunchServices, so
+/// creating the tray before `NSApplication` aborts in `CGSConnectionByID`.
+#[cfg(target_os = "macos")]
+fn initialize_daemon_appkit() {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+
+    let marker = MainThreadMarker::new().expect("daemon main must run on the main thread");
+    let app = NSApplication::sharedApplication(marker);
+    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn initialize_daemon_appkit() {}
 
 /// backend 事件循环：所有事件源投递到统一队列，单线程阻塞消费。
 fn run_daemon_backend(

@@ -10,6 +10,8 @@
     <string>verge-gpui</string>
     <key>CFBundleIdentifier</key>
     <string>com.zzzgydi.verge</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

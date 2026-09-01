@@ -1,19 +1,17 @@
 # Verge GPUI application
 
-`verge-gpui` keeps a separate Cargo workspace during the migration. The legacy Tauri beta and
-the current GPUI stack require incompatible `raw-window-handle` and `web-sys` lock versions, so
-sharing one lockfile would force unrelated dependency upgrades. Run
-`scripts/check-rust-workspaces.sh` from the repository root to validate both Rust workspaces.
+`verge-gpui` is the window and daemon entry point in the repository's unified Rust workspace.
+Run `scripts/check-rust-workspaces.sh` from the repository root to validate all crates.
 
 This is the formal GPUI window target. It consumes `verge-ui` state and emits only typed
 domain requests; views do not call Mihomo or macOS APIs directly.
 
-The app owns the Mihomo lifecycle and provides Home, Proxies, Profiles, Connections, Logs and
-Settings pages plus a native dynamic tray.
+The GUI provides Home, Proxies, Profiles, Connections, Logs, and Settings pages. The daemon mode
+owns the native tray, Mihomo lifecycle, persistence, and long-lived system state.
 
 ```bash
-cargo +1.97.1 check --manifest-path apps/verge-gpui/Cargo.toml
-cargo +1.97.1 run --manifest-path apps/verge-gpui/Cargo.toml
+cargo +1.97.1 check -p verge-gpui
+cargo +1.97.1 run -p verge-gpui
 ```
 
 Build an Apple Silicon `.app` with the pinned sidecar:
