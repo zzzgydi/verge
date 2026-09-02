@@ -1,0 +1,57 @@
+[package]
+name = "verge"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0"
+publish = false
+
+[lib]
+name = "verge"
+path = "src/lib.rs"
+
+[[bin]]
+name = "verge-gpui"
+path = "src/main.rs"
+
+[dependencies]
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+flate2 = "1.1"
+fs2 = "0.4"
+futures = "0.3"
+getrandom = "0.4"
+libc = "0.2"
+percent-encoding = "2.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+sha2 = "0.10"
+tungstenite = "0.30"
+zeroize = "1.8"
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = [
+    "font-kit",
+] }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "0e2fb7acdf1d40d4db3d458da3893fe9865e901e" }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "0e2fb7acdf1d40d4db3d458da3893fe9865e901e" }
+verge-helper-protocol = { path = "../../crates/verge-helper-protocol" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+dispatch2 = "0.3"
+global-hotkey = "0.8"
+image = { version = "0.25", default-features = false, features = ["png"] }
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"
+objc2-service-management = "0.3"
+reqwest = { version = "0.11.27", default-features = false, features = ["blocking", "native-tls"] }
+tray-icon = "0.21"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+reqwest = { version = "0.11.27", default-features = false, features = ["blocking", "rustls-tls"] }
+
+[dev-dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", features = [
+    "test-support",
+] }
+verge-helper = { path = "../verge-helper" }

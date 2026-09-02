@@ -8,4 +8,4 @@ mihomo_bin=$("$script_dir/ensure-mihomo.sh")
 export VERGE_MIHOMO_BIN=$mihomo_bin
 
 cd "$repo_dir"
-exec cargo +1.97.1 run --manifest-path apps/verge-gpui/Cargo.toml "$@"
+exec cargo +1.97.1 run --manifest-path apps/verge/Cargo.toml --bin verge-gpui "$@"

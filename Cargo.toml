@@ -1,15 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "apps/verge-gpui",
+    "apps/verge",
     "apps/verge-helper",
     "crates/verge-helper-protocol",
-    "crates/verge-application",
-    "crates/verge-config",
-    "crates/verge-core",
-    "crates/verge-domain",
-    "crates/verge-ipc",
-    "crates/verge-platform",
-    "crates/verge-runtime",
-    "crates/verge-ui",
 ]

@@ -8258,70 +8258,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
-name = "verge-application"
-version = "0.1.0"
-dependencies = [
- "flate2",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "verge-config",
- "verge-core",
- "verge-domain",
- "verge-platform",
-]
-
-[[package]]
-name = "verge-config"
+name = "verge"
 version = "0.1.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",
- "getrandom 0.3.4",
- "serde",
- "serde_json",
- "serde_yaml",
- "verge-domain",
- "zeroize",
-]
-
-[[package]]
-name = "verge-core"
-version = "0.1.0"
-dependencies = [
- "percent-encoding",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tungstenite",
- "verge-domain",
-]
-
-[[package]]
-name = "verge-domain"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "verge-gpui"
-version = "0.1.0"
-dependencies = [
+ "dispatch2",
+ "flate2",
+ "fs2",
  "futures",
  "getrandom 0.4.3",
+ "global-hotkey",
  "gpui",
  "gpui-component",
  "gpui-component-assets",
  "gpui_platform",
+ "image",
+ "libc",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "objc2-service-management",
+ "percent-encoding",
+ "reqwest",
+ "serde",
  "serde_json",
- "verge-domain",
- "verge-ipc",
- "verge-platform",
- "verge-runtime",
- "verge-ui",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "tray-icon",
+ "tungstenite",
+ "verge-helper",
+ "verge-helper-protocol",
+ "zeroize",
 ]
 
 [[package]]
@@ -8340,63 +8308,6 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "verge-ipc"
-version = "0.1.0"
-dependencies = [
- "futures",
- "libc",
- "serde",
- "serde_json",
- "verge-domain",
- "verge-ui",
-]
-
-[[package]]
-name = "verge-platform"
-version = "0.1.0"
-dependencies = [
- "fs2",
- "global-hotkey",
- "image",
- "libc",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "objc2-service-management",
- "serde_json",
- "sha2 0.10.9",
- "tray-icon",
- "verge-domain",
- "verge-helper",
- "verge-helper-protocol",
-]
-
-[[package]]
-name = "verge-runtime"
-version = "0.1.0"
-dependencies = [
- "dispatch2",
- "getrandom 0.4.3",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "serde_json",
- "verge-application",
- "verge-config",
- "verge-core",
- "verge-domain",
- "verge-ipc",
- "verge-platform",
- "verge-ui",
-]
-
-[[package]]
-name = "verge-ui"
-version = "0.1.0"
-dependencies = [
- "serde",
- "verge-domain",
 ]
 
 [[package]]
