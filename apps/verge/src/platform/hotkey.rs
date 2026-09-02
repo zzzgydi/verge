@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
 use crate::domain::{AppError, ErrorCode, GlobalHotkeySpec};
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
 
 /// 全局快捷键注册后端抽象，便于用 fake 测注册/回滚逻辑。
 pub trait HotkeyBackend {

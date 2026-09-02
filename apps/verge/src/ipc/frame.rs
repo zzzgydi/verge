@@ -5,8 +5,8 @@
 
 use std::io::{self, Read, Write};
 
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 /// 单帧负载上限（16 MiB）。正常消息远小于此；超过即视为协议错误并断开。
 pub const MAX_FRAME_BYTES: u64 = 16 * 1024 * 1024;

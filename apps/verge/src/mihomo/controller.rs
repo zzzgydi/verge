@@ -5,12 +5,12 @@ use std::{
     time::Duration,
 };
 
-use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
-use serde::Deserialize;
 use crate::domain::{
     AppError, ErrorCode, NetworkSettings, ProviderKind, ProviderSummary, ProxyGroup, RuleEntry,
     RunMode,
 };
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+use serde::Deserialize;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ControllerRequest {

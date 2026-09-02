@@ -37,25 +37,22 @@ Verge.app
 
 The GUI sends typed requests over a local Unix socket. It never calls Mihomo or macOS system APIs directly. The daemon owns the long-lived state, validates commands, manages the sidecar, and streams batched realtime events back to the GUI.
 
-Main components:
+The workspace keeps only boundaries that correspond to independently built or privileged programs:
 
 | Path | Responsibility |
 |---|---|
-| `apps/verge-gpui` | GPUI window and daemon entry point |
+| `apps/verge` | Main application crate: GPUI, daemon, IPC, commands, profiles, Mihomo, and macOS integration |
 | `apps/verge-helper` | Privileged TUN helper |
-| `crates/verge-domain` | Commands, state, errors, and risk levels |
-| `crates/verge-config` | Profiles, merge rules, settings, scheduling, and encrypted backups |
-| `crates/verge-core` | Mihomo process, REST/WebSocket clients, validation, and sidecar verification |
-| `crates/verge-application` | Use cases, authorization, update flows, and rollback |
-| `crates/verge-platform` | macOS tray, proxy settings, Keychain, notifications, login item, and helper installation |
-| `crates/verge-runtime` | Daemon composition and event loop |
-| `crates/verge-ipc` | Local IPC framing, handshake, routing, and peer validation |
-| `crates/verge-ui` | UI state and typed actions without GPUI dependencies |
+| `crates/verge-helper-protocol` | Small shared protocol between the application and privileged helper |
 | `assets/icons` | Application and menu bar icons |
 | `assets/branding` | Reusable brand artwork |
 | `assets/mihomo/manifest.json` | Pinned Mihomo release and SHA-256 checksums |
 
-The earlier React/Tauri/sing-box implementation and the Phase 0 spike projects have been removed. The repository now has one Rust workspace for the GPUI application, daemon, helper, and supporting crates.
+The main crate is organized by Rust modules under `apps/verge/src/`. Module privacy keeps UI,
+daemon, protocol, application, configuration, Mihomo, and platform responsibilities separated
+without requiring a separate Cargo package for every layer.
+
+The earlier React/Tauri/sing-box implementation and the Phase 0 spike projects have been removed.
 
 ## Requirements
 
@@ -139,7 +136,7 @@ Build and sign the bundle:
 
 ```bash
 VERGE_MIHOMO_BIN=/tmp/mihomo \
-  apps/verge-gpui/scripts/build-macos-app.sh
+  apps/verge/scripts/build-macos-app.sh
 ```
 
 The output is `dist/Verge.app`. The script verifies the unpacked Mihomo SHA-256, builds the GUI and helper in release mode, assembles the bundle, and runs `codesign --verify --deep --strict`. It uses an ad-hoc signature by default.
@@ -149,7 +146,7 @@ For a release candidate, provide a Developer ID Application identity:
 ```bash
 VERGE_MIHOMO_BIN=/tmp/mihomo \
 VERGE_CODESIGN_IDENTITY="Developer ID Application: Example (TEAMID)" \
-  apps/verge-gpui/scripts/build-macos-app.sh
+  apps/verge/scripts/build-macos-app.sh
 ```
 
 Notarization and distribution automation are not part of the current build script.
@@ -168,10 +165,10 @@ Real Mihomo contract tests are ignored by default:
 
 ```bash
 MIHOMO_BIN=/absolute/path/to/mihomo \
-  cargo +1.97.1 test -p verge-core --test mihomo_contract -- --ignored
+  cargo +1.97.1 test -p verge --test mihomo_contract -- --ignored
 
 MIHOMO_BIN=/absolute/path/to/mihomo \
-  cargo +1.97.1 test -p verge-application --test mihomo_runtime_contract -- --ignored
+  cargo +1.97.1 test -p verge --test mihomo_runtime_contract -- --ignored
 ```
 
 The binary must match the pinned executable checksum in `assets/mihomo/manifest.json`.

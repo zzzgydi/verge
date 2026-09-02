@@ -15,9 +15,9 @@ use std::{
     time::Duration,
 };
 
-use futures::channel::mpsc::UnboundedReceiver;
 use crate::domain::RealtimeEvent;
 use crate::ui::UiRequestEnvelope;
+use futures::channel::mpsc::UnboundedReceiver;
 
 use super::{
     frame,
@@ -49,14 +49,9 @@ pub enum ConnectError {
     /// socket 不存在或无法连接（无守护进程）。
     Io(std::io::Error),
     /// 协议版本不匹配。
-    VersionMismatch {
-        server: u32,
-        client: u32,
-    },
+    VersionMismatch { server: u32, client: u32 },
     /// 服务端主动关闭（如守护已有关闭原因）。
-    Closed {
-        reason: String,
-    },
+    Closed { reason: String },
     /// 已有主 GUI 实例在运行，本实例应直接退出（守护已通知旧实例激活窗口）。
     Duplicate,
     /// 握手阶段收到非法消息。
@@ -99,33 +94,32 @@ impl IpcClient {
         )
         .map_err(ConnectError::Io)?;
 
-        let initial = match frame::read_message::<ClientMessage>(&mut reader)
-            .map_err(ConnectError::Io)?
-        {
-            ClientMessage::Welcome {
-                protocol_version,
-                initial,
-            } if protocol_version == PROTOCOL_VERSION => initial,
-            ClientMessage::Welcome {
-                protocol_version, ..
-            } => {
-                return Err(ConnectError::VersionMismatch {
-                    server: protocol_version,
-                    client: PROTOCOL_VERSION,
-                });
-            }
-            ClientMessage::Closed { reason } => {
-                return Err(ConnectError::Closed { reason });
-            }
-            ClientMessage::Duplicate => {
-                return Err(ConnectError::Duplicate);
-            }
-            other => {
-                return Err(ConnectError::Protocol(format!(
-                    "unexpected handshake message: {other:?}"
-                )));
-            }
-        };
+        let initial =
+            match frame::read_message::<ClientMessage>(&mut reader).map_err(ConnectError::Io)? {
+                ClientMessage::Welcome {
+                    protocol_version,
+                    initial,
+                } if protocol_version == PROTOCOL_VERSION => initial,
+                ClientMessage::Welcome {
+                    protocol_version, ..
+                } => {
+                    return Err(ConnectError::VersionMismatch {
+                        server: protocol_version,
+                        client: PROTOCOL_VERSION,
+                    });
+                }
+                ClientMessage::Closed { reason } => {
+                    return Err(ConnectError::Closed { reason });
+                }
+                ClientMessage::Duplicate => {
+                    return Err(ConnectError::Duplicate);
+                }
+                other => {
+                    return Err(ConnectError::Protocol(format!(
+                        "unexpected handshake message: {other:?}"
+                    )));
+                }
+            };
 
         // 握手完成后读线程应无限阻塞等待后续消息。
         reader
@@ -163,7 +157,10 @@ impl IpcClient {
                         }
                     }
                     Ok(ClientMessage::ActivateWindow) => {
-                        if events_tx.unbounded_send(ClientEvent::ActivateWindow).is_err() {
+                        if events_tx
+                            .unbounded_send(ClientEvent::ActivateWindow)
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -217,10 +214,10 @@ impl IpcClient {
 
 #[cfg(test)]
 mod tests {
+    use super::super::server::{IpcServer, IpcServerEvent};
     use super::*;
     use futures::StreamExt;
-    use super::super::server::{IpcServer, IpcServerEvent};
-    
+
     fn temp_socket(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "verge-ipc-client-test-{}-{name}",
@@ -279,10 +276,7 @@ mod tests {
         );
         std::thread::sleep(Duration::from_millis(100));
         let error = IpcClient::connect(&socket, "test").unwrap_err();
-        assert!(matches!(
-            error,
-            ConnectError::VersionMismatch { .. }
-        ));
+        assert!(matches!(error, ConnectError::VersionMismatch { .. }));
         let _ = std::fs::remove_file(&socket);
     }
 

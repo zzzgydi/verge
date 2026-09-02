@@ -40,12 +40,12 @@
 
 use std::{fmt, fs, path::Path};
 
-use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use crate::domain::{AppError, AppUpdateStatus, ErrorCode};
 use crate::platform::{
     CommandRunner, bundle_short_version, directory_writable, run_privileged_script, shell_quote,
 };
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use super::ArtifactFetcher;
 

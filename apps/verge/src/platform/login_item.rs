@@ -1,5 +1,5 @@
-use objc2_service_management::{SMAppService, SMAppServiceStatus};
 use crate::domain::{AppError, ErrorCode};
+use objc2_service_management::{SMAppService, SMAppServiceStatus};
 
 use super::LoginItemService;
 

@@ -10,14 +10,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::domain::{
+    AppError, Connection, ConnectionSnapshot, ErrorCode, RealtimeEvent, RealtimeTopic,
+};
 use serde::Deserialize;
 use tungstenite::{
     Error as WebSocketError, Message, client,
     client::IntoClientRequest,
     http::{HeaderValue, header::AUTHORIZATION},
-};
-use crate::domain::{
-    AppError, Connection, ConnectionSnapshot, ErrorCode, RealtimeEvent, RealtimeTopic,
 };
 
 fn topic_path(topic: RealtimeTopic) -> &'static str {

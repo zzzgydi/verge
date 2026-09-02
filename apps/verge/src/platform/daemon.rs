@@ -1,8 +1,7 @@
 //! 双进程守护相关的平台辅助：socket 路径、守护进程拉起、无窗口 AppKit 事件循环。
 
 use std::{
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };

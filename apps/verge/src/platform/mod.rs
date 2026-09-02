@@ -14,15 +14,11 @@ use crate::domain::{
     AppError, AutoProxyState, ErrorCode, HelperStatus, ProxyEndpoint, ProxyProtocolState,
     SystemProxyServiceState, SystemProxyState,
 };
-use verge_helper_protocol::{
-    HelperRequest, HelperResponse, MAX_REQUEST_BYTES, PROTOCOL_VERSION,
-};
 pub use verge_helper_protocol::TunConfig;
+use verge_helper_protocol::{HelperRequest, HelperResponse, MAX_REQUEST_BYTES, PROTOCOL_VERSION};
 
 mod app_bundle;
-pub use app_bundle::{
-    bundle_short_version, current_app_bundle, directory_writable,
-};
+pub use app_bundle::{bundle_short_version, current_app_bundle, directory_writable};
 
 mod helper_install;
 pub use helper_install::{
@@ -39,9 +35,7 @@ pub use tray::{TrayCommand, TrayService, TraySnapshot};
 #[cfg(target_os = "macos")]
 mod hotkey;
 #[cfg(target_os = "macos")]
-pub use hotkey::{
-    GlobalHotKeyBackend, HotkeyBackend, HotkeyRegistration, spawn_hotkey_listener,
-};
+pub use hotkey::{GlobalHotKeyBackend, HotkeyBackend, HotkeyRegistration, spawn_hotkey_listener};
 
 mod daemon;
 pub use daemon::{
@@ -80,11 +74,15 @@ struct UnsupportedLoginItem;
 #[cfg(not(target_os = "macos"))]
 impl LoginItemService for UnsupportedLoginItem {
     fn status(&mut self) -> Result<bool, AppError> {
-        Err(platform_error("launch at login is not supported on this platform"))
+        Err(platform_error(
+            "launch at login is not supported on this platform",
+        ))
     }
 
     fn set_enabled(&mut self, _enabled: bool) -> Result<(), AppError> {
-        Err(platform_error("launch at login is not supported on this platform"))
+        Err(platform_error(
+            "launch at login is not supported on this platform",
+        ))
     }
 }
 
@@ -1090,7 +1088,10 @@ mod tests {
         item.set_enabled(false).unwrap();
         assert_eq!(item.calls, ["status", "enable", "status", "disable"]);
 
-        item.failure = Some(AppError::new(ErrorCode::PlatformFailed, "not a bundled .app"));
+        item.failure = Some(AppError::new(
+            ErrorCode::PlatformFailed,
+            "not a bundled .app",
+        ));
         let error = item.set_enabled(true).unwrap_err();
         assert_eq!(error.code, ErrorCode::PlatformFailed);
         assert!(error.message.contains("not a bundled .app"));
@@ -1261,7 +1262,9 @@ mod tests {
     fn snapshot_reads_socks_pac_and_bypass() {
         let directory = TestDir::new();
         let mut runner = FakeRunner::default();
-        runner.outputs.push_back(Ok(output(false, "old.local", 8080)));
+        runner
+            .outputs
+            .push_back(Ok(output(false, "old.local", 8080)));
         runner
             .outputs
             .push_back(Ok(output(true, "secure.local", 8443)));
@@ -1311,7 +1314,11 @@ mod tests {
         let mut proxy = MacSystemProxy::new(runner, &recovery);
         let services = ["Wi-Fi".into()];
         let state = proxy
-            .set_socks(&services, true, &ProxyEndpoint::new("127.0.0.1", 7891).unwrap())
+            .set_socks(
+                &services,
+                true,
+                &ProxyEndpoint::new("127.0.0.1", 7891).unwrap(),
+            )
             .unwrap();
         assert!(state.recovery_pending);
         let calls = &proxy.runner.calls;
@@ -1331,13 +1338,10 @@ mod tests {
         );
         proxy.recover_pending().unwrap();
         assert!(!recovery.exists());
-        assert!(
-            proxy
-                .runner
-                .calls
-                .iter()
-                .any(|call| call.get(1).is_some_and(|arg| arg == "-setsocksfirewallproxy"))
-        );
+        assert!(proxy.runner.calls.iter().any(|call| {
+            call.get(1)
+                .is_some_and(|arg| arg == "-setsocksfirewallproxy")
+        }));
     }
 
     #[test]

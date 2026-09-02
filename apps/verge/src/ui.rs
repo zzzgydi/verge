@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-use serde::{Deserialize, Serialize};
 use crate::domain::{
     AppCommand, AppCommandOutput, AppCommandResult, AppError, AppUpdateStatus, ApplicationSettings,
     ApplicationSettingsSnapshot, CommandContext, CommandRisk, ConnectionSnapshot, HelperStatus,
@@ -10,6 +9,7 @@ use crate::domain::{
     SettingsImportPreview, SettingsScope, SystemProxyCommand, SystemProxyCommandResult,
     SystemProxyState, TrafficEvent, UpdatePolicy,
 };
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Page {

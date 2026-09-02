@@ -1,12 +1,12 @@
 use std::rc::Rc;
 
+use crate::ui::UiAction;
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
     ActiveTheme as _, IconName, Sizable as _, StyledExt as _,
     button::{Button, ButtonVariants as _},
     h_flex, v_flex, v_virtual_list,
 };
-use crate::ui::UiAction;
 
 use crate::{i18n::tr, view::MainView};
 

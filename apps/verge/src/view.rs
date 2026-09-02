@@ -1,10 +1,15 @@
 use std::rc::Rc;
 use std::sync::mpsc;
 
+use crate::domain::{
+    AppError, CommandActor, CommandApproval, CommandContext, CommandRisk, ErrorCode, ProfileId,
+    ProfileSource, SettingsScope, ThemePreference, UpdatePolicy,
+};
+use crate::ui::{CoreStatus, Page, UiAction, UiRequestEnvelope, UiState};
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Root, Sizable as _, StyledExt as _,
-    TitleBar, WindowExt as _,
+    TitleBar, VirtualListScrollHandle, WindowExt as _,
     alert::Alert,
     button::{Button, ButtonVariants as _},
     dialog::DialogButtonProps,
@@ -22,11 +27,6 @@ use gpui_component::{
     theme::{Theme, ThemeMode},
     v_flex,
 };
-use crate::domain::{
-    AppError, CommandActor, CommandApproval, CommandContext, CommandRisk, ErrorCode, ProfileId,
-    ProfileSource, SettingsScope, ThemePreference, UpdatePolicy,
-};
-use crate::ui::{CoreStatus, Page, UiAction, UiRequestEnvelope, UiState};
 
 use crate::{
     i18n::{self, Lang, tr},
@@ -94,6 +94,8 @@ pub struct MainView {
     /// 合并结果抽屉的只读编辑器。
     pub merged_editor: Entity<TextareaState>,
     pub connections_table: Entity<TableState<ConnectionsDelegate>>,
+    /// 日志页虚拟列表滚动位置。
+    pub log_scroll: VirtualListScrollHandle,
     /// 日志级别过滤，None 表示全部。
     pub log_filter: Option<&'static str>,
     /// 点击“预览导入”后等待预览结果再打开确认弹窗的设置文件路径。
@@ -221,6 +223,7 @@ impl MainView {
             merge_editor: cx.new(|cx| TextareaState::new(window, cx)),
             merged_editor: cx.new(|cx| TextareaState::new(window, cx)),
             connections_table,
+            log_scroll: VirtualListScrollHandle::new(),
             log_filter: None,
             pending_settings_import: None,
             sheet_state: cx.new(|_| SheetState::default()),

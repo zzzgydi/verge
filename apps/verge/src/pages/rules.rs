@@ -1,5 +1,7 @@
 use std::rc::Rc;
 
+use crate::domain::ProviderKind;
+use crate::ui::UiAction;
 use gpui::*;
 use gpui_component::{
     ActiveTheme as _, Sizable as _,
@@ -7,8 +9,6 @@ use gpui_component::{
     group_box::GroupBox,
     h_flex, v_flex, v_virtual_list,
 };
-use crate::domain::ProviderKind;
-use crate::ui::UiAction;
 
 use crate::{
     i18n::{self, tr},

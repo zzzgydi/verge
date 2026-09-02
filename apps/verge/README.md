@@ -1,16 +1,18 @@
 # Verge GPUI application
 
-`verge-gpui` is the window and daemon entry point in the repository's unified Rust workspace.
-Run `scripts/check-rust-workspaces.sh` from the repository root to validate all crates.
+`verge` is the main application crate. Its `verge-gpui` binary is both the GPUI window entry
+point and the daemon entry point. Run `scripts/check-rust-workspaces.sh` from the repository root
+to validate the workspace.
 
-This is the formal GPUI window target. It consumes `verge-ui` state and emits only typed
-domain requests; views do not call Mihomo or macOS APIs directly.
+The crate keeps UI state, typed protocol messages, daemon orchestration, configuration, Mihomo,
+and platform integration in separate Rust modules. Views emit typed requests and do not call
+Mihomo or macOS APIs directly.
 
 The GUI provides Home, Proxies, Profiles, Connections, Logs, and Settings pages. The daemon mode
 owns the native tray, Mihomo lifecycle, persistence, and long-lived system state.
 
 ```bash
-cargo +1.97.1 check -p verge-gpui
+cargo +1.97.1 check -p verge --all-targets
 make dev
 ```
 
@@ -23,7 +25,7 @@ Build an Apple Silicon `.app` with the pinned sidecar:
 
 ```bash
 VERGE_MIHOMO_BIN=/absolute/path/to/mihomo \
-  apps/verge-gpui/scripts/build-macos-app.sh
+  apps/verge/scripts/build-macos-app.sh
 ```
 
 The result is `dist/Verge.app`. The script verifies the sidecar SHA-256 and uses an ad-hoc
@@ -34,7 +36,7 @@ release candidate. The script also stamps `CFBundleShortVersionString` / `CFBund
 ## Application self-update
 
 The Settings page can check `github.com/zzzgydi/verge` releases and update the installed
-`Verge.app` in place. Release format contract (see `crates/verge-application/src/app_update.rs`
+`Verge.app` in place. Release format contract (see `src/application/app_update.rs`
 for the full rules):
 
 - Release tag is a semantic version with optional `v` prefix; drafts and pre-releases are skipped.

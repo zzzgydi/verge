@@ -1,8 +1,8 @@
+use crate::domain::{AppError, ErrorCode};
 use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
     menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem},
 };
-use crate::domain::{AppError, ErrorCode};
 
 const TRAY_ICON: &[u8] = include_bytes!("../../../../assets/icons/tray-logo.png");
 
@@ -131,10 +131,7 @@ impl TrayService {
         );
         self.speed.set_text(&speed);
         // 语言变化时重贴菜单文案（菜单项按 id 复用，无需重建菜单）。
-        let mut language = self
-            .language
-            .lock()
-            .expect("tray language mutex poisoned");
+        let mut language = self.language.lock().expect("tray language mutex poisoned");
         if *language != snapshot.language {
             *language = snapshot.language.clone();
             let labels = tray_labels(&snapshot.language);

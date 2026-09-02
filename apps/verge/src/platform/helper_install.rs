@@ -12,8 +12,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use sha2::{Digest, Sha256};
 use crate::domain::{AppError, ErrorCode};
+use sha2::{Digest, Sha256};
 
 use super::{CommandRunner, OSASCRIPT};
 
@@ -169,9 +169,7 @@ impl<R: CommandRunner> MacHelperInstaller<R> {
     /// 写 LaunchDaemon plist 到暂存目录（非特权），供提权脚本拷贝。
     fn stage_daemon_plist(&self) -> Result<PathBuf, AppError> {
         fs::create_dir_all(&self.staging_dir).map_err(storage_error)?;
-        let path = self
-            .staging_dir
-            .join(format!("{HELPER_LABEL}.plist"));
+        let path = self.staging_dir.join(format!("{HELPER_LABEL}.plist"));
         let content = daemon_plist(
             &self.layout.helper_binary(),
             Path::new(HELPER_SOCKET_PATH),
@@ -249,7 +247,11 @@ fn install_script(
     let plist = layout.daemon_plist();
     Ok([
         format!("/bin/mkdir -p {}", shell_quote(&layout.install_dir)?),
-        format!("/usr/bin/ditto {} {}", shell_quote(source)?, shell_quote(&helper)?),
+        format!(
+            "/usr/bin/ditto {} {}",
+            shell_quote(source)?,
+            shell_quote(&helper)?
+        ),
         format!("/usr/sbin/chown root:wheel {}", shell_quote(&helper)?),
         format!("/bin/chmod 755 {}", shell_quote(&helper)?),
         format!(
@@ -310,9 +312,9 @@ fn daemon_plist(helper: &Path, socket: &Path, uid: u32) -> Result<String, AppErr
 
 /// plist 字符串值的防御性校验（路径不含 XML 特殊字符与控制字符）。
 fn plist_value(path: &Path) -> Result<String, AppError> {
-    let value = path.to_str().ok_or_else(|| {
-        AppError::new(ErrorCode::InvalidInput, "helper path is not valid UTF-8")
-    })?;
+    let value = path
+        .to_str()
+        .ok_or_else(|| AppError::new(ErrorCode::InvalidInput, "helper path is not valid UTF-8"))?;
     if value
         .chars()
         .any(|character| character.is_control() || matches!(character, '<' | '>' | '&'))
@@ -328,9 +330,9 @@ fn plist_value(path: &Path) -> Result<String, AppError> {
 /// shell 参数校验 + 单引号包裹：绝对路径、无控制字符、无单引号（有则拒绝而非转义）。
 /// 提权脚本的所有路径参数必须经过它（应用更新替换脚本同用）。
 pub fn shell_quote(path: &Path) -> Result<String, AppError> {
-    let value = path.to_str().ok_or_else(|| {
-        AppError::new(ErrorCode::InvalidInput, "helper path is not valid UTF-8")
-    })?;
+    let value = path
+        .to_str()
+        .ok_or_else(|| AppError::new(ErrorCode::InvalidInput, "helper path is not valid UTF-8"))?;
     if !path.is_absolute()
         || value
             .chars()
@@ -418,10 +420,7 @@ mod tests {
         }
     }
 
-    fn make_installer(
-        runner: FakeRunner,
-        dir: &TestDir,
-    ) -> MacHelperInstaller<FakeRunner> {
+    fn make_installer(runner: FakeRunner, dir: &TestDir) -> MacHelperInstaller<FakeRunner> {
         MacHelperInstaller::new(runner, layout_in(dir), dir.0.join("staging"), 501).unwrap()
     }
 
@@ -467,11 +466,14 @@ mod tests {
             format!("/bin/launchctl bootstrap system '{}'", plist.display()),
             format!("/bin/launchctl kickstart -k system/{HELPER_LABEL}"),
         ] {
-            assert!(install.contains(&fragment), "install script misses {fragment}");
+            assert!(
+                install.contains(&fragment),
+                "install script misses {fragment}"
+            );
         }
         // 暂存 plist 内容：固定 label/socket + 当前用户 UID。
-        let staged = fs::read_to_string(dir.0.join(format!("staging/{HELPER_LABEL}.plist")))
-            .unwrap();
+        let staged =
+            fs::read_to_string(dir.0.join(format!("staging/{HELPER_LABEL}.plist"))).unwrap();
         assert!(staged.contains(&format!("<string>{HELPER_LABEL}</string>")));
         assert!(staged.contains(&format!("<string>{HELPER_SOCKET_PATH}</string>")));
         assert!(staged.contains(&format!("<string>{}</string>", helper.display())));
@@ -529,12 +531,14 @@ mod tests {
         let bundle = bundle_in(&dir, b"verge-helper-binary");
         let mut runner = FakeRunner::default();
         runner.outputs.push_back(Ok(String::new()));
-        runner
-            .outputs
-            .push_back(Err(AppError::new(ErrorCode::PlatformFailed, "install broke")));
-        runner
-            .outputs
-            .push_back(Err(AppError::new(ErrorCode::PlatformFailed, "rollback broke")));
+        runner.outputs.push_back(Err(AppError::new(
+            ErrorCode::PlatformFailed,
+            "install broke",
+        )));
+        runner.outputs.push_back(Err(AppError::new(
+            ErrorCode::PlatformFailed,
+            "rollback broke",
+        )));
         let mut installer = make_installer(runner, &dir);
 
         let error = installer.install(&bundle).unwrap_err();
@@ -588,7 +592,10 @@ mod tests {
         .unwrap();
         let bundle = discover_bundled_helper(&resources).unwrap();
         assert_eq!(bundle.binary, resources.join("helper/verge-helper"));
-        assert_eq!(bundle.expected_sha256, format!("{:x}", Sha256::digest(b"helper")));
+        assert_eq!(
+            bundle.expected_sha256,
+            format!("{:x}", Sha256::digest(b"helper"))
+        );
 
         let missing = discover_bundled_helper(&dir.0.join("empty")).unwrap_err();
         assert_eq!(missing.code, ErrorCode::PlatformFailed);
@@ -601,7 +608,8 @@ mod tests {
             install_dir: PathBuf::from("relative"),
             ..layout_in(&dir)
         };
-        let result = MacHelperInstaller::new(FakeRunner::default(), layout, dir.0.join("staging"), 501);
+        let result =
+            MacHelperInstaller::new(FakeRunner::default(), layout, dir.0.join("staging"), 501);
         assert_eq!(
             result.err().map(|error| error.code),
             Some(ErrorCode::InvalidInput)

@@ -3,9 +3,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::domain::{AppError, ErrorCode};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use crate::domain::{AppError, ErrorCode};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct SidecarManifest {

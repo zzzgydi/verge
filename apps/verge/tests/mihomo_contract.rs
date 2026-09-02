@@ -7,11 +7,11 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use verge::domain::ErrorCode;
 use verge::mihomo::{
     CoreSupervisor, MihomoClient, MihomoConfig, RealtimeEvent, RealtimeOptions,
     RealtimeSubscription, RealtimeTopic, RunMode, SidecarManifest, TcpControllerTransport,
 };
-use verge::domain::ErrorCode;
 
 struct TestDir(PathBuf);
 

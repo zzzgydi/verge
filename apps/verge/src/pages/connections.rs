@@ -1,5 +1,7 @@
 use std::sync::mpsc;
 
+use crate::domain::{Connection, ConnectionSnapshot};
+use crate::ui::UiAction;
 use gpui::*;
 use gpui_component::{
     ActiveTheme as _, Sizable as _,
@@ -10,8 +12,6 @@ use gpui_component::{
     tooltip::Tooltip,
     v_flex,
 };
-use crate::domain::{Connection, ConnectionSnapshot};
-use crate::ui::UiAction;
 
 use crate::{
     format,

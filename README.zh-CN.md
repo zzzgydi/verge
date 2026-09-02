@@ -37,25 +37,20 @@ Verge.app
 
 GUI 通过本机 Unix socket 发送 typed request，不直接调用 Mihomo 或 macOS 系统 API。守护进程持有长期状态，校验并执行命令，管理 Mihomo，再把批量实时事件发回 GUI。
 
-主要模块如下：
+workspace 只保留与独立程序或权限边界对应的包：
 
 | 路径 | 职责 |
 |---|---|
-| `apps/verge-gpui` | GPUI 窗口和守护模式入口 |
+| `apps/verge` | 主应用 crate，包含 GPUI、守护进程、IPC、命令、Profile、Mihomo 和 macOS 集成 |
 | `apps/verge-helper` | 管理 TUN 的特权 helper |
-| `crates/verge-domain` | 命令、状态、错误码和风险等级 |
-| `crates/verge-config` | Profile、Merge、设置、调度和加密备份 |
-| `crates/verge-core` | Mihomo 进程、REST/WebSocket、配置校验和 sidecar 校验 |
-| `crates/verge-application` | 应用用例、权限检查、更新和回滚 |
-| `crates/verge-platform` | macOS 托盘、系统代理、Keychain、通知、登录项和 helper 安装 |
-| `crates/verge-runtime` | 守护进程组装与事件循环 |
-| `crates/verge-ipc` | 本机 IPC 帧、握手、路由和对端校验 |
-| `crates/verge-ui` | 不依赖 GPUI 的界面状态和 typed action |
+| `crates/verge-helper-protocol` | 主应用和特权 helper 共用的窄协议 |
 | `assets/icons` | 应用图标和菜单栏图标 |
 | `assets/branding` | 可复用的品牌素材 |
 | `assets/mihomo/manifest.json` | 固定 Mihomo 版本和 SHA-256 |
 
-早期 React/Tauri/sing-box 实现和 Phase 0 spike 工程已经移除。仓库现在只保留一个 Rust workspace，统一管理 GPUI 应用、守护进程、helper 和各层 crate。
+主应用内部按 `apps/verge/src/` 下的 Rust module 划分职责。UI、守护进程、协议、应用编排、配置、Mihomo 和平台代码仍保持边界，但不再为每一层单独建立 Cargo package。
+
+早期 React/Tauri/sing-box 实现和 Phase 0 spike 工程已经移除。
 
 ## 环境要求
 
@@ -138,7 +133,7 @@ chmod 755 /tmp/mihomo
 
 ```bash
 VERGE_MIHOMO_BIN=/tmp/mihomo \
-  apps/verge-gpui/scripts/build-macos-app.sh
+  apps/verge/scripts/build-macos-app.sh
 ```
 
 产物位于 `dist/Verge.app`。脚本会校验解压后的 Mihomo SHA-256，以 release 模式构建 GUI 和 helper，组装应用包，并执行 `codesign --verify --deep --strict`。默认使用 ad-hoc 签名。
@@ -148,7 +143,7 @@ VERGE_MIHOMO_BIN=/tmp/mihomo \
 ```bash
 VERGE_MIHOMO_BIN=/tmp/mihomo \
 VERGE_CODESIGN_IDENTITY="Developer ID Application: Example (TEAMID)" \
-  apps/verge-gpui/scripts/build-macos-app.sh
+  apps/verge/scripts/build-macos-app.sh
 ```
 
 当前脚本还不负责公证和发布。
@@ -167,10 +162,10 @@ VERGE_CODESIGN_IDENTITY="Developer ID Application: Example (TEAMID)" \
 
 ```bash
 MIHOMO_BIN=/absolute/path/to/mihomo \
-  cargo +1.97.1 test -p verge-core --test mihomo_contract -- --ignored
+  cargo +1.97.1 test -p verge --test mihomo_contract -- --ignored
 
 MIHOMO_BIN=/absolute/path/to/mihomo \
-  cargo +1.97.1 test -p verge-application --test mihomo_runtime_contract -- --ignored
+  cargo +1.97.1 test -p verge --test mihomo_runtime_contract -- --ignored
 ```
 
 传入的二进制必须符合 `assets/mihomo/manifest.json` 中记录的摘要。

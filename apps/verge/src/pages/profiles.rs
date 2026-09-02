@@ -1,3 +1,5 @@
+use crate::domain::{Profile, ProfileSource, UpdatePolicy};
+use crate::ui::UiAction;
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Sizable as _,
@@ -8,8 +10,6 @@ use gpui_component::{
     tag::Tag,
     v_flex,
 };
-use crate::domain::{Profile, ProfileSource, UpdatePolicy};
-use crate::ui::UiAction;
 
 use crate::{
     format,

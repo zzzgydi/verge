@@ -1,3 +1,5 @@
+use crate::domain::RunMode;
+use crate::ui::{CoreStatus, UiAction};
 use gpui::*;
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, StyledExt as _,
@@ -8,8 +10,6 @@ use gpui_component::{
     switch::Switch,
     v_flex,
 };
-use crate::domain::RunMode;
-use crate::ui::{CoreStatus, UiAction};
 
 use crate::{
     format,

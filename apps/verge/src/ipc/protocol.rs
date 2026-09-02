@@ -4,11 +4,11 @@
 //! 单进程时代完全一致，IPC 只换传输层。新增的消息只负责连接生命周期（握手、
 //! 订阅、窗口激活、重复实例）与批量实时事件转发。
 
-use serde::{Deserialize, Serialize};
 use crate::domain::{
     ApplicationSettingsSnapshot, Profile, ProfileId, RealtimeEvent, RuntimeSettings,
 };
 use crate::ui::{UiRequestEnvelope, UiResponseEnvelope};
+use serde::{Deserialize, Serialize};
 
 /// IPC 协议版本。守护进程与 GUI 进程必须一致；升级不匹配时拒绝连接。
 /// v3：新增 QuitApplication 命令，让 macOS 应用菜单可要求守护进程完成清理后退出。

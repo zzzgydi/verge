@@ -6,17 +6,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::domain::{
+    AppError, ApplicationSettings, ErrorCode, ProfileId, ProxyEndpoint, SettingsFieldChange,
+    SettingsImportPreview,
+};
+pub use crate::domain::{Profile, ProfileSource, UpdatePolicy};
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
     aead::{Aead, KeyInit, Payload},
 };
 use serde::{Deserialize, Serialize};
-use crate::domain::{
-    AppError, ApplicationSettings, ErrorCode, ProfileId, ProxyEndpoint, SettingsFieldChange,
-    SettingsImportPreview,
-};
-pub use crate::domain::{Profile, ProfileSource, UpdatePolicy};
 use zeroize::Zeroize;
 
 const MANIFEST_VERSION: u32 = 1;
@@ -429,7 +429,9 @@ pub fn diff_application_settings(
         .filter(|(field, new)| current.get(*field) != Some(*new))
         .map(|(field, new)| SettingsFieldChange {
             field: field.clone(),
-            old: current.get(field).map_or_else(|| "null".into(), render_json_value),
+            old: current
+                .get(field)
+                .map_or_else(|| "null".into(), render_json_value),
             new: render_json_value(new),
         })
         .collect::<Vec<_>>();
@@ -1378,7 +1380,8 @@ mod tests {
             },
             policy,
             1_000,
-                    None)
+            None,
+        )
         .unwrap()
     }
 
@@ -1425,7 +1428,8 @@ mod tests {
                     },
                     UpdatePolicy::Manual,
                     1_000,
-                    None)
+                    None,
+                )
                 .unwrap(),
                 "mixed-port: 7890\nsecret: private-yaml-secret\n",
             )
@@ -1465,7 +1469,8 @@ mod tests {
                     ProfileSource::Local,
                     UpdatePolicy::Manual,
                     2_000,
-                    None)
+                    None,
+                )
                 .unwrap(),
                 "mixed-port: 7891\n",
             )
@@ -1578,7 +1583,8 @@ mod tests {
                     },
                     UpdatePolicy::Interval { seconds: 300 },
                     100,
-                    None)
+                    None,
+                )
                 .unwrap(),
                 "mode: rule\n",
             )
@@ -1770,7 +1776,8 @@ mod tests {
                     ProfileSource::Local,
                     UpdatePolicy::Manual,
                     100,
-                    None)
+                    None,
+                )
                 .unwrap(),
                 "mixed-port: 7893\nport: 7890\n",
             )
@@ -1789,7 +1796,8 @@ mod tests {
                     ProfileSource::Local,
                     UpdatePolicy::Manual,
                     100,
-                    None)
+                    None,
+                )
                 .unwrap(),
                 "mode: rule\n",
             )
@@ -1813,7 +1821,8 @@ mod tests {
                         ProfileSource::Local,
                         UpdatePolicy::Manual,
                         100,
-                    None)
+                        None,
+                    )
                     .unwrap(),
                     yaml,
                 )
@@ -1834,10 +1843,7 @@ mod tests {
         );
 
         let http_only = import(&mut store, "http-only", "port: 7890\n");
-        assert_eq!(
-            store.system_proxy_socks_endpoint(&http_only).unwrap(),
-            None
-        );
+        assert_eq!(store.system_proxy_socks_endpoint(&http_only).unwrap(), None);
     }
 
     fn merge_config(yaml: &str) -> MergeConfig {
@@ -1850,7 +1856,8 @@ mod tests {
 
     #[test]
     fn merge_override_merge_and_remove_top_level_keys() {
-        let source = source_value("mode: rule\nlog-level: info\ndns:\n  enable: false\n  ipv6: false\n");
+        let source =
+            source_value("mode: rule\nlog-level: info\ndns:\n  enable: false\n  ipv6: false\n");
         let merge = merge_config(
             "rules:\n  - key: mode\n    op: override\n    value: global\n  - key: dns\n    op: merge\n    value:\n      enable: true\n  - key: log-level\n    op: remove\n",
         );
@@ -1895,16 +1902,14 @@ mod tests {
     #[test]
     fn merge_rejects_type_conflicts_and_reserved_keys() {
         let source = source_value("mode: rule\nrules:\n  - MATCH,DIRECT\n");
-        let conflict = merge_config(
-            "rules:\n  - key: rules\n    op: merge\n    value:\n      nested: true\n",
-        );
+        let conflict =
+            merge_config("rules:\n  - key: rules\n    op: merge\n    value:\n      nested: true\n");
         let error = apply_merge(&source, &conflict).unwrap_err();
         assert_eq!(error.code, ErrorCode::ValidationFailed);
         assert!(error.message.contains("type conflict"));
 
-        let prepend_scalar = merge_config(
-            "rules:\n  - key: mode\n    op: prepend\n    items:\n      - x\n",
-        );
+        let prepend_scalar =
+            merge_config("rules:\n  - key: mode\n    op: prepend\n    items:\n      - x\n");
         assert_eq!(
             apply_merge(&source, &prepend_scalar).unwrap_err().code,
             ErrorCode::ValidationFailed
@@ -1999,7 +2004,8 @@ mod tests {
             parse_settings_import(wrong_version).unwrap_err().code,
             ErrorCode::ValidationFailed
         );
-        let invalid = br#"{"version": 1, "settings": {"theme": "dark", "language": "en", "log_limit": 99}}"#;
+        let invalid =
+            br#"{"version": 1, "settings": {"theme": "dark", "language": "en", "log_limit": 99}}"#;
         assert_eq!(
             parse_settings_import(invalid).unwrap_err().code,
             ErrorCode::InvalidInput
@@ -2170,62 +2176,65 @@ mod tests {
             .import(profile("daily", UpdatePolicy::Manual), "mixed-port: 7890\n")
             .unwrap();
         store
-            .set_merge_yaml(
-                "rules:\n  - key: mixed-port\n    op: override\n    value: 7899\n",
-            )
+            .set_merge_yaml("rules:\n  - key: mixed-port\n    op: override\n    value: 7899\n")
             .unwrap();
         assert_eq!(
             store.system_proxy_endpoint(&id).unwrap(),
             ProxyEndpoint::new("127.0.0.1", 7899).unwrap()
         );
     }
-// 临时诊断：各种 YAML 变体下 system_proxy_endpoint 的解析结果
-#[test]
-fn endpoint_parsing_never_yields_zero_port_errors() {
-    // 回归：任何合法/常见 YAML 写法都不应产生 "proxy endpoint must have a
-    // valid host and non-zero port"（该错误只应在端口为 0 时出现，而 0 端口
-    // 在 Mihomo 语义里表示禁用，应回落或给出明确配置错误）。
-    let directory = TestDir::new("endpoint-parsing-matrix");
-    let mut store = FileProfileStore::open(&directory.0).unwrap();
-    let cases: [(&str, &str, Option<u16>); 6] = [
-        ("mixed-normal", "mixed-port: 7890\nmode: rule\n", Some(7890)),
-        ("mixed-zero-port-fallback", "mixed-port: 0\nport: 7890\n", Some(7890)),
-        ("port-only", "port: 7890\n", Some(7890)),
-        ("hex-port", "mixed-port: 0x1ED2\n", Some(7890)),
-        ("mixed-zero-only", "mixed-port: 0\nmode: rule\n", None),
-        ("missing-port", "mode: rule\n", None),
-    ];
-    for (id, yaml, expected) in cases {
-        let pid = ProfileId::parse(id).unwrap();
-        store
-            .import(
-                Profile::new(
-                    pid.clone(),
-                    id,
-                    ProfileSource::Local,
-                    UpdatePolicy::Manual,
-                    100,
-                    None,
+    // 临时诊断：各种 YAML 变体下 system_proxy_endpoint 的解析结果
+    #[test]
+    fn endpoint_parsing_never_yields_zero_port_errors() {
+        // 回归：任何合法/常见 YAML 写法都不应产生 "proxy endpoint must have a
+        // valid host and non-zero port"（该错误只应在端口为 0 时出现，而 0 端口
+        // 在 Mihomo 语义里表示禁用，应回落或给出明确配置错误）。
+        let directory = TestDir::new("endpoint-parsing-matrix");
+        let mut store = FileProfileStore::open(&directory.0).unwrap();
+        let cases: [(&str, &str, Option<u16>); 6] = [
+            ("mixed-normal", "mixed-port: 7890\nmode: rule\n", Some(7890)),
+            (
+                "mixed-zero-port-fallback",
+                "mixed-port: 0\nport: 7890\n",
+                Some(7890),
+            ),
+            ("port-only", "port: 7890\n", Some(7890)),
+            ("hex-port", "mixed-port: 0x1ED2\n", Some(7890)),
+            ("mixed-zero-only", "mixed-port: 0\nmode: rule\n", None),
+            ("missing-port", "mode: rule\n", None),
+        ];
+        for (id, yaml, expected) in cases {
+            let pid = ProfileId::parse(id).unwrap();
+            store
+                .import(
+                    Profile::new(
+                        pid.clone(),
+                        id,
+                        ProfileSource::Local,
+                        UpdatePolicy::Manual,
+                        100,
+                        None,
+                    )
+                    .unwrap(),
+                    yaml,
                 )
-                .unwrap(),
-                yaml,
-            )
-            .unwrap();
-        match store.system_proxy_endpoint(&pid) {
-            Ok(endpoint) => {
-                assert_eq!(Some(endpoint.port), expected, "[{id}] 端口不符合预期");
-            }
-            Err(error) => {
-                assert_eq!(error.code, ErrorCode::ValidationFailed, "[{id}] 错误码");
-                assert!(
-                    !error.message.contains("proxy endpoint must have a valid host"),
-                    "[{id}] 不应出现 ProxyEndpoint 校验错误：{}",
-                    error.message
-                );
-                assert_eq!(expected, None, "[{id}] 预期有端口却报错：{}", error.message);
+                .unwrap();
+            match store.system_proxy_endpoint(&pid) {
+                Ok(endpoint) => {
+                    assert_eq!(Some(endpoint.port), expected, "[{id}] 端口不符合预期");
+                }
+                Err(error) => {
+                    assert_eq!(error.code, ErrorCode::ValidationFailed, "[{id}] 错误码");
+                    assert!(
+                        !error
+                            .message
+                            .contains("proxy endpoint must have a valid host"),
+                        "[{id}] 不应出现 ProxyEndpoint 校验错误：{}",
+                        error.message
+                    );
+                    assert_eq!(expected, None, "[{id}] 预期有端口却报错：{}", error.message);
+                }
             }
         }
     }
-}
-
 }

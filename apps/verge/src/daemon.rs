@@ -22,10 +22,6 @@ use crate::config::{
     FileProfileStore, FileSettingsStore, UpdateScheduler, UpdateTrigger, decrypt_backup,
     write_encrypted_backup,
 };
-use crate::mihomo::{
-    CoreSupervisor, MihomoClient, MihomoConfig, RealtimeOptions, SidecarManifest,
-    TcpControllerTransport, install_verified_artifact,
-};
 use crate::domain::{
     AppCommand, AppCommandOutput, AppCommandResult, AppError, ApplicationSettings,
     ApplicationSettingsSnapshot, ErrorCode, LogEvent, Profile, RealtimeEvent, RuntimeCommand,
@@ -34,6 +30,10 @@ use crate::domain::{
 };
 use crate::ipc::{
     ClientMessage, InitialSnapshot, IpcServer, IpcServerEvent, PROTOCOL_VERSION, ServerError,
+};
+use crate::mihomo::{
+    CoreSupervisor, MihomoClient, MihomoConfig, RealtimeOptions, SidecarManifest,
+    TcpControllerTransport, install_verified_artifact,
 };
 use crate::platform::{
     HELPER_SOCKET_PATH, HelperInstallLayout, MacHelperInstaller, bundle_short_version,
@@ -1668,10 +1668,10 @@ fn run_daemon_appkit(
     hotkey_sync: Receiver<Option<String>>,
     shutdown: Receiver<()>,
 ) {
+    use crate::platform::{GlobalHotKeyBackend, HotkeyRegistration, MacNotifier};
     use dispatch2::MainThreadBound;
     use objc2::MainThreadMarker;
     use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
-    use crate::platform::{GlobalHotKeyBackend, HotkeyRegistration, MacNotifier};
 
     let marker = MainThreadMarker::new().expect("daemon main must run on the main thread");
     let app = NSApplication::sharedApplication(marker);

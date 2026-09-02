@@ -15,16 +15,16 @@ mod controller;
 mod realtime;
 mod sidecar;
 
+pub use crate::domain::{
+    ConnectionSnapshot, LogEvent, MemoryEvent, ProxyGroup, RealtimeEvent, RealtimeTopic, RunMode,
+    TrafficEvent,
+};
 pub use controller::{
     ControllerRequest, ControllerResponse, ControllerTransport, MihomoClient,
     TcpControllerTransport,
 };
 pub use realtime::{RealtimeOptions, RealtimeSubscription};
 pub use sidecar::{ArtifactInstall, SidecarManifest, SidecarTarget, install_verified_artifact};
-pub use crate::domain::{
-    ConnectionSnapshot, LogEvent, MemoryEvent, ProxyGroup, RealtimeEvent, RealtimeTopic, RunMode,
-    TrafficEvent,
-};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MihomoConfig {
@@ -540,7 +540,7 @@ mod tests {
         supervisor.config.working_dir = directory.0.clone();
 
         let mut child = Command::new("/bin/sh")
-            .args(["-c", "printf 'one\\ntwo\\nthree\\n'; printf 'bad\\n' >&2"])
+            .args(["-c", "printf 'one\\ntwo\\nbad\\n' >&2"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()

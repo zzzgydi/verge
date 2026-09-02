@@ -9,16 +9,16 @@ use std::{
 };
 
 use crate::config::{FileProfileStore, ProfileUpdateJob, UpdateScheduler, UpdateTrigger};
-use crate::mihomo::{
-    ControllerTransport, CoreSupervisor, MihomoClient, RealtimeOptions, RealtimeSubscription,
-    SidecarTarget, install_verified_artifact,
-};
 use crate::domain::{
     AppCommand, AppCommandOutput, AppCommandResult, AppError, CommandActor, CommandContext,
     CommandRisk, ErrorCode, HelperStatus, NetworkSettings, Profile, ProfileId, ProviderKind,
     ProviderSummary, ProxyEndpoint, ProxyGroup, RealtimeEvent, RealtimeTopic, RuleEntry, RunMode,
     RuntimeCommand, RuntimeCommandOutput, RuntimeCommandResult, SystemProxyCommand,
     SystemProxyCommandResult, SystemProxyState,
+};
+use crate::mihomo::{
+    ControllerTransport, CoreSupervisor, MihomoClient, RealtimeOptions, RealtimeSubscription,
+    SidecarTarget, install_verified_artifact,
 };
 use crate::platform::{HelperControl, SystemProxyPlatform, TunConfig};
 

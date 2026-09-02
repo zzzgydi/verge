@@ -1,3 +1,5 @@
+use crate::domain::{HelperStatus, SettingsScope, ThemePreference};
+use crate::ui::UiAction;
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
@@ -10,8 +12,6 @@ use gpui_component::{
     switch::Switch,
     v_flex,
 };
-use crate::domain::{HelperStatus, SettingsScope, ThemePreference};
-use crate::ui::UiAction;
 
 use crate::{
     i18n::{self, Lang, tr},

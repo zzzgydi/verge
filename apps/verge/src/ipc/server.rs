@@ -86,9 +86,7 @@ impl IpcServer {
     /// 绑定 socket。若路径上已有可连接的守护，返回 [`ServerError::AlreadyRunning`]；
     /// 残留的 stale socket 会被清理后重新绑定。
     /// 返回服务器句柄与 backend 事件循环消费的事件接收端。
-    pub fn bind(
-        socket_path: &Path,
-    ) -> Result<(Arc<Self>, Receiver<IpcServerEvent>), ServerError> {
+    pub fn bind(socket_path: &Path) -> Result<(Arc<Self>, Receiver<IpcServerEvent>), ServerError> {
         if socket_path.exists() {
             match UnixStream::connect(socket_path) {
                 Ok(_) => return Err(ServerError::AlreadyRunning),
@@ -119,7 +117,11 @@ impl IpcServer {
 
     /// 启动 accept 线程。只调用一次。
     pub fn spawn_accept(self: &Arc<Self>) {
-        let listener = self.listener.lock().unwrap().take()
+        let listener = self
+            .listener
+            .lock()
+            .unwrap()
+            .take()
             .expect("spawn_accept must only be called once");
         let shutdown = self.shutdown.clone();
         let this = self.clone();
@@ -163,14 +165,14 @@ impl IpcServer {
         std::thread::spawn(move || {
             let mut reader = BufReader::new(reader_stream);
             // 第一帧必须是 Hello。
-            let (protocol_version, app_version) = match frame::read_message::<DaemonMessage>(&mut reader)
-            {
-                Ok(DaemonMessage::Hello {
-                    protocol_version,
-                    app_version,
-                }) => (protocol_version, app_version),
-                _ => return,
-            };
+            let (protocol_version, app_version) =
+                match frame::read_message::<DaemonMessage>(&mut reader) {
+                    Ok(DaemonMessage::Hello {
+                        protocol_version,
+                        app_version,
+                    }) => (protocol_version, app_version),
+                    _ => return,
+                };
             if events_tx
                 .send(IpcServerEvent::Connected {
                     conn_id,
@@ -194,7 +196,8 @@ impl IpcServer {
             let _ = events_tx.send(IpcServerEvent::Disconnected { conn_id });
         });
         self.connections
-            .lock().unwrap()
+            .lock()
+            .unwrap()
             .insert(conn_id, ConnectionHandle { writer_tx });
     }
 
@@ -204,10 +207,13 @@ impl IpcServer {
         let Some(handle) = connections.get(&conn_id) else {
             return Err(SendError::Disconnected);
         };
-        handle.writer_tx.try_send(message).map_err(|error| match error {
-            TrySendError::Full(_) => SendError::Full,
-            TrySendError::Disconnected(_) => SendError::Disconnected,
-        })
+        handle
+            .writer_tx
+            .try_send(message)
+            .map_err(|error| match error {
+                TrySendError::Full(_) => SendError::Full,
+                TrySendError::Disconnected(_) => SendError::Disconnected,
+            })
     }
 
     /// 把实时事件批量按订阅表分发。无订阅的连接不发送；
@@ -231,7 +237,9 @@ impl IpcServer {
                 .cloned()
                 .collect();
             if !batch.is_empty() {
-                let _ = handle.writer_tx.try_send(ClientMessage::RealtimeBatch(batch));
+                let _ = handle
+                    .writer_tx
+                    .try_send(ClientMessage::RealtimeBatch(batch));
             }
         }
     }
@@ -239,7 +247,8 @@ impl IpcServer {
     /// 记录某连接的实时订阅。backend 在处理 `StartRealtime` 时调用。
     pub fn set_subscriptions(&self, conn_id: u64, topics: Vec<RealtimeTopic>) {
         self.subscriptions
-            .lock().unwrap()
+            .lock()
+            .unwrap()
             .insert(conn_id, topics.into_iter().collect());
     }
 
@@ -310,16 +319,14 @@ impl From<std::io::Error> for ServerError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::protocol::PROTOCOL_VERSION;
+    use super::*;
     use crate::domain::{ConnectionSnapshot, TrafficEvent};
     use crate::ui::{UiResponse, UiResponseEnvelope};
 
     fn temp_socket(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "verge-ipc-test-{}-{name}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("verge-ipc-test-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("daemon.sock")
     }
@@ -389,7 +396,8 @@ mod tests {
         });
         server
             .subscriptions
-            .lock().unwrap()
+            .lock()
+            .unwrap()
             .insert(7, [RealtimeTopic::Traffic].into_iter().collect());
         let batch = broadcast_batch_for(&server, &[traffic.clone(), logs.clone()], 7);
         assert_eq!(batch, vec![traffic]);
@@ -419,13 +427,14 @@ mod tests {
 
     #[test]
     fn protocol_messages_roundtrip_through_frames() {
-        let envelope = UiResponseEnvelope::realtime(UiResponse::Realtime(
-            RealtimeEvent::Traffic(TrafficEvent { up: 0, down: 0 }),
-        ));
+        let envelope = UiResponseEnvelope::realtime(UiResponse::Realtime(RealtimeEvent::Traffic(
+            TrafficEvent { up: 0, down: 0 },
+        )));
         let message = ClientMessage::Response(envelope.clone());
         let mut buffer = Vec::new();
         frame::write_message(&mut buffer, &message).unwrap();
-        let decoded: ClientMessage = frame::read_message(&mut std::io::Cursor::new(buffer)).unwrap();
+        let decoded: ClientMessage =
+            frame::read_message(&mut std::io::Cursor::new(buffer)).unwrap();
         assert!(matches!(decoded, ClientMessage::Response(_)));
         drop((PROTOCOL_VERSION, envelope));
     }
