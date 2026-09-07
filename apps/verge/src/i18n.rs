@@ -51,7 +51,6 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("home.proxy_hint", "查看节点与延迟", "Nodes & latency"),
     ("home.rules_hint", "查看流量路由规则", "Routing & providers"),
     ("home.logs_hint", "查看运行日志", "Events & diagnostics"),
-    ("nav.tagline", "网络工作区", "NETWORK WORKSPACE"),
     // ---- 通用 ----
     ("common.refresh", "刷新", "Refresh"),
     ("common.cancel", "取消", "Cancel"),
@@ -90,6 +89,40 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("nav.header", "导航", "Navigation"),
     ("nav.group.proxy", "代理", "Proxy"),
     ("nav.group.system", "系统", "System"),
+    (
+        "settings.subtitle",
+        "让 Verge 适合你的使用习惯。",
+        "Make Verge work the way you do.",
+    ),
+    (
+        "proxies.subtitle",
+        "选择流量模式与代理节点。",
+        "Choose how traffic is routed and where it connects.",
+    ),
+    (
+        "rules.subtitle",
+        "查看流量匹配规则与订阅资源。",
+        "Inspect routing rules and subscription resources.",
+    ),
+    (
+        "profiles.subtitle",
+        "管理订阅、本地配置与合并规则。",
+        "Manage subscriptions, local profiles and merge rules.",
+    ),
+    ("rules.providers", "订阅资源", "Providers"),
+    ("rules.column.type", "类型", "Type"),
+    ("rules.column.match", "匹配内容", "Match"),
+    ("rules.column.target", "目标策略", "Policy"),
+    (
+        "connections.subtitle",
+        "查看活跃连接与实时用量。",
+        "Monitor active connections and live usage.",
+    ),
+    (
+        "logs.subtitle",
+        "按级别查看内核运行记录。",
+        "Inspect core activity by log level.",
+    ),
     ("home.title", "概览", "Overview"),
     ("proxies.title", "代理", "Proxies"),
     ("rules.title", "规则", "Rules"),
@@ -775,25 +808,6 @@ pub fn fmt_connections_summary(lang: Lang, count: usize, upload: &str, download:
         Lang::ZhCn => format!("{count} 条活跃连接 · 累计上传 {upload} · 累计下载 {download}"),
         Lang::En => {
             format!("{count} active connections · uploaded {upload} · downloaded {download}")
-        }
-    }
-}
-
-/// 规则页 Provider 行。
-pub fn fmt_provider_summary(
-    lang: Lang,
-    kind_label: &str,
-    name: &str,
-    vehicle: &str,
-    item_count: usize,
-    updated_at: &str,
-) -> String {
-    match lang {
-        Lang::ZhCn => {
-            format!("{kind_label} · {name} · {vehicle} · {item_count} 条 · 更新于 {updated_at}")
-        }
-        Lang::En => {
-            format!("{kind_label} · {name} · {vehicle} · {item_count} items · updated {updated_at}")
         }
     }
 }

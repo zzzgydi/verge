@@ -19,7 +19,8 @@ use crate::{
     view::MainView,
 };
 
-use super::{muted, page_title};
+use super::components::page_heading;
+use super::muted;
 
 /// 列名对应的 i18n key（与 columns 的声明顺序一致）。
 const COLUMN_KEYS: [&str; 7] = [
@@ -220,12 +221,18 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
     );
 
     v_flex()
-        .size_full()
-        .gap_3()
+        .flex_1()
+        .min_h_0()
+        .gap_5()
         .child(
             h_flex()
                 .justify_between()
-                .child(page_title(tr(lang, "connections.title")))
+                .flex_shrink_0()
+                .child(page_heading(
+                    tr(lang, "connections.title"),
+                    tr(lang, "connections.subtitle"),
+                    cx,
+                ))
                 .child(muted(summary, cx)),
         )
         .child(

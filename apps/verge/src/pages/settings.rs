@@ -1,13 +1,12 @@
 mod actions;
+mod components;
 use crate::domain::{HelperStatus, SettingsScope, ThemePreference};
 use crate::ui::UiAction;
+use components::{SettingsSection, field, v_form};
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
-    collapsible::Collapsible,
-    form::{field, v_form},
-    group_box::GroupBox,
     h_flex,
     input::{Input, NumberInput},
     switch::Switch,
@@ -34,65 +33,12 @@ fn helper_label(lang: Lang, view: &MainView) -> String {
     }
 }
 
-/// 可折叠设置分组的标题行（箭头 + 组名），点击切换折叠状态。
-fn group_trigger<'a>(
-    view: &MainView,
-    id: &'static str,
-    title: &'a str,
-    cx: &mut Context<MainView>,
-) -> impl IntoElement + 'a {
-    let collapsed = view.settings_collapsed.borrow().contains(id);
-    let view_entity = cx.entity();
-    let title_owned = SharedString::from(title);
-    let icon = if collapsed {
-        IconName::ChevronRight
-    } else {
-        IconName::ChevronDown
-    };
-    h_flex()
-        .id(SharedString::from(format!("settings-toggle-{id}")))
-        .gap_2()
-        .items_center()
-        .px_1()
-        .py_1()
-        .cursor_pointer()
-        .on_click(move |_, _, cx| {
-            {
-                let mut collapsed_set = view_entity.read(cx).settings_collapsed.borrow_mut();
-                if collapsed {
-                    collapsed_set.remove(id);
-                } else {
-                    collapsed_set.insert(id);
-                }
-            }
-            cx.notify(view_entity.entity_id());
-        })
-        .child(
-            Icon::new(icon)
-                .size_4()
-                .text_color(cx.theme().muted_foreground),
-        )
-        .child(
-            div()
-                .text_sm()
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .child(title_owned),
-        )
-}
-
-/// 把分组包成可折叠组件（默认展开）。
-fn collapsible_group(
-    view: &MainView,
-    id: &'static str,
-    title: &str,
-    group: GroupBox,
-    cx: &mut Context<MainView>,
-) -> Collapsible {
-    let collapsed = view.settings_collapsed.borrow().contains(id);
-    Collapsible::new()
-        .open(!collapsed)
-        .child(group_trigger(view, id, title, cx))
-        .content(group)
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SettingsCategory {
+    General,
+    Network,
+    Updates,
+    System,
 }
 
 pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
@@ -118,7 +64,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
     let helper_ready = matches!(view.state.helper_status, Some(HelperStatus::Ready { .. }));
     let mono = cx.theme().mono_font_family.clone();
 
-    let general_group = GroupBox::new()
+    let general_group = SettingsSection::new()
         .id("settings-general")
         .title(tr(lang, "settings.group.general"))
         .child(
@@ -255,7 +201,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 ),
         );
 
-    let mut network_group = GroupBox::new()
+    let mut network_group = SettingsSection::new()
         .id("settings-network")
         .title(tr(lang, "settings.group.network"));
     if let Some(network) = view.state.network_settings.clone() {
@@ -331,7 +277,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         .map(|service| service.bypass.clone())
         .unwrap_or_default();
 
-    let proxy_group = GroupBox::new()
+    let proxy_group = SettingsSection::new()
         .id("settings-system-proxy")
         .title(tr(lang, "settings.group.proxy"))
         .child(if proxy_state.is_some() {
@@ -465,7 +411,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
             muted(tr(lang, "settings.proxy.not_loaded"), cx).into_any_element()
         });
 
-    let core_group = GroupBox::new()
+    let core_group = SettingsSection::new()
         .id("settings-core")
         .title(tr(lang, "settings.group.core"))
         .child(
@@ -496,7 +442,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 }),
         );
 
-    let app_update_group = GroupBox::new()
+    let app_update_group = SettingsSection::new()
         .id("settings-app-update")
         .title(tr(lang, "settings.group.app_update"))
         .child(
@@ -580,7 +526,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 }),
         );
 
-    let system_group = GroupBox::new()
+    let system_group = SettingsSection::new()
         .id("settings-system")
         .title(tr(lang, "settings.group.system"))
         .child(
@@ -689,7 +635,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 ),
         );
 
-    let backup_group = GroupBox::new()
+    let backup_group = SettingsSection::new()
         .id("settings-backup")
         .title(tr(lang, "settings.group.backup"))
         .child(
@@ -738,57 +684,65 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
             group.child(muted(i18n::fmt_exported(lang, &path), cx))
         });
 
+    let categories = [
+        (
+            SettingsCategory::General,
+            "settings.group.general",
+            IconName::Palette,
+        ),
+        (
+            SettingsCategory::Network,
+            "settings.group.network",
+            IconName::Network,
+        ),
+        (
+            SettingsCategory::Updates,
+            "settings.group.app_update",
+            IconName::Redo,
+        ),
+        (
+            SettingsCategory::System,
+            "settings.group.system",
+            IconName::Settings,
+        ),
+    ];
+    let tabs = h_flex()
+        .gap_2()
+        .pb_4()
+        .border_b_1()
+        .border_color(cx.theme().border)
+        .children(categories.map(|(category, label, icon)| {
+            Button::new(format!("settings-category-{label}"))
+                .label(tr(lang, label))
+                .icon(Icon::new(icon).size_4())
+                .small()
+                .ghost()
+                .selected(view.settings_category == category)
+                .when(view.settings_category == category, |button| {
+                    button
+                        .bg(cx.theme().list_active)
+                        .border_1()
+                        .border_color(cx.theme().list_active_border)
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.settings_category = category;
+                    cx.notify();
+                }))
+        }));
+    let content = match view.settings_category {
+        SettingsCategory::General => v_flex().gap_4().child(general_group),
+        SettingsCategory::Network => v_flex().gap_4().child(network_group).child(proxy_group),
+        SettingsCategory::Updates => v_flex().gap_4().child(core_group).child(app_update_group),
+        SettingsCategory::System => v_flex().gap_4().child(system_group).child(backup_group),
+    };
     v_flex()
-        .gap_3()
-        .child(page_title(tr(lang, "settings.title")))
-        .child(collapsible_group(
-            view,
-            "general",
-            tr(lang, "settings.group.general"),
-            general_group,
+        .gap_5()
+        .child(super::components::page_heading(
+            tr(lang, "settings.title"),
+            tr(lang, "settings.subtitle"),
             cx,
         ))
-        .child(collapsible_group(
-            view,
-            "network",
-            tr(lang, "settings.group.network"),
-            network_group,
-            cx,
-        ))
-        .child(collapsible_group(
-            view,
-            "proxy",
-            tr(lang, "settings.group.proxy"),
-            proxy_group,
-            cx,
-        ))
-        .child(collapsible_group(
-            view,
-            "core",
-            tr(lang, "settings.group.core"),
-            core_group,
-            cx,
-        ))
-        .child(collapsible_group(
-            view,
-            "app-update",
-            tr(lang, "settings.group.app_update"),
-            app_update_group,
-            cx,
-        ))
-        .child(collapsible_group(
-            view,
-            "system",
-            tr(lang, "settings.group.system"),
-            system_group,
-            cx,
-        ))
-        .child(collapsible_group(
-            view,
-            "backup",
-            tr(lang, "settings.group.backup"),
-            backup_group,
-            cx,
-        ))
+        .child(tabs)
+        .child(content)
         .into_any_element()
 }

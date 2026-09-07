@@ -14,7 +14,7 @@ use crate::{
     view::MainView,
 };
 
-use super::page_title;
+use super::components::page_heading;
 
 /// (文案 key, 级别过滤值)。
 const LEVELS: [(&str, Option<&'static str>); 5] = [
@@ -76,13 +76,13 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         .outline()
         .label(i18n::fmt_logs_filter(lang, filter_label))
         .dropdown_menu({
-            let view_entity = view_entity.clone();
+            let view_entity = view_entity.downgrade();
             move |menu, _, _| {
                 LEVELS.into_iter().fold(menu, |menu, (key, level)| {
                     menu.item(PopupMenuItem::new(tr(lang, key)).on_click({
                         let view = view_entity.clone();
                         move |_, _, cx| {
-                            view.update(cx, |this, cx| {
+                            let _ = view.update(cx, |this, cx| {
                                 this.log_filter = level;
                                 cx.notify();
                             });
@@ -92,10 +92,15 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
             }
         });
 
-    let mut content = v_flex().size_full().gap_2().child(
+    let mut content = v_flex().flex_1().min_h_0().gap_5().child(
         h_flex()
             .justify_between()
-            .child(page_title(tr(lang, "logs.title")))
+            .flex_shrink_0()
+            .child(page_heading(
+                tr(lang, "logs.title"),
+                tr(lang, "logs.subtitle"),
+                cx,
+            ))
             .child(filter_button),
     );
 
@@ -140,24 +145,36 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 .collect::<Vec<_>>(),
         );
         content = content.child(
-            div().flex_1().min_h_0().overflow_hidden().child(
-                v_virtual_list(
-                    view_entity,
-                    "log-list",
-                    item_sizes,
-                    move |this, range, _, cx| {
-                        range
-                            .filter_map(|ix| {
-                                rows.get(ix).and_then(|&source| {
-                                    this.state.logs.get(source).map(|log| (source, log))
+            div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .overflow_hidden()
+                .border_1()
+                .border_color(cx.theme().border)
+                .rounded_lg()
+                .py_2()
+                .child(
+                    v_virtual_list(
+                        view_entity,
+                        "log-list",
+                        item_sizes,
+                        move |this, range, _, cx| {
+                            range
+                                .filter_map(|ix| {
+                                    rows.get(ix).and_then(|&source| {
+                                        this.state.logs.get(source).map(|log| (source, log))
+                                    })
                                 })
-                            })
-                            .map(|(source, log)| render_log_row(source, log, cx))
-                            .collect()
-                    },
+                                .map(|(source, log)| render_log_row(source, log, cx))
+                                .collect()
+                        },
+                    )
+                    .track_scroll(&view.log_scroll),
                 )
-                .track_scroll(&view.log_scroll),
-            ),
+                .child(gpui_component::scroll::Scrollbar::vertical(
+                    &view.log_scroll,
+                )),
         );
     }
     content.into_any_element()

@@ -293,3 +293,191 @@ fn first_profile_activation_keeps_follow_up_reads_and_subscription(cx: &mut Test
     )));
     assert!(requests.iter().all(|r| r.operation_len == requests.len()));
 }
+
+#[gpui::test]
+fn populated_proxy_and_rule_lists_scroll_inside_viewport(cx: &mut TestAppContext) {
+    use crate::{
+        domain::{ProviderKind, ProviderSummary, ProxyGroup, RuleEntry},
+        ui::Page,
+    };
+    let (_, holder, cx) = setup(cx);
+    let view = holder.borrow().clone().unwrap();
+    cx.simulate_resize(gpui::size(gpui::px(960.), gpui::px(640.)));
+    cx.update(|_, cx| {
+        view.update(cx, |view, _| {
+            view.state.proxy_groups = vec![ProxyGroup {
+                name: "Test".into(),
+                kind: "Selector".into(),
+                selected: None,
+                members: (0..500).map(|i| format!("Node {i}")).collect(),
+            }];
+            view.state.rules = (0..500)
+                .map(|i| RuleEntry {
+                    kind: "DOMAIN".into(),
+                    payload: format!("{i}.example.test"),
+                    proxy: "DIRECT".into(),
+                    size: 0,
+                })
+                .collect();
+            view.state.providers = (0..20)
+                .map(|i| ProviderSummary {
+                    name: format!("Provider {i}"),
+                    kind: ProviderKind::Rule,
+                    vehicle: "HTTP".into(),
+                    updated_at: String::new(),
+                    item_count: 500,
+                })
+                .collect();
+        })
+    });
+    for (page, id) in [(Page::Proxies, "proxy-list"), (Page::Rules, "rule-list")] {
+        cx.update(|_, cx| view.update(cx, |view, cx| view.navigate(page, cx)));
+        cx.run_until_parked();
+        let bounds = cx.debug_bounds(id).expect("list must have bounds");
+        assert!(
+            bounds.size.height > gpui::px(100.) && bounds.size.height < gpui::px(550.),
+            "{id}: {bounds:?}"
+        );
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: bounds.center(),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-350.))),
+            modifiers: Default::default(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let view = view.read(cx);
+            let scroll = if page == Page::Proxies {
+                &view.proxy_scroll
+            } else {
+                &view.rule_scroll
+            };
+            assert!(
+                scroll.offset().y < gpui::px(-100.),
+                "{id} must move on wheel input: {:?}",
+                scroll.offset()
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn proxy_mode_buttons_dispatch_all_three_modes(cx: &mut TestAppContext) {
+    use crate::{
+        domain::{RunMode, RuntimeCommand},
+        ui::{Page, UiRequest},
+    };
+    cx.update(gpui_component::init);
+    let (tx, rx) = mpsc::channel();
+    let holder: ViewHolder = Default::default();
+    let copy = holder.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| MainView::new(tx, window, cx));
+        *copy.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = holder.borrow().clone().unwrap();
+    for mode in [RunMode::Global, RunMode::Direct, RunMode::Rule] {
+        cx.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                // Fake a settled daemon snapshot for each independent click.
+                view.state = crate::ui::UiState::default();
+                view.state.page = Page::Proxies;
+                view.state.mode = Some(if mode == RunMode::Rule {
+                    RunMode::Global
+                } else {
+                    RunMode::Rule
+                });
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        let bounds = cx
+            .debug_bounds(match mode {
+                RunMode::Rule => "mode-Rule",
+                RunMode::Global => "mode-Global",
+                RunMode::Direct => "mode-Direct",
+            })
+            .expect("mode control visible even with no groups");
+        cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+        assert!(rx.try_iter().any(|request| matches!(request.request, UiRequest::Runtime(RuntimeCommand::SetMode { mode: value }) if value == mode)));
+    }
+}
+
+#[gpui::test]
+fn sidebar_navigation_and_collapsed_alignment(cx: &mut TestAppContext) {
+    let (_, holder, cx) = setup(cx);
+    let view = holder.borrow().clone().unwrap();
+    cx.simulate_resize(gpui::size(gpui::px(960.), gpui::px(640.)));
+    cx.run_until_parked();
+    let profiles = cx.debug_bounds("nav-Profiles").unwrap();
+    cx.simulate_click(profiles.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(view.read(cx).state.page, crate::ui::Page::Profiles));
+    let toggle = cx.debug_bounds("sidebar-toggle").unwrap();
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    for _ in 0..90 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(16));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    }
+    let toggle = cx.debug_bounds("sidebar-toggle").unwrap();
+    let profiles = cx.debug_bounds("nav-Profiles").unwrap();
+    let home = cx.debug_bounds("nav-Home").unwrap();
+    assert!(
+        (toggle.center().x - profiles.center().x).abs() < gpui::px(1.),
+        "toggle {toggle:?}, menu {profiles:?}"
+    );
+    assert_eq!(home.origin.x, profiles.origin.x);
+    assert_eq!(home.size, profiles.size);
+    cx.simulate_click(home.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(view.read(cx).state.page, crate::ui::Page::Home));
+}
+
+#[gpui::test]
+fn sidebar_animation_reverses_without_jumping(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, px};
+    use std::time::Duration;
+    let (_, holder, cx) = setup(cx);
+    let view = holder.borrow().clone().unwrap();
+    cx.run_until_parked();
+    let width = cx.debug_bounds("verge-sidebar").unwrap().size.width;
+    assert_eq!(width, px(204.));
+    let toggle = cx.debug_bounds("sidebar-toggle").unwrap();
+    cx.simulate_click(toggle.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("verge-sidebar").unwrap().size.width, width);
+    cx.executor().advance_clock(Duration::from_millis(80));
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+    let intermediate = cx.debug_bounds("verge-sidebar").unwrap().size.width;
+    assert!(intermediate > px(56.) && intermediate < width);
+    // Invoke the same handler while the hit target is moving. Synthetic pointer
+    // down/up events can straddle different animation frames in the test runner.
+    cx.update(|_, cx| view.update(cx, |view, cx| view.toggle_sidebar(cx)));
+    cx.run_until_parked();
+    let reversed = cx.debug_bounds("verge-sidebar").unwrap().size.width;
+    assert!(
+        reversed > px(56.) && reversed < width,
+        "reverse must preserve an intermediate width"
+    );
+    for _ in 0..90 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    }
+    assert_eq!(cx.debug_bounds("verge-sidebar").unwrap().size.width, width);
+
+    // Native GPUI motion preference resolves to the final layout immediately.
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    let toggle = cx.debug_bounds("sidebar-toggle").unwrap();
+    cx.simulate_click(toggle.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(
+        cx.debug_bounds("verge-sidebar").unwrap().size.width,
+        px(56.)
+    );
+}

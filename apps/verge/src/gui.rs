@@ -8,7 +8,7 @@ use gpui_component::{
     notification::Notification,
 };
 
-use gpui_component_assets::Assets;
+use crate::assets::Assets;
 
 use crate::domain::{
     AppCommand, CommandActor, CommandApproval, CommandContext, CommandRisk, RuntimeCommand,

@@ -1,5 +1,6 @@
 mod appearance;
 pub mod application;
+mod assets;
 pub mod config;
 pub mod daemon;
 pub mod domain;

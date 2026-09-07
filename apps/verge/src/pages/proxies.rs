@@ -10,12 +10,13 @@ use gpui_component::{
 
 use crate::{i18n::tr, view::MainView};
 
-use super::page_title;
+use super::components::{mode_selector, page_heading};
+use gpui_component::scroll::Scrollbar;
 
 /// 组标题行高。虚拟列表要求渲染行高与 item_sizes 逐像素一致。
-const GROUP_ROW_HEIGHT: f32 = 28.;
+const GROUP_ROW_HEIGHT: f32 = 52.;
 /// 节点行高。
-const NODE_ROW_HEIGHT: f32 = 34.;
+const NODE_ROW_HEIGHT: f32 = 44.;
 
 /// 代理页拍平后的行：组标题行 + 节点行。
 #[derive(Clone, Copy)]
@@ -61,6 +62,7 @@ fn render_row(row: &ProxyRow, view: &MainView, cx: &mut Context<MainView>) -> An
             let (name, kind) = (&group.name, &group.kind);
             div()
                 .h(px(GROUP_ROW_HEIGHT))
+                .px_3()
                 .flex()
                 .items_center()
                 .child(
@@ -68,7 +70,7 @@ fn render_row(row: &ProxyRow, view: &MainView, cx: &mut Context<MainView>) -> An
                         .text_sm()
                         .font_semibold()
                         .text_color(cx.theme().muted_foreground)
-                        .child(format!("{name} · {kind}")),
+                        .child(format!("{name}   /   {kind}   ·   {}", group.members.len())),
                 )
                 .into_any_element()
         }
@@ -95,7 +97,8 @@ fn render_row(row: &ProxyRow, view: &MainView, cx: &mut Context<MainView>) -> An
                 .gap_2()
                 .items_center()
                 .justify_between()
-                .rounded(cx.theme().radius)
+                .border_b_1()
+                .border_color(cx.theme().border.opacity(0.5))
                 .when(selected, |this| {
                     this.bg(cx.theme().list_active)
                         .border_1()
@@ -114,13 +117,23 @@ fn render_row(row: &ProxyRow, view: &MainView, cx: &mut Context<MainView>) -> An
                     );
                 }))
                 .child(
-                    div().flex_1().overflow_x_hidden().child(
-                        super::selectable_text(
-                            format!("proxy-name-{group}-{proxy}"),
-                            proxy.clone(),
-                        )
-                        .text_sm(),
-                    ),
+                    gpui_component::Icon::new(if selected {
+                        IconName::CircleCheck
+                    } else {
+                        IconName::Globe
+                    })
+                    .size_4()
+                    .text_color(if selected {
+                        cx.theme().foreground
+                    } else {
+                        cx.theme().muted_foreground
+                    }),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .overflow_x_hidden()
+                        .child(div().text_sm().truncate().child(proxy.clone())),
                 )
                 .child(
                     Button::new(SharedString::from(format!("delay-{group}-{test_proxy}")))
@@ -130,6 +143,7 @@ fn render_row(row: &ProxyRow, view: &MainView, cx: &mut Context<MainView>) -> An
                         .loading(testing)
                         .when(delay.is_some(), |this| this.text_color(delay_color))
                         .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
                             this.dispatch(
                                 UiAction::TestDelay {
                                     proxy: test_proxy.clone(),
@@ -150,7 +164,12 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
     let refreshing = view.is_pending(&["proxy_groups"]);
     let header = h_flex()
         .justify_between()
-        .child(page_title(tr(lang, "proxies.title")))
+        .flex_shrink_0()
+        .child(page_heading(
+            tr(lang, "proxies.title"),
+            tr(lang, "proxies.subtitle"),
+            cx,
+        ))
         .child(
             Button::new("refresh-proxies")
                 .label(tr(lang, "common.refresh"))
@@ -162,6 +181,14 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 })),
         );
 
+    let controls = h_flex()
+        .flex_shrink_0()
+        .justify_between()
+        .py_3()
+        .border_b_1()
+        .border_color(cx.theme().border)
+        .child(div().text_sm().child(tr(lang, "home.run_mode")))
+        .child(mode_selector(view, cx));
     if view.state.proxy_groups.is_empty() {
         let body = if refreshing {
             super::skeleton_rows(3).into_any_element()
@@ -186,6 +213,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
             .size_full()
             .gap_4()
             .child(header)
+            .child(controls)
             .child(body)
             .into_any_element();
     }
@@ -198,19 +226,33 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
     );
     let view_entity = cx.entity();
     v_flex()
-        .size_full()
-        .gap_2()
+        .flex_1()
+        .min_h_0()
+        .gap_4()
         .child(header)
-        .child(div().flex_1().min_h_0().child(v_virtual_list(
-            view_entity,
-            "proxy-list",
-            item_sizes,
-            move |this, range, _, cx| {
-                range
-                    .filter_map(|ix| rows.get(ix))
-                    .map(|row| render_row(row, this, cx))
-                    .collect()
-            },
-        )))
+        .child(controls)
+        .child(
+            div()
+                .debug_selector(|| "proxy-list".into())
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .overflow_hidden()
+                .child(
+                    v_virtual_list(
+                        view_entity,
+                        "proxy-list",
+                        item_sizes,
+                        move |this, range, _, cx| {
+                            range
+                                .filter_map(|ix| rows.get(ix))
+                                .map(|row| render_row(row, this, cx))
+                                .collect()
+                        },
+                    )
+                    .track_scroll(&view.proxy_scroll),
+                )
+                .child(Scrollbar::vertical(&view.proxy_scroll)),
+        )
         .into_any_element()
 }

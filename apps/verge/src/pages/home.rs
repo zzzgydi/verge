@@ -9,9 +9,8 @@ use crate::{
 };
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
-    StyledExt as _,
-    button::{Button, ButtonGroup, ButtonVariants as _},
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
+    button::{Button, ButtonVariants as _},
     h_flex,
     switch::Switch,
     v_flex,
@@ -29,7 +28,6 @@ pub fn mode_label(lang: Lang, mode: RunMode) -> &'static str {
 }
 
 pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
-    const MODES: [RunMode; 3] = [RunMode::Rule, RunMode::Global, RunMode::Direct];
     let lang = view.lang();
     let (core_status, status_color) = match view.state.core_status {
         CoreStatus::Running => (tr(lang, "home.core.running"), cx.theme().success),
@@ -47,20 +45,6 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
     );
     let proxy_settings = view.state.runtime_settings.clone();
     let proxy_available = proxy_settings.is_some();
-    let mode_group = ButtonGroup::new("mode-group")
-        .outline()
-        .small()
-        .children(MODES.map(|mode| {
-            Button::new(format!("mode-{mode:?}"))
-                .label(mode_label(lang, mode))
-                .disabled(view.state.mode.is_none())
-                .selected(view.state.mode == Some(mode))
-        }))
-        .on_click(cx.listener(|this, clicked: &Vec<usize>, _, cx| {
-            if let Some(&ix) = clicked.first() {
-                this.dispatch(UiAction::SetMode(MODES[ix]), cx);
-            }
-        }));
 
     let connection = panel(cx)
         .flex_1()
@@ -154,7 +138,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 .text_color(cx.theme().muted_foreground)
                                 .child(tr(lang, "home.run_mode")),
                         )
-                        .child(mode_group),
+                        .child(super::components::mode_selector(view, cx)),
                 )
                 .child(
                     Button::new("manage-profiles")

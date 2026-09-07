@@ -1,4 +1,4 @@
-use std::rc::Rc;
+mod navigation;
 use std::sync::mpsc;
 
 use crate::domain::{
@@ -14,10 +14,6 @@ use gpui_component::{
     h_flex,
     input::{InputEvent, InputState, TextareaState},
     scroll::ScrollableElement as _,
-    sidebar::{
-        Sidebar, SidebarCollapsible, SidebarGroup, SidebarMenu, SidebarMenuItem,
-        SidebarToggleButton,
-    },
     status_bar::StatusBar,
     table::TableState,
     theme::{Theme, ThemeMode},
@@ -63,8 +59,8 @@ pub struct MainView {
     pub telemetry: Entity<pages::home::telemetry::Telemetry>,
     pub requests: mpsc::Sender<UiRequestEnvelope>,
     pub sheet_state: Entity<SheetState>,
-    /// 设置页已折叠的分组 id。
-    pub settings_collapsed: Rc<std::cell::RefCell<std::collections::HashSet<&'static str>>>,
+    /// 当前设置分类。
+    pub settings_category: pages::settings::SettingsCategory,
     pub profile_id: Entity<InputState>,
     pub profile_name: Entity<InputState>,
     pub profile_url: Entity<InputState>,
@@ -93,6 +89,8 @@ pub struct MainView {
     pub connections_table: Entity<TableState<ConnectionsDelegate>>,
     /// 日志页虚拟列表滚动位置。
     pub log_scroll: VirtualListScrollHandle,
+    pub proxy_scroll: VirtualListScrollHandle,
+    pub rule_scroll: VirtualListScrollHandle,
     /// 日志级别过滤，None 表示全部。
     pub log_filter: Option<&'static str>,
     /// 点击“预览导入”后等待预览结果再打开确认弹窗的设置文件路径。
@@ -220,10 +218,12 @@ impl MainView {
             merged_editor: cx.new(|cx| TextareaState::new(window, cx)),
             connections_table,
             log_scroll: VirtualListScrollHandle::new(),
+            proxy_scroll: VirtualListScrollHandle::new(),
+            rule_scroll: VirtualListScrollHandle::new(),
             log_filter: None,
             pending_settings_import: None,
             sheet_state: cx.new(|_| SheetState::default()),
-            settings_collapsed: Rc::new(std::cell::RefCell::new(std::collections::HashSet::new())),
+            settings_category: pages::settings::SettingsCategory::General,
             focus_handle,
             sidebar_collapsed: false,
             applied_theme: None,
@@ -461,127 +461,6 @@ impl MainView {
         self.dispatch(UiAction::UpdateSettings(settings), cx);
     }
 
-    fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let lang = self.lang();
-        let collapsed = self.sidebar_collapsed;
-        let item = |page: Page, label: &'static str, icon: IconName, cx: &mut Context<Self>| {
-            SidebarMenuItem::new(label)
-                .icon(Icon::new(icon).size_4())
-                .active(self.state.page == page)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.navigate(page, cx);
-                }))
-        };
-        let proxy_menu = SidebarMenu::new().children([
-            item(
-                Page::Home,
-                tr(lang, "home.title"),
-                IconName::LayoutDashboard,
-                cx,
-            ),
-            item(
-                Page::Proxies,
-                tr(lang, "proxies.title"),
-                IconName::Globe,
-                cx,
-            ),
-            item(Page::Rules, tr(lang, "rules.title"), IconName::BookOpen, cx),
-            item(
-                Page::Connections,
-                tr(lang, "connections.title"),
-                IconName::Network,
-                cx,
-            ),
-        ]);
-        let system_menu = SidebarMenu::new().children([
-            item(
-                Page::Profiles,
-                tr(lang, "profiles.title"),
-                IconName::File,
-                cx,
-            ),
-            item(
-                Page::Logs,
-                tr(lang, "logs.title"),
-                IconName::SquareTerminal,
-                cx,
-            ),
-            item(
-                Page::Settings,
-                tr(lang, "settings.title"),
-                IconName::Settings,
-                cx,
-            ),
-        ]);
-
-        let header = h_flex()
-            .w_full()
-            .items_center()
-            .gap_2()
-            .when(!collapsed, |this| {
-                this.child(
-                    v_flex()
-                        .flex_1()
-                        .gap_1()
-                        .py_4()
-                        .child(
-                            div()
-                                .text_xl()
-                                .font_semibold()
-                                .text_color(cx.theme().foreground)
-                                .child("Verge"),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(9.))
-                                .text_color(cx.theme().muted_foreground)
-                                .child(tr(lang, "nav.tagline")),
-                        ),
-                )
-            })
-            .child(
-                SidebarToggleButton::new()
-                    .collapsed(collapsed)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.sidebar_collapsed = !this.sidebar_collapsed;
-                        cx.notify();
-                    })),
-            );
-
-        let (status_text, status_color) = match self.state.core_status {
-            CoreStatus::Running => (tr(lang, "status.core_running"), cx.theme().success),
-            CoreStatus::Offline => (tr(lang, "status.core_offline"), cx.theme().danger),
-            CoreStatus::Unknown => (tr(lang, "status.core_unknown"), cx.theme().muted_foreground),
-        };
-        let dot = div()
-            .size_2()
-            .flex_shrink_0()
-            .rounded(cx.theme().radius_full())
-            .bg(status_color);
-        let footer = h_flex()
-            .w_full()
-            .items_center()
-            .gap_2()
-            .child(dot)
-            .when(!collapsed, |this| {
-                this.child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(status_text),
-                )
-            });
-
-        Sidebar::new("verge-sidebar")
-            .w(px(210.))
-            .collapsible(SidebarCollapsible::Icon)
-            .collapsed(collapsed)
-            .header(header)
-            .child(SidebarGroup::new(tr(lang, "nav.group.proxy")).child(proxy_menu))
-            .child(SidebarGroup::new(tr(lang, "nav.group.system")).child(system_menu))
-            .footer(footer)
-    }
-
     fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let lang = self.lang();
         let preference = self
@@ -596,7 +475,14 @@ impl MainView {
         };
         TitleBar::new()
             .child(
-                div()
+                h_flex()
+                    .gap_2()
+                    .child(
+                        svg()
+                            .path("branding/logo.svg")
+                            .size_4()
+                            .text_color(cx.theme().muted_foreground),
+                    )
                     .text_sm()
                     .font_semibold()
                     .text_color(cx.theme().muted_foreground)
@@ -663,11 +549,12 @@ impl Render for MainView {
             page,
             Page::Connections | Page::Logs | Page::Proxies | Page::Rules
         ) {
-            div()
+            v_flex()
                 .id("page-content")
                 .flex_1()
                 .min_h_0()
-                .p_4()
+                .overflow_hidden()
+                .p_6()
                 .child(content)
                 .into_any_element()
         } else {

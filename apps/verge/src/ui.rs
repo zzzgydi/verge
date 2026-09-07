@@ -273,7 +273,10 @@ impl UiAction {
                     ],
                 }),
             ],
-            Self::RefreshProxies => vec![UiRequest::Runtime(RuntimeCommand::ListProxyGroups)],
+            Self::RefreshProxies => vec![
+                UiRequest::Runtime(RuntimeCommand::ListProxyGroups),
+                UiRequest::Runtime(RuntimeCommand::GetMode),
+            ],
             Self::RefreshRules => vec![
                 UiRequest::Runtime(RuntimeCommand::ListRules),
                 UiRequest::Runtime(RuntimeCommand::ListProviders),
