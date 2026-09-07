@@ -1,4 +1,5 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 use crate::domain::{
     AppCommand, AppCommandOutput, AppCommandResult, AppError, AppUpdateStatus, ApplicationSettings,
@@ -385,6 +386,15 @@ impl UiAction {
                 UiRequest::Profile(AppCommand::SelectProfile { id }),
                 UiRequest::Profile(AppCommand::ListProfiles),
                 UiRequest::Profile(AppCommand::GetRuntimeSettings),
+                // The first activation must also establish the GUI's subscription.
+                UiRequest::Runtime(RuntimeCommand::StartRealtime {
+                    topics: vec![
+                        RealtimeTopic::Traffic,
+                        RealtimeTopic::Memory,
+                        RealtimeTopic::Connections,
+                        RealtimeTopic::Logs,
+                    ],
+                }),
                 // 启用后主动确认 Mihomo 控制链路，并立即刷新运行模式和内核状态。
                 UiRequest::Runtime(RuntimeCommand::GetMode),
             ],
@@ -496,8 +506,9 @@ pub struct UiState {
     pub last_diagnostic_path: Option<String>,
     /// 最近一次设置导入预览的结果,确认弹窗据此展示差异。
     pub settings_import_preview: Option<SettingsImportPreview>,
-    pub connections: Option<ConnectionSnapshot>,
-    pub logs: Vec<LogEvent>,
+    pub connections: Option<Arc<ConnectionSnapshot>>,
+    pub logs: VecDeque<LogEvent>,
+    log_bytes: usize,
     pub delays: HashMap<String, u32>,
     /// 正在测速的节点名，用于按节点渲染加载态。
     pub delay_pending: HashSet<String>,
@@ -663,16 +674,35 @@ impl UiState {
         match event {
             RealtimeEvent::Traffic(traffic) => self.traffic = Some(traffic),
             RealtimeEvent::Memory(memory) => self.memory = Some(memory),
-            RealtimeEvent::Connections(connections) => self.connections = Some(connections),
-            RealtimeEvent::Log(log) => {
+            RealtimeEvent::Connections(connections) => {
+                self.connections = Some(Arc::new(connections))
+            }
+            RealtimeEvent::Log(mut log) => {
                 let limit = self
                     .application_settings
                     .as_ref()
                     .map_or(500, |snapshot| usize::from(snapshot.settings.log_limit));
-                if self.logs.len() >= limit {
-                    self.logs.remove(0);
+                // Both limits matter: a single noisy message may contain a large body.
+                const MAX_LOG_BYTES: usize = 4 * 1024 * 1024;
+                const MAX_LINE_BYTES: usize = 16 * 1024;
+                if log.payload.len() > MAX_LINE_BYTES {
+                    let mut end = MAX_LINE_BYTES;
+                    while !log.payload.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    log.payload.truncate(end);
+                    log.payload.push_str(" …");
+                    log.payload.shrink_to_fit();
                 }
-                self.logs.push(log);
+                let bytes = log.level.len() + log.payload.len();
+                while self.logs.len() >= limit || self.log_bytes + bytes > MAX_LOG_BYTES {
+                    let Some(old) = self.logs.pop_front() else {
+                        break;
+                    };
+                    self.log_bytes -= old.level.len() + old.payload.len();
+                }
+                self.log_bytes += bytes;
+                self.logs.push_back(log);
             }
             RealtimeEvent::Reconnecting { .. } => self.core_status = CoreStatus::Offline,
         }
@@ -922,8 +952,42 @@ mod tests {
         }
         assert_eq!(state.connections.as_ref().unwrap().connection_count, 2);
         assert_eq!(state.logs.len(), 500);
-        assert_eq!(state.logs.first().unwrap().payload, "1");
-        assert_eq!(state.logs.last().unwrap().payload, "500");
+        assert_eq!(state.logs.front().unwrap().payload, "1");
+        assert_eq!(state.logs.back().unwrap().payload, "500");
+    }
+
+    #[test]
+    fn log_buffer_bounds_bytes_and_preserves_utf8() {
+        let mut state = UiState::default();
+        for _ in 0..1000 {
+            state.apply_realtime(RealtimeEvent::Log(LogEvent {
+                level: "info".into(),
+                payload: "日".repeat(20_000),
+            }));
+        }
+        let bytes: usize = state
+            .logs
+            .iter()
+            .map(|log| log.level.len() + log.payload.len())
+            .sum();
+        assert!(bytes <= 4 * 1024 * 1024);
+        assert_eq!(bytes, state.log_bytes);
+        assert!(state.logs.iter().all(|log| log.payload.ends_with(" …")));
+        // Lowering the configured count must evict the old excess on the next event.
+        state.application_settings = Some(ApplicationSettingsSnapshot {
+            settings: ApplicationSettings {
+                log_limit: 100,
+                ..Default::default()
+            },
+            data_directory: String::new(),
+            app_version: None,
+        });
+        state.apply_realtime(RealtimeEvent::Log(LogEvent {
+            level: "info".into(),
+            payload: "latest".into(),
+        }));
+        assert_eq!(state.logs.len(), 100);
+        assert_eq!(state.logs.back().unwrap().payload, "latest");
     }
 
     #[test]
@@ -982,6 +1046,8 @@ mod tests {
     fn profile_selection_requests_runtime_confirmation() {
         let id = ProfileId::parse("daily").unwrap();
         let requests = UiAction::SelectProfile(id).requests();
+        assert!(requests.iter().any(|request| matches!(request,
+            UiRequest::Runtime(RuntimeCommand::StartRealtime { topics }) if topics.len() == 4)));
         assert!(matches!(
             requests.last(),
             Some(UiRequest::Runtime(RuntimeCommand::GetMode))

@@ -17,7 +17,7 @@ use std::{
 
 use crate::domain::RealtimeEvent;
 use crate::ui::UiRequestEnvelope;
-use futures::channel::mpsc::UnboundedReceiver;
+use futures::{SinkExt as _, channel::mpsc::Receiver};
 
 use super::{
     frame,
@@ -59,7 +59,7 @@ pub enum ConnectError {
 }
 
 pub struct IpcClient {
-    events_rx: UnboundedReceiver<ClientEvent>,
+    events_rx: Receiver<ClientEvent>,
     requests_tx: Sender<UiRequestEnvelope>,
 }
 
@@ -127,58 +127,30 @@ impl IpcClient {
             .set_read_timeout(None)
             .map_err(ConnectError::Io)?;
 
-        let (events_tx, events_rx) = futures::channel::mpsc::unbounded::<ClientEvent>();
+        // Backpressure stays on the socket reader thread, never the GPUI thread.
+        let (mut events_tx, events_rx) = futures::channel::mpsc::channel::<ClientEvent>(8);
         events_tx
-            .unbounded_send(ClientEvent::Welcome {
+            .try_send(ClientEvent::Welcome {
                 protocol_version: PROTOCOL_VERSION,
                 initial,
             })
-            .ok();
+            .expect("new event queue has room for Welcome");
 
         std::thread::spawn(move || {
             let mut reader = reader;
-            loop {
-                match frame::read_message::<ClientMessage>(&mut reader) {
-                    Ok(ClientMessage::Welcome { .. }) => continue,
-                    Ok(ClientMessage::Response(envelope)) => {
-                        if events_tx
-                            .unbounded_send(ClientEvent::Response(envelope))
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    Ok(ClientMessage::RealtimeBatch(events)) => {
-                        if events_tx
-                            .unbounded_send(ClientEvent::RealtimeBatch(events))
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    Ok(ClientMessage::ActivateWindow) => {
-                        if events_tx
-                            .unbounded_send(ClientEvent::ActivateWindow)
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                    Ok(ClientMessage::HideWindow) => {
-                        if events_tx.unbounded_send(ClientEvent::HideWindow).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(ClientMessage::Duplicate) => {
-                        if events_tx.unbounded_send(ClientEvent::Duplicate).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(ClientMessage::Closed { reason }) => {
-                        let _ = events_tx.unbounded_send(ClientEvent::Closed { reason });
-                        break;
-                    }
-                    Err(_) => break,
+            while let Ok(message) = frame::read_message::<ClientMessage>(&mut reader) {
+                let event = match message {
+                    ClientMessage::Welcome { .. } => continue,
+                    ClientMessage::Response(envelope) => ClientEvent::Response(envelope),
+                    ClientMessage::RealtimeBatch(events) => ClientEvent::RealtimeBatch(events),
+                    ClientMessage::ActivateWindow => ClientEvent::ActivateWindow,
+                    ClientMessage::HideWindow => ClientEvent::HideWindow,
+                    ClientMessage::Duplicate => ClientEvent::Duplicate,
+                    ClientMessage::Closed { reason } => ClientEvent::Closed { reason },
+                };
+                let closed = matches!(event, ClientEvent::Closed { .. });
+                if futures::executor::block_on(events_tx.send(event)).is_err() || closed {
+                    break;
                 }
             }
         });
@@ -202,7 +174,7 @@ impl IpcClient {
     /// 事件接收端（futures channel，单消费者）。GUI 主协程
     /// `while let Some(event) = events.next().await` 消费；无事件时空闲挂起，
     /// CPU 为零。消费前先取走 `request_sender()`。
-    pub fn into_events(self) -> UnboundedReceiver<ClientEvent> {
+    pub fn into_events(self) -> Receiver<ClientEvent> {
         self.events_rx
     }
 
@@ -241,6 +213,23 @@ mod tests {
             // 保持连接直到测试结束。
             std::thread::sleep(Duration::from_secs(10));
         });
+    }
+
+    #[test]
+    fn slow_consumer_backpressures_reader_and_preserves_event_order() {
+        use futures::{FutureExt as _, StreamExt as _};
+        let (mut tx, mut rx) = futures::channel::mpsc::channel(1);
+        tx.try_send(ClientEvent::ActivateWindow).unwrap();
+        tx.try_send(ClientEvent::HideWindow).unwrap(); // futures reserves one sender slot
+        let pending = tx.send(ClientEvent::Duplicate);
+        futures::pin_mut!(pending);
+        assert!(pending.as_mut().now_or_never().is_none());
+        assert!(matches!(
+            futures::executor::block_on(rx.next()),
+            Some(ClientEvent::ActivateWindow)
+        ));
+        drop(rx);
+        assert!(futures::executor::block_on(pending).is_err());
     }
 
     #[test]

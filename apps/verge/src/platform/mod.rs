@@ -652,15 +652,22 @@ impl<R: CommandRunner> MacSystemProxy<R> {
         service: &str,
         state: &ProxyProtocolState,
     ) -> Result<(), AppError> {
-        self.runner.run(
-            NETWORK_SETUP,
-            &[
-                format!("-set{protocol}proxy"),
-                service.to_owned(),
-                state.endpoint.host.clone(),
-                state.endpoint.port.to_string(),
-            ],
-        )?;
+        if state.enabled {
+            ProxyEndpoint::new(&state.endpoint.host, state.endpoint.port)?;
+        }
+        // A disabled protocol may never have had an endpoint. Restoring it only
+        // needs the off command; networksetup rejects an empty -set*proxy server.
+        if !state.endpoint.host.is_empty() && state.endpoint.port != 0 {
+            self.runner.run(
+                NETWORK_SETUP,
+                &[
+                    format!("-set{protocol}proxy"),
+                    service.to_owned(),
+                    state.endpoint.host.clone(),
+                    state.endpoint.port.to_string(),
+                ],
+            )?;
+        }
         self.runner.run(
             NETWORK_SETUP,
             &[
@@ -791,13 +798,17 @@ fn parse_protocol_state(output: &str) -> Result<ProxyProtocolState, AppError> {
             _ => {}
         }
     }
-    Ok(ProxyProtocolState {
-        enabled: enabled.ok_or_else(|| platform_error("missing proxy Enabled field"))?,
-        endpoint: ProxyEndpoint::new(
-            host.ok_or_else(|| platform_error("missing proxy Server field"))?,
-            port.ok_or_else(|| platform_error("missing proxy Port field"))?,
-        )?,
-    })
+    let enabled = enabled.ok_or_else(|| platform_error("missing proxy Enabled field"))?;
+    let endpoint = ProxyEndpoint {
+        host: host.ok_or_else(|| platform_error("missing proxy Server field"))?,
+        port: port.ok_or_else(|| platform_error("missing proxy Port field"))?,
+    };
+    // networksetup reports an empty server and port 0 for an unconfigured,
+    // disabled protocol. Preserve that snapshot; only active endpoints must route.
+    if enabled {
+        ProxyEndpoint::new(&endpoint.host, endpoint.port)?;
+    }
+    Ok(ProxyProtocolState { enabled, endpoint })
 }
 
 fn parse_auto_proxy_state(output: &str) -> Result<AutoProxyState, AppError> {
@@ -1130,6 +1141,24 @@ mod tests {
                 .outputs
                 .push_back(Ok("There aren't any bypass domains set on Wi-Fi.\n".into()));
         }
+    }
+
+    #[test]
+    fn disabled_unconfigured_proxy_is_readable_and_restores_without_endpoint() {
+        let state = parse_protocol_state(&output(false, "", 0)).unwrap();
+        assert!(!state.enabled);
+        assert_eq!(state.endpoint.port, 0);
+        assert!(state.endpoint.host.is_empty());
+        assert!(parse_protocol_state(&output(true, "", 0)).is_err());
+        let directory = TestDir::new();
+        let mut runner = FakeRunner::default();
+        runner.outputs.push_back(Ok(String::new()));
+        let mut proxy = MacSystemProxy::new(runner, directory.0.join("recovery.json"));
+        proxy.set_protocol("web", "Wi-Fi", &state).unwrap();
+        assert_eq!(
+            proxy.runner.calls,
+            vec![vec![NETWORK_SETUP, "-setwebproxystate", "Wi-Fi", "off"]]
+        );
     }
 
     #[test]

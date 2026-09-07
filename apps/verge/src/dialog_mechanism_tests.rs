@@ -177,3 +177,119 @@ fn language_switch_updates_view_language(cx: &mut TestAppContext) {
         });
     });
 }
+
+#[gpui::test]
+fn connection_table_shares_snapshot_and_updates_before_render(cx: &mut TestAppContext) {
+    use crate::domain::{Connection, ConnectionSnapshot, RealtimeEvent};
+    let (_, holder, cx) = setup(cx);
+    let view = holder.borrow().clone().unwrap();
+    cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.state
+                .apply_realtime(RealtimeEvent::Connections(ConnectionSnapshot {
+                    upload_total: 0,
+                    download_total: 0,
+                    connection_count: 1,
+                    connections: vec![Connection {
+                        id: "test-connection".into(),
+                        ..Default::default()
+                    }],
+                }));
+            view.sync_connections(cx);
+            let snapshot = view.state.connections.as_ref().unwrap();
+            let table = view.connections_table.read(cx);
+            assert!(std::sync::Arc::ptr_eq(
+                snapshot,
+                table.delegate().snapshot.as_ref().unwrap()
+            ));
+            assert_eq!(
+                table.delegate().snapshot.as_ref().unwrap().connections[0].id,
+                "test-connection"
+            );
+        });
+    });
+}
+
+#[gpui::test]
+fn all_pages_render_at_minimum_window_size(cx: &mut TestAppContext) {
+    let (_, holder, cx) = setup(cx);
+    let view = holder.borrow().clone().unwrap();
+    cx.simulate_resize(gpui::size(gpui::px(960.), gpui::px(640.)));
+    for page in [
+        crate::ui::Page::Home,
+        crate::ui::Page::Proxies,
+        crate::ui::Page::Rules,
+        crate::ui::Page::Connections,
+        crate::ui::Page::Profiles,
+        crate::ui::Page::Logs,
+        crate::ui::Page::Settings,
+    ] {
+        cx.update(|_, cx| view.update(cx, |view, cx| view.navigate(page, cx)));
+        cx.run_until_parked();
+    }
+}
+
+#[gpui::test]
+fn connection_close_button_dispatches_immediately(cx: &mut TestAppContext) {
+    use crate::domain::{Connection, ConnectionSnapshot, RealtimeEvent, RuntimeCommand};
+    cx.update(gpui_component::init);
+    let (tx, rx) = mpsc::channel();
+    let holder: ViewHolder = Default::default();
+    let copy = holder.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| MainView::new(tx, window, cx));
+        *copy.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = holder.borrow().clone().unwrap();
+    cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.state
+                .apply_realtime(RealtimeEvent::Connections(ConnectionSnapshot {
+                    upload_total: 0,
+                    download_total: 0,
+                    connection_count: 1,
+                    connections: vec![Connection {
+                        id: "close-now".into(),
+                        ..Default::default()
+                    }],
+                }));
+            view.sync_connections(cx);
+            view.navigate(crate::ui::Page::Connections, cx);
+        })
+    });
+    cx.run_until_parked();
+    let bounds = cx
+        .debug_bounds("close-connection-0")
+        .expect("close button must be visible");
+    cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+    assert!(matches!(rx.try_recv().unwrap().request,
+        crate::ui::UiRequest::Runtime(RuntimeCommand::CloseConnection { id }) if id == "close-now"));
+}
+
+#[gpui::test]
+fn first_profile_activation_keeps_follow_up_reads_and_subscription(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let (tx, rx) = mpsc::channel();
+    let (view, cx) = cx.add_window_view(|window, cx| MainView::new(tx, window, cx));
+    cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.dispatch(
+                crate::ui::UiAction::SelectProfile(
+                    crate::domain::ProfileId::parse("first").unwrap(),
+                ),
+                cx,
+            );
+        })
+    });
+    let requests: Vec<_> = rx.try_iter().collect();
+    assert!(requests.iter().any(|r| matches!(
+        r.request,
+        crate::ui::UiRequest::Runtime(crate::domain::RuntimeCommand::StartRealtime { .. })
+    )));
+    assert!(requests.iter().any(|r| matches!(
+        r.request,
+        crate::ui::UiRequest::Runtime(crate::domain::RuntimeCommand::GetMode)
+    )));
+    assert!(requests.iter().all(|r| r.operation_len == requests.len()));
+}

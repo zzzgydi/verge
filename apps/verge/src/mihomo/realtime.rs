@@ -82,6 +82,11 @@ impl EventBuffer {
 
     fn push(&self, event: RealtimeEvent) {
         let mut events = self.events.lock().expect("realtime event mutex poisoned");
+        // A connection event replaces the whole table. Keep only its newest snapshot
+        // while the daemon is busy with a command, instead of up to 128 tables.
+        if matches!(event, RealtimeEvent::Connections(_)) {
+            events.retain(|pending| !matches!(pending, RealtimeEvent::Connections(_)));
+        }
         if events.len() == self.capacity {
             events.pop_front();
         }
@@ -433,6 +438,22 @@ mod tests {
                 RealtimeEvent::Traffic(TrafficEvent { up: 3, down: 0 }),
             ]
         );
+    }
+
+    #[test]
+    fn connection_snapshots_replace_pending_tables() {
+        let buffer = EventBuffer::new(128);
+        for count in 0..500 {
+            buffer.push(RealtimeEvent::Connections(ConnectionSnapshot {
+                connection_count: count,
+                upload_total: 0,
+                download_total: 0,
+                connections: Vec::new(),
+            }));
+        }
+        let events = buffer.drain();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], RealtimeEvent::Connections(s) if s.connection_count == 499));
     }
 
     #[test]

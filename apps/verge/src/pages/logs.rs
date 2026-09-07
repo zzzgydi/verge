@@ -28,28 +28,6 @@ const LEVELS: [(&str, Option<&'static str>); 5] = [
 /// 日志行高。虚拟列表要求渲染行高与 item_sizes 逐像素一致。
 const LOG_ROW_HEIGHT: f32 = 22.;
 
-/// 过滤后的日志行（原始下标 + 级别 + 内容）。
-struct LogRow {
-    source_index: usize,
-    level: String,
-    payload: String,
-}
-
-fn filtered_rows(view: &MainView) -> Vec<LogRow> {
-    let filter = view.log_filter;
-    view.state
-        .logs
-        .iter()
-        .enumerate()
-        .filter(|(_, log)| filter.is_none_or(|level| log.level == level))
-        .map(|(source_index, log)| LogRow {
-            source_index,
-            level: log.level.clone(),
-            payload: log.payload.clone(),
-        })
-        .collect()
-}
-
 /// 按级别着色：错误红、警告黄、调试灰、信息默认前景。
 fn level_color(level: &str, cx: &Context<MainView>) -> Hsla {
     match level {
@@ -60,9 +38,13 @@ fn level_color(level: &str, cx: &Context<MainView>) -> Hsla {
     }
 }
 
-fn render_log_row(row: &LogRow, cx: &Context<MainView>) -> AnyElement {
+fn render_log_row(
+    source_index: usize,
+    row: &crate::domain::LogEvent,
+    cx: &Context<MainView>,
+) -> AnyElement {
     div()
-        .id(SharedString::from(format!("log-row-{}", row.source_index)))
+        .id(SharedString::from(format!("log-row-{}", source_index)))
         .h(px(LOG_ROW_HEIGHT))
         .w_full()
         .px_2()
@@ -117,7 +99,15 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
             .child(filter_button),
     );
 
-    let rows = filtered_rows(view);
+    // Retain only indices; clone/format payloads only for the visible range.
+    let rows: Vec<usize> = view
+        .state
+        .logs
+        .iter()
+        .enumerate()
+        .filter(|(_, log)| filter.is_none_or(|level| log.level == level))
+        .map(|(ix, _)| ix)
+        .collect();
     if rows.is_empty() {
         let empty = super::EmptyState::new(
             gpui_component::IconName::SquareTerminal,
@@ -151,13 +141,21 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         );
         content = content.child(
             div().flex_1().min_h_0().overflow_hidden().child(
-                v_virtual_list(view_entity, "log-list", item_sizes, |this, range, _, cx| {
-                    let rows = filtered_rows(this);
-                    range
-                        .filter_map(|ix| rows.get(ix))
-                        .map(|row| render_log_row(row, cx))
-                        .collect()
-                })
+                v_virtual_list(
+                    view_entity,
+                    "log-list",
+                    item_sizes,
+                    move |this, range, _, cx| {
+                        range
+                            .filter_map(|ix| {
+                                rows.get(ix).and_then(|&source| {
+                                    this.state.logs.get(source).map(|log| (source, log))
+                                })
+                            })
+                            .map(|(source, log)| render_log_row(source, log, cx))
+                            .collect()
+                    },
+                )
                 .track_scroll(&view.log_scroll),
             ),
         );

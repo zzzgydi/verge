@@ -1,3 +1,4 @@
+mod appearance;
 pub mod application;
 pub mod config;
 pub mod daemon;

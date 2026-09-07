@@ -66,10 +66,11 @@ pub enum SendError {
 
 struct ConnectionHandle {
     writer_tx: SyncSender<ClientMessage>,
+    socket: UnixStream,
 }
 
-/// 每连接写队列上限。实时事件 100ms 一帧，正常远到不了这个水位。
-const WRITER_QUEUE_CAPACITY: usize = 512;
+/// Keep slow GUI clients from retaining hundreds of full connection snapshots.
+const WRITER_QUEUE_CAPACITY: usize = 32;
 
 pub struct IpcServer {
     events_tx: Sender<IpcServerEvent>,
@@ -153,6 +154,13 @@ impl IpcServer {
             return;
         };
         let (writer_tx, writer_rx) = mpsc::sync_channel::<ClientMessage>(WRITER_QUEUE_CAPACITY);
+        self.connections.lock().unwrap().insert(
+            conn_id,
+            ConnectionHandle {
+                writer_tx,
+                socket: stream,
+            },
+        );
         std::thread::spawn(move || {
             let mut writer = BufWriter::new(writer_stream);
             while let Ok(message) = writer_rx.recv() {
@@ -160,6 +168,7 @@ impl IpcServer {
                     break;
                 }
             }
+            let _ = writer.get_ref().shutdown(std::net::Shutdown::Both);
         });
         let events_tx = self.events_tx.clone();
         std::thread::spawn(move || {
@@ -171,7 +180,10 @@ impl IpcServer {
                         protocol_version,
                         app_version,
                     }) => (protocol_version, app_version),
-                    _ => return,
+                    _ => {
+                        let _ = events_tx.send(IpcServerEvent::Disconnected { conn_id });
+                        return;
+                    }
                 };
             if events_tx
                 .send(IpcServerEvent::Connected {
@@ -195,10 +207,6 @@ impl IpcServer {
             }
             let _ = events_tx.send(IpcServerEvent::Disconnected { conn_id });
         });
-        self.connections
-            .lock()
-            .unwrap()
-            .insert(conn_id, ConnectionHandle { writer_tx });
     }
 
     /// 向单条连接发送消息。连接不存在或队列满时返回错误。
@@ -207,13 +215,18 @@ impl IpcServer {
         let Some(handle) = connections.get(&conn_id) else {
             return Err(SendError::Disconnected);
         };
-        handle
-            .writer_tx
-            .try_send(message)
-            .map_err(|error| match error {
-                TrySendError::Full(_) => SendError::Full,
-                TrySendError::Disconnected(_) => SendError::Disconnected,
-            })
+        match handle.writer_tx.try_send(message) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                // Callers may ignore SendError. Close the socket so a reliable
+                // command response cannot disappear and leave the UI pending forever.
+                let _ = handle.socket.shutdown(std::net::Shutdown::Both);
+                Err(match error {
+                    TrySendError::Full(_) => SendError::Full,
+                    TrySendError::Disconnected(_) => SendError::Disconnected,
+                })
+            }
+        }
     }
 
     /// 把实时事件批量按订阅表分发。无订阅的连接不发送；
@@ -291,7 +304,9 @@ impl IpcServer {
     /// 关闭全部连接并停止 accept。进程退出时兜底。
     pub fn shutdown(&self) {
         self.shutdown.store(true, Ordering::Release);
-        self.connections.lock().unwrap().clear();
+        for (_, handle) in self.connections.lock().unwrap().drain() {
+            let _ = handle.socket.shutdown(std::net::Shutdown::Both);
+        }
         self.subscriptions.lock().unwrap().clear();
         let _ = fs::remove_file(&self.socket_path);
     }
@@ -423,6 +438,31 @@ mod tests {
             })
             .cloned()
             .collect()
+    }
+
+    #[test]
+    fn full_reliable_queue_disconnects_instead_of_losing_response() {
+        use std::io::Read as _;
+        let socket = temp_socket("full-queue");
+        let (server, _) = IpcServer::bind(&socket).unwrap();
+        let (local, mut peer) = UnixStream::pair().unwrap();
+        let (tx, _rx) = mpsc::sync_channel(1);
+        server.connections.lock().unwrap().insert(
+            99,
+            ConnectionHandle {
+                writer_tx: tx,
+                socket: local,
+            },
+        );
+        server.send(99, ClientMessage::ActivateWindow).unwrap();
+        assert_eq!(
+            server.send(99, ClientMessage::HideWindow),
+            Err(SendError::Full)
+        );
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .unwrap();
+        assert_eq!(peer.read(&mut [0]).unwrap(), 0);
+        server.shutdown();
     }
 
     #[test]

@@ -1,3 +1,5 @@
+mod actions;
+mod sheets;
 use crate::domain::{Profile, ProfileSource, UpdatePolicy};
 use crate::ui::UiAction;
 use gpui::{prelude::FluentBuilder as _, *};

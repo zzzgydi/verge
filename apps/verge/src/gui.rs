@@ -240,6 +240,7 @@ pub fn run() {
                                         set_app_menus(view.lang(), cx);
                                         view.sync_theme(window, cx);
                                         view.sync_form_inputs(window, cx);
+                                        view.sync_connections(cx);
                                         // 增量补齐：RefreshHome 同时建立实时订阅，
                                         // 后续变更全部走 Response / RealtimeBatch。
                                         view.dispatch(UiAction::RefreshHome, cx);
@@ -277,14 +278,13 @@ pub fn run() {
                                     );
                                     // toast / OS 通知文案按当前设置语言生成，语言从视图状态取，
                                     // 因此移进 update_in 闭包内计算。
-                                    let response = envelope.response.clone();
                                     let mut os_notification = None;
                                     {
                                         let os_notification_slot = &mut os_notification;
                                         let _ = weak_view.update_in(cx, move |view, window, cx| {
                                             let lang = view.lang();
-                                            *os_notification_slot = notification_for(lang, &response);
-                                            let toast = toast_for(lang, &response);
+                                            *os_notification_slot = notification_for(lang, &envelope.response);
+                                            let toast = toast_for(lang, &envelope.response);
                                             view.state.apply_response_envelope(envelope);
                                             set_app_menus(view.lang(), cx);
                                             if let Some(error) = &yaml_load_error {
@@ -303,6 +303,7 @@ pub fn run() {
                                             view.sync_theme(window, cx);
                                             // 设置首次到达后同步一次表单初值。
                                             view.sync_form_inputs(window, cx);
+                                            view.sync_connections(cx);
                                             // “查看 YAML”在加载完成后打开 Sheet。
                                             view.maybe_open_yaml_sheet(window, cx);
                                             // Merge 配置与合并结果 Sheet 同样在加载完成后填充。
@@ -322,10 +323,20 @@ pub fn run() {
                                 }
                                 ClientEvent::RealtimeBatch(events) => {
                                     let _ = weak_view.update_in(cx, |view, _, cx| {
+                                        view.telemetry.update(cx, |telemetry, cx| telemetry.apply(&events, cx));
+                                        let mut redraw = false;
+                                        let old_count = view.state.connections.as_ref().map(|s| s.connection_count);
                                         for event in events {
+                                            redraw |= match &event {
+                                                crate::domain::RealtimeEvent::Log(_) => view.state.page == crate::ui::Page::Logs,
+                                                crate::domain::RealtimeEvent::Reconnecting { .. } => true,
+                                                _ => false,
+                                            };
                                             view.state.apply_realtime(event);
                                         }
-                                        cx.notify();
+                                        view.sync_connections(cx);
+                                        let new_count = view.state.connections.as_ref().map(|s| s.connection_count);
+                                        if redraw || old_count != new_count { cx.notify(); }
                                     });
                                 }
                                 ClientEvent::ActivateWindow => {

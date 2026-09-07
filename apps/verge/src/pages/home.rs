@@ -1,93 +1,59 @@
+pub mod telemetry;
+
+use super::components::panel;
 use crate::domain::RunMode;
-use crate::ui::{CoreStatus, UiAction};
-use gpui::*;
+use crate::ui::{CoreStatus, Page, UiAction};
+use crate::{
+    i18n::{Lang, tr},
+    view::MainView,
+};
+use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, StyledExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
+    StyledExt as _,
     button::{Button, ButtonGroup, ButtonVariants as _},
-    group_box::GroupBox,
     h_flex,
-    label::Label,
     switch::Switch,
     v_flex,
 };
 
-use crate::{
-    format,
-    i18n::{Lang, tr},
-    view::MainView,
-};
-
-use super::page_title;
-
-/// 运行模式的界面文案。
 pub fn mode_label(lang: Lang, mode: RunMode) -> &'static str {
-    let key = match mode {
-        RunMode::Rule => "home.mode.rule",
-        RunMode::Global => "home.mode.global",
-        RunMode::Direct => "home.mode.direct",
-    };
-    tr(lang, key)
-}
-
-/// 概览页统计卡片。
-fn stat_tile(label: &'static str, value: String, cx: &Context<MainView>) -> impl IntoElement {
-    v_flex()
-        .flex_1()
-        .gap_1()
-        .p_4()
-        .rounded(cx.theme().radius_lg)
-        .bg(cx.theme().tiles)
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(label),
-        )
-        .child(
-            super::selectable_text(format!("stat-{label}"), value)
-                .text_lg()
-                .font_semibold(),
-        )
+    tr(
+        lang,
+        match mode {
+            RunMode::Rule => "home.mode.rule",
+            RunMode::Global => "home.mode.global",
+            RunMode::Direct => "home.mode.direct",
+        },
+    )
 }
 
 pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
     const MODES: [RunMode; 3] = [RunMode::Rule, RunMode::Global, RunMode::Direct];
-
     let lang = view.lang();
-    let core_status = match view.state.core_status {
-        CoreStatus::Running => tr(lang, "home.core.running"),
-        CoreStatus::Offline => tr(lang, "home.core.offline"),
-        CoreStatus::Unknown => tr(lang, "common.unknown"),
-    }
-    .to_owned();
-    let proxy_enabled = view.state.system_proxy_enabled();
+    let (core_status, status_color) = match view.state.core_status {
+        CoreStatus::Running => (tr(lang, "home.core.running"), cx.theme().success),
+        CoreStatus::Offline => (tr(lang, "home.core.offline"), cx.theme().muted_foreground),
+        CoreStatus::Unknown => (tr(lang, "common.unknown"), cx.theme().muted_foreground),
+    };
+    let profile = view
+        .state
+        .profiles
+        .iter()
+        .find(|p| Some(&p.id) == view.state.selected_profile.as_ref());
+    let profile_name = profile.map_or_else(
+        || tr(lang, "home.no_profile").to_owned(),
+        |p| p.name.clone(),
+    );
     let proxy_settings = view.state.runtime_settings.clone();
     let proxy_available = proxy_settings.is_some();
-    let upload = view
-        .state
-        .traffic
-        .as_ref()
-        .map_or_else(|| "—".to_owned(), |traffic| format::rate(traffic.up));
-    let download = view
-        .state
-        .traffic
-        .as_ref()
-        .map_or_else(|| "—".to_owned(), |traffic| format::rate(traffic.down));
-    let memory = view.state.memory.as_ref().map_or_else(
-        || tr(lang, "common.unknown").to_owned(),
-        |memory| format::bytes(memory.inuse),
-    );
-    let connections = view.state.connections.as_ref().map_or_else(
-        || "—".to_owned(),
-        |connections| connections.connection_count.to_string(),
-    );
-
     let mode_group = ButtonGroup::new("mode-group")
         .outline()
         .small()
         .children(MODES.map(|mode| {
             Button::new(format!("mode-{mode:?}"))
                 .label(mode_label(lang, mode))
+                .disabled(view.state.mode.is_none())
                 .selected(view.state.mode == Some(mode))
         }))
         .on_click(cx.listener(|this, clicked: &Vec<usize>, _, cx| {
@@ -96,90 +62,213 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
             }
         }));
 
-    v_flex()
-        .gap_4()
+    let connection = panel(cx)
+        .flex_1()
+        .min_w_0()
+        .justify_between()
         .child(
-            h_flex()
-                .justify_between()
-                .child(page_title(tr(lang, "home.title")))
+            v_flex()
+                .gap_5()
                 .child(
-                    Button::new("refresh-home")
-                        .label(tr(lang, "common.refresh"))
-                        .small()
-                        .ghost()
-                        .loading(view.is_pending(&["runtime_settings", "mode", "system_proxy"]))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.dispatch(UiAction::RefreshHome, cx);
-                        })),
-                ),
-        )
-        .child(
-            h_flex()
-                .gap_3()
-                .child(stat_tile(tr(lang, "home.tile.core"), core_status, cx))
-                .child(stat_tile(
-                    tr(lang, "home.tile.upload"),
-                    format!("↑ {upload}"),
-                    cx,
-                ))
-                .child(stat_tile(
-                    tr(lang, "home.tile.download"),
-                    format!("↓ {download}"),
-                    cx,
-                ))
-                .child(stat_tile(tr(lang, "home.tile.memory"), memory, cx))
-                .child(stat_tile(
-                    tr(lang, "home.tile.connections"),
-                    connections,
-                    cx,
-                )),
-        )
-        .child(
-            GroupBox::new()
-                .id("home-proxy-control")
-                .title(tr(lang, "home.proxy_control"))
-                .child(
-                    v_flex()
-                        .gap_3()
+                    h_flex()
+                        .justify_between()
                         .child(
-                            h_flex()
-                                .w_full()
-                                .justify_between()
+                            div()
+                                .size_10()
+                                .rounded_xl()
+                                .bg(cx.theme().accent)
+                                .flex()
                                 .items_center()
-                                .child(Label::new(tr(lang, "home.run_mode")))
-                                .child(mode_group),
+                                .justify_center()
+                                .child(Icon::new(IconName::Globe).size_5()),
                         )
                         .child(
                             h_flex()
-                                .w_full()
-                                .justify_between()
-                                .items_center()
-                                .child(Label::new(tr(lang, "home.system_proxy")))
-                                .child(
-                                    Switch::new("system-proxy")
-                                        .checked(proxy_enabled)
-                                        .disabled(!proxy_available)
-                                        .on_click(cx.listener(
-                                            move |this, checked: &bool, _, cx| {
-                                                if let Some(settings) = &proxy_settings {
-                                                    this.dispatch(
-                                                        UiAction::SetSystemProxy {
-                                                            enabled: *checked,
-                                                            services: settings
-                                                                .system_proxy_services
-                                                                .clone(),
-                                                            endpoint: settings
-                                                                .system_proxy_endpoint
-                                                                .clone(),
-                                                        },
-                                                        cx,
-                                                    );
-                                                }
+                                .gap_2()
+                                .text_xs()
+                                .text_color(status_color)
+                                .child(div().size(px(6.)).rounded_full().bg(status_color))
+                                .child(core_status),
+                        ),
+                )
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(tr(lang, "home.active_profile")),
+                        )
+                        .child(
+                            div()
+                                .text_2xl()
+                                .font_medium()
+                                .truncate()
+                                .child(profile_name),
+                        )
+                        .when(profile.is_none(), |this| {
+                            this.child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(tr(lang, "home.profile_hint")),
+                            )
+                        }),
+                ),
+        )
+        .child(
+            v_flex()
+                .gap_4()
+                .mt_6()
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .items_center()
+                        .text_sm()
+                        .child(tr(lang, "home.system_proxy"))
+                        .child(
+                            Switch::new("system-proxy")
+                                .checked(view.state.system_proxy_enabled())
+                                .disabled(!proxy_available)
+                                .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                                    if let Some(settings) = &proxy_settings {
+                                        this.dispatch(
+                                            UiAction::SetSystemProxy {
+                                                enabled: *checked,
+                                                services: settings.system_proxy_services.clone(),
+                                                endpoint: settings.system_proxy_endpoint.clone(),
                                             },
-                                        )),
-                                ),
+                                            cx,
+                                        );
+                                    }
+                                })),
+                        ),
+                )
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(tr(lang, "home.run_mode")),
+                        )
+                        .child(mode_group),
+                )
+                .child(
+                    Button::new("manage-profiles")
+                        .primary()
+                        .w_full()
+                        .label(tr(lang, "home.manage_profiles"))
+                        .on_click(cx.listener(|this, _, _, cx| this.navigate(Page::Profiles, cx))),
+                ),
+        );
+
+    let quick_links = [
+        (
+            Page::Proxies,
+            IconName::Globe,
+            "proxies.title",
+            "home.proxy_hint",
+        ),
+        (
+            Page::Rules,
+            IconName::BookOpen,
+            "rules.title",
+            "home.rules_hint",
+        ),
+        (
+            Page::Logs,
+            IconName::SquareTerminal,
+            "logs.title",
+            "home.logs_hint",
+        ),
+    ]
+    .map(|(page, icon, title, hint)| {
+        h_flex()
+            .flex_1()
+            .min_w_0()
+            .gap_3()
+            .items_center()
+            .child(
+                div()
+                    .size_10()
+                    .rounded_lg()
+                    .bg(cx.theme().accent)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(Icon::new(icon).size_4()),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .child(div().text_sm().child(tr(lang, title)))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(tr(lang, hint)),
+                    ),
+            )
+            .child(
+                Button::new(format!("open-{page:?}"))
+                    .ghost()
+                    .small()
+                    .icon(IconName::ArrowRight)
+                    .tooltip(tr(lang, title))
+                    .on_click(cx.listener(move |this, _, _, cx| this.navigate(page, cx))),
+            )
+    });
+
+    v_flex()
+        .gap_6()
+        .child(
+            h_flex()
+                .justify_between()
+                .items_center()
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(div().text_2xl().font_medium().child(tr(lang, "home.title")))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(tr(lang, "home.subtitle")),
+                        ),
+                )
+                .child(
+                    Button::new("refresh-home")
+                        .outline()
+                        .small()
+                        .icon(IconName::Redo)
+                        .label(tr(lang, "common.refresh"))
+                        .loading(view.is_pending(&["runtime_settings", "mode", "system_proxy"]))
+                        .on_click(
+                            cx.listener(|this, _, _, cx| this.dispatch(UiAction::RefreshHome, cx)),
                         ),
                 ),
+        )
+        .child(
+            h_flex()
+                .gap_4()
+                .items_stretch()
+                .child(connection)
+                .child(div().flex_1().min_w_0().child(view.telemetry.clone())),
+        )
+        .child(
+            panel(cx)
+                .child(
+                    div()
+                        .text_sm()
+                        .font_medium()
+                        .child(tr(lang, "home.quick_access")),
+                )
+                .child(h_flex().gap_5().children(quick_links)),
         )
         .into_any_element()
 }

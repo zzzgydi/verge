@@ -1,3 +1,4 @@
+mod actions;
 use crate::domain::{HelperStatus, SettingsScope, ThemePreference};
 use crate::ui::UiAction;
 use gpui::{prelude::FluentBuilder as _, *};

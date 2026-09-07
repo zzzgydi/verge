@@ -18,15 +18,16 @@ const GROUP_ROW_HEIGHT: f32 = 28.;
 const NODE_ROW_HEIGHT: f32 = 34.;
 
 /// 代理页拍平后的行：组标题行 + 节点行。
+#[derive(Clone, Copy)]
 enum ProxyRow {
-    Group { name: String, kind: String },
-    Node { group: String, proxy: String },
+    Group(usize),
+    Node { group: usize, member: usize },
 }
 
 impl ProxyRow {
     fn height(&self) -> Pixels {
         match self {
-            Self::Group { .. } => px(GROUP_ROW_HEIGHT),
+            Self::Group(_) => px(GROUP_ROW_HEIGHT),
             Self::Node { .. } => px(NODE_ROW_HEIGHT),
         }
     }
@@ -36,15 +37,10 @@ fn proxy_rows(view: &MainView) -> Vec<ProxyRow> {
     view.state
         .proxy_groups
         .iter()
-        .flat_map(|group| {
-            std::iter::once(ProxyRow::Group {
-                name: group.name.clone(),
-                kind: group.kind.clone(),
-            })
-            .chain(group.members.iter().map(|proxy| ProxyRow::Node {
-                group: group.name.clone(),
-                proxy: proxy.clone(),
-            }))
+        .enumerate()
+        .flat_map(|(group, value)| {
+            std::iter::once(ProxyRow::Group(group))
+                .chain((0..value.members.len()).map(move |member| ProxyRow::Node { group, member }))
         })
         .collect()
 }
@@ -60,26 +56,26 @@ fn delay_color(delay: Option<u32>, cx: &App) -> Hsla {
 
 fn render_row(row: &ProxyRow, view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
     match row {
-        ProxyRow::Group { name, kind } => div()
-            .h(px(GROUP_ROW_HEIGHT))
-            .flex()
-            .items_center()
-            .child(
-                div()
-                    .text_sm()
-                    .font_semibold()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(format!("{name} · {kind}")),
-            )
-            .into_any_element(),
-        ProxyRow::Node { group, proxy } => {
-            let selected = view
-                .state
-                .proxy_groups
-                .iter()
-                .find(|candidate| candidate.name == *group)
-                .and_then(|candidate| candidate.selected.as_deref())
-                == Some(proxy.as_str());
+        ProxyRow::Group(ix) => {
+            let group = &view.state.proxy_groups[*ix];
+            let (name, kind) = (&group.name, &group.kind);
+            div()
+                .h(px(GROUP_ROW_HEIGHT))
+                .flex()
+                .items_center()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_semibold()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("{name} · {kind}")),
+                )
+                .into_any_element()
+        }
+        ProxyRow::Node { group, member } => {
+            let entry = &view.state.proxy_groups[*group];
+            let (group, proxy) = (&entry.name, &entry.members[*member]);
+            let selected = entry.selected.as_deref() == Some(proxy.as_str());
             let delay = view.state.delays.get(proxy).copied();
             let delay_text = delay.map_or_else(
                 || tr(view.lang(), "proxies.test_delay").to_owned(),
@@ -209,8 +205,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
             view_entity,
             "proxy-list",
             item_sizes,
-            |this, range, _, cx| {
-                let rows = proxy_rows(this);
+            move |this, range, _, cx| {
                 range
                     .filter_map(|ix| rows.get(ix))
                     .map(|row| render_row(row, this, cx))

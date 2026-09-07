@@ -24,6 +24,34 @@ impl Lang {
 
 /// 文案表：`(key, zh-CN, en)`。key 按页面/用途命名。
 const ENTRIES: &[(&str, &str, &str)] = &[
+    (
+        "home.subtitle",
+        "网络状态，尽在眼前。",
+        "Your network, at a glance.",
+    ),
+    ("home.traffic", "实时流量", "Network activity"),
+    ("home.samples", "最近 40 次采样", "LAST 40 SAMPLES"),
+    (
+        "home.traffic_waiting",
+        "内核启动后显示实时流量",
+        "Traffic appears when the core is running",
+    ),
+    ("home.recent", "较早", "Earlier"),
+    ("home.now", "现在", "Now"),
+    ("home.core_memory", "Mihomo 内存", "Mihomo memory"),
+    ("home.active_profile", "当前配置", "Active profile"),
+    ("home.no_profile", "尚未选择配置", "No profile selected"),
+    (
+        "home.profile_hint",
+        "导入并启用配置，开始连接。",
+        "Import and activate a profile to get connected.",
+    ),
+    ("home.manage_profiles", "管理配置", "Manage profiles"),
+    ("home.quick_access", "工作区", "Workspace"),
+    ("home.proxy_hint", "查看节点与延迟", "Nodes & latency"),
+    ("home.rules_hint", "查看流量路由规则", "Routing & providers"),
+    ("home.logs_hint", "查看运行日志", "Events & diagnostics"),
+    ("nav.tagline", "网络工作区", "NETWORK WORKSPACE"),
     // ---- 通用 ----
     ("common.refresh", "刷新", "Refresh"),
     ("common.cancel", "取消", "Cancel"),

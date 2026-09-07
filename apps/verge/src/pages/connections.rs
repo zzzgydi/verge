@@ -1,6 +1,6 @@
-use std::sync::mpsc;
+use std::sync::Arc;
 
-use crate::domain::{Connection, ConnectionSnapshot};
+use crate::domain::ConnectionSnapshot;
 use crate::ui::UiAction;
 use gpui::*;
 use gpui_component::{
@@ -32,20 +32,20 @@ const COLUMN_KEYS: [&str; 7] = [
     "connections.col.actions",
 ];
 
-/// 连接表的 delegate：持有快照数据，右键菜单和按钮通过 channel 回到 MainView dispatch。
+/// 连接表共享不可变快照；按钮通过弱实体句柄即时派发 typed action。
 pub struct ConnectionsDelegate {
-    pub connections: Vec<Connection>,
+    pub snapshot: Option<Arc<ConnectionSnapshot>>,
     columns: Vec<Column>,
-    actions: mpsc::Sender<UiAction>,
+    actions: WeakEntity<MainView>,
     language: Lang,
 }
 
 impl ConnectionsDelegate {
-    pub fn new(actions: mpsc::Sender<UiAction>) -> Self {
-        // 创建时设置尚未到达，列名先用英文；语言确定后由 render 里的 set_language 重设。
+    pub fn new(actions: WeakEntity<MainView>) -> Self {
+        // 创建时使用英文；设置响应到达后同步列名。
         let language = Lang::En;
         Self {
-            connections: Vec::new(),
+            snapshot: None,
             // 7 列总宽控制在内容区（约 850px）内，避免横向挤压。
             columns: vec![
                 Column::new("process", tr(language, COLUMN_KEYS[0])).width(110.),
@@ -84,7 +84,7 @@ impl TableDelegate for ConnectionsDelegate {
     }
 
     fn rows_count(&self, _cx: &App) -> usize {
-        self.connections.len()
+        self.snapshot.as_ref().map_or(0, |s| s.connections.len())
     }
 
     fn column(&self, col_ix: usize, _cx: &App) -> Column {
@@ -98,7 +98,11 @@ impl TableDelegate for ConnectionsDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let Some(connection) = self.connections.get(row_ix) else {
+        let Some(connection) = self
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.connections.get(row_ix))
+        else {
             return div().into_any_element();
         };
         let text = |content: String| {
@@ -154,13 +158,19 @@ impl TableDelegate for ConnectionsDelegate {
             6 => {
                 let id = connection.id.clone();
                 let actions = self.actions.clone();
-                Button::new(SharedString::from(format!("close-conn-{}", connection.id)))
-                    .label(tr(self.language, "connections.close"))
-                    .xsmall()
-                    .ghost()
-                    .on_click(move |_, _, _| {
-                        let _ = actions.send(UiAction::CloseConnection(id.clone()));
-                    })
+                div()
+                    .debug_selector(move || format!("close-connection-{row_ix}"))
+                    .child(
+                        Button::new(SharedString::from(format!("close-conn-{}", connection.id)))
+                            .label(tr(self.language, "connections.close"))
+                            .xsmall()
+                            .ghost()
+                            .on_click(move |_, _, cx| {
+                                let _ = actions.update(cx, |view, cx| {
+                                    view.dispatch(UiAction::CloseConnection(id.clone()), cx)
+                                });
+                            }),
+                    )
                     .into_any_element()
             }
             _ => div().into_any_element(),
@@ -174,15 +184,21 @@ impl TableDelegate for ConnectionsDelegate {
         _window: &mut Window,
         _cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
-        let Some(connection) = self.connections.get(row_ix) else {
+        let Some(connection) = self
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.connections.get(row_ix))
+        else {
             return menu;
         };
         let id = connection.id.clone();
         let actions = self.actions.clone();
         menu.item(
             PopupMenuItem::new(tr(self.language, "connections.close_menu")).on_click(
-                move |_, _, _| {
-                    let _ = actions.send(UiAction::CloseConnection(id.clone()));
+                move |_, _, cx| {
+                    let _ = actions.update(cx, |view, cx| {
+                        view.dispatch(UiAction::CloseConnection(id.clone()), cx)
+                    });
                 },
             ),
         )
@@ -191,23 +207,6 @@ impl TableDelegate for ConnectionsDelegate {
 
 pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
     let lang = view.lang();
-    let snapshot: Option<ConnectionSnapshot> = view.state.connections.clone();
-    // 快照内容没变就不 refresh，避免每帧重建表格；语言切换（列名变化）也要 refresh。
-    let connections = snapshot
-        .as_ref()
-        .map(|snapshot| snapshot.connections.clone())
-        .unwrap_or_default();
-    view.connections_table.update(cx, |table, cx| {
-        let mut dirty = table.delegate_mut().set_language(lang);
-        if table.delegate().connections != connections {
-            table.delegate_mut().connections = connections;
-            dirty = true;
-        }
-        if dirty {
-            table.refresh(cx);
-        }
-    });
-
     let summary = view.state.connections.as_ref().map_or_else(
         || tr(lang, "connections.waiting").to_owned(),
         |connections| {
