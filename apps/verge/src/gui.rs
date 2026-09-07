@@ -213,6 +213,7 @@ pub fn run() {
                 ..TitleBar::window_options()
             };
             cx.open_window(window_options, |window, cx| {
+                    window.activate_window();
                     window.set_window_title("Verge");
                     let view = cx.new(|cx| MainView::new(request_tx, window, cx));
                     view.update(cx, |view, cx| {
