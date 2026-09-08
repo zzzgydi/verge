@@ -464,6 +464,46 @@ impl<R: CommandRunner> MacSystemProxy<R> {
         })
     }
 
+    /// Retarget only enabled listeners that still point to Verge's previous endpoints.
+    /// apply_change retains the original recovery record and rolls back partial writes.
+    pub fn remap_endpoints(
+        &mut self,
+        services: &[String],
+        old_http: &ProxyEndpoint,
+        old_socks: Option<&ProxyEndpoint>,
+        new: &ProxyEndpoint,
+    ) -> Result<(), AppError> {
+        if !self.recovery_path.exists() {
+            return Ok(());
+        }
+        let state = self.state(services)?;
+        self.apply_change(services, |proxy, service| {
+            let current = state
+                .services
+                .iter()
+                .find(|s| s.service == service)
+                .expect("queried service");
+            for (protocol, value, old) in [
+                ("web", &current.web, Some(old_http)),
+                ("secureweb", &current.secure_web, Some(old_http)),
+                ("socksfirewall", &current.socks, old_socks),
+            ] {
+                if value.enabled && old == Some(&value.endpoint) && value.endpoint != *new {
+                    proxy.set_protocol(
+                        protocol,
+                        service,
+                        &ProxyProtocolState {
+                            enabled: true,
+                            endpoint: new.clone(),
+                        },
+                    )?;
+                }
+            }
+            Ok(())
+        })?;
+        Ok(())
+    }
+
     pub fn disable(&mut self) -> Result<SystemProxyState, AppError> {
         self.recover_pending()
     }
@@ -1190,6 +1230,46 @@ mod tests {
         assert_eq!(
             proxy.runner.calls[0],
             [NETWORK_SETUP, "-listallnetworkservices"]
+        );
+    }
+
+    #[test]
+    fn network_port_remap_preserves_unrelated_protocols_and_recovery_record() {
+        let directory = TestDir::new();
+        let recovery = directory.0.join("recovery.json");
+        fs::write(&recovery, "original-recovery-record").unwrap();
+        let mut runner = FakeRunner::default();
+        for _ in 0..2 {
+            runner.outputs.extend([
+                Ok(output(true, "127.0.0.1", 7890)),
+                Ok(output(true, "unrelated.local", 8443)),
+                Ok(output(false, "127.0.0.1", 7890)),
+                Ok("URL: (null)\nEnabled: No\n".into()),
+                Ok("There aren't any bypass domains set on Wi-Fi.\n".into()),
+            ]);
+        }
+        runner
+            .outputs
+            .extend([Ok(String::new()), Ok(String::new())]);
+        snapshot_outputs(&mut runner, 1);
+        let mut proxy = MacSystemProxy::new(runner, &recovery);
+        let old = ProxyEndpoint::new("127.0.0.1", 7890).unwrap();
+        let new = ProxyEndpoint::new("127.0.0.1", 9000).unwrap();
+        proxy
+            .remap_endpoints(&["Wi-Fi".into()], &old, Some(&old), &new)
+            .unwrap();
+        let writes = proxy
+            .runner
+            .calls
+            .iter()
+            .filter(|call| call.get(1).is_some_and(|arg| arg.starts_with("-set")))
+            .collect::<Vec<_>>();
+        assert_eq!(writes.len(), 2);
+        assert_eq!(writes[0][1], "-setwebproxy");
+        assert_eq!(writes[0].last().unwrap(), "9000");
+        assert_eq!(
+            fs::read_to_string(recovery).unwrap(),
+            "original-recovery-record"
         );
     }
 

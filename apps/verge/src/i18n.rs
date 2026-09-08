@@ -24,6 +24,61 @@ impl Lang {
 
 /// 文案表：`(key, zh-CN, en)`。key 按页面/用途命名。
 const ENTRIES: &[(&str, &str, &str)] = &[
+    ("network.saved", "网络设置已保存", "Network settings saved"),
+    ("network.lan", "局域网连接", "Allow LAN"),
+    (
+        "network.lan.desc",
+        "允许同一网络中的设备使用此代理",
+        "Allow devices on your network to use this proxy",
+    ),
+    (
+        "network.ipv6.desc",
+        "允许 IPv6 连接与解析",
+        "Enable IPv6 connections and resolution",
+    ),
+    ("network.delay", "统一延迟", "Unified delay"),
+    (
+        "network.delay.desc",
+        "使用统一方式计算节点延迟",
+        "Use a consistent method to measure proxy latency",
+    ),
+    ("network.dns", "DNS 覆写", "DNS override"),
+    (
+        "network.dns.desc",
+        "关闭后使用订阅配置中的 DNS 设置",
+        "When off, use DNS settings from the profile",
+    ),
+    (
+        "network.dns.title",
+        "DNS 覆写配置",
+        "DNS override configuration",
+    ),
+    ("network.log", "日志等级", "Log level"),
+    ("network.port", "代理端口", "Proxy port"),
+    (
+        "network.port.desc",
+        "HTTP 与 SOCKS 共用端口",
+        "Shared port for HTTP and SOCKS",
+    ),
+    (
+        "network.port.invalid",
+        "端口必须在 1–65535 之间",
+        "Port must be between 1 and 65535",
+    ),
+    ("network.controller", "外部控制器", "External controller"),
+    (
+        "network.controller.desc",
+        "供外部面板或 API 客户端访问",
+        "Access from external dashboards and API clients",
+    ),
+    (
+        "network.controller.enable",
+        "启用外部控制器",
+        "Enable external controller",
+    ),
+    ("network.controller.address", "监听地址", "Listen address"),
+    ("network.controller.secret", "API 访问密钥", "API secret"),
+    ("network.disabled", "已关闭", "Disabled"),
     (
         "home.subtitle",
         "网络状态，尽在眼前。",

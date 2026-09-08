@@ -186,7 +186,18 @@ struct Backend {
 
 impl Backend {
     fn new(config: BackendConfig) -> Result<Self, AppError> {
-        let profiles = FileProfileStore::open(config.data_dir.join("profiles"))?;
+        let mut profiles = FileProfileStore::open_with_keychain(config.data_dir.join("profiles"))?;
+        let control_dir = config.data_dir.join("control");
+        fs::create_dir_all(&control_dir)
+            .map_err(|e| AppError::new(ErrorCode::StorageFailed, e.to_string()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&control_dir, fs::Permissions::from_mode(0o700))
+                .map_err(|e| AppError::new(ErrorCode::StorageFailed, e.to_string()))?;
+        }
+        let socket = control_dir.join("mihomo.sock");
+        profiles.set_internal_socket(socket);
         let settings = FileSettingsStore::open(&config.data_dir)?;
         let mut platform = MacSystemProxy::new(ProcessRunner, config.recovery_path.clone());
         let services = if config.services.is_empty() {
@@ -256,7 +267,7 @@ impl Backend {
         let runtime_config =
             self.profiles
                 .materialize_runtime(profile, config.controller, &config.secret)?;
-        let supervisor = CoreSupervisor::new(
+        let mut supervisor = CoreSupervisor::new(
             MihomoConfig {
                 binary: config.binary.clone(),
                 working_dir,
@@ -269,14 +280,22 @@ impl Backend {
             },
             runtime_config,
         )?;
-        let transport =
-            TcpControllerTransport::new(config.controller, &config.secret, Duration::from_secs(2))?;
+        let socket = config.data_dir.join("control/mihomo.sock");
+        if socket.as_os_str().len() >= 104 {
+            return Err(AppError::new(
+                ErrorCode::InvalidInput,
+                "Verge data directory is too long for the internal controller socket",
+            ));
+        }
+        supervisor.set_internal_socket(socket.clone());
+        let transport = TcpControllerTransport::unix(socket.clone(), Duration::from_secs(2))?;
         let mut runtime = MihomoRuntime::new(
             MihomoClient::new(transport),
             config.controller,
             config.secret.clone(),
             RealtimeOptions::default(),
         )?;
+        runtime.set_internal_socket(socket);
         runtime.set_sensitive_values(self.profiles.list().iter().filter_map(|profile| {
             match &profile.source {
                 crate::domain::ProfileSource::Remote { url } => Some(url.clone()),
@@ -307,6 +326,7 @@ impl Backend {
             .start()
             .map_err(|error| error.cause)?;
         self.engine = Some(engine);
+        self.refresh_sensitive_values();
         self.runtime_error = None;
         self.startup_updates_pending = true;
         Ok(())
@@ -383,6 +403,11 @@ impl Backend {
                     }
                     None => Err(unavailable),
                 };
+                if result.is_ok()
+                    && let RuntimeCommand::SetNetworkSettings { settings } = &request
+                {
+                    self.profiles.preserve_runtime_tun(settings.tun_enabled);
+                }
                 UiResponse::Runtime { request, result }
             }
             UiRequest::SystemProxy(request) => {
@@ -396,6 +421,23 @@ impl Backend {
     fn execute_profile(&mut self, command: AppCommand) -> Result<AppCommandResult, AppError> {
         let now = unix_timestamp()?;
         match &command {
+            AppCommand::GetCoreNetworkSettings => {
+                return Ok(AppCommandResult {
+                    output: AppCommandOutput::CoreNetworkSettings(
+                        self.profiles.network_settings()?,
+                    ),
+                    summary: "Network overrides loaded".into(),
+                });
+            }
+            AppCommand::UpdateCoreNetworkSettings { settings } => {
+                self.update_core_network(settings.clone())?;
+                return Ok(AppCommandResult {
+                    output: AppCommandOutput::CoreNetworkSettings(
+                        self.profiles.network_settings()?,
+                    ),
+                    summary: "Network overrides saved and applied".into(),
+                });
+            }
             AppCommand::GetRuntimeSettings => {
                 let selected = self
                     .profiles
@@ -679,6 +721,50 @@ impl Backend {
         })
     }
 
+    fn update_core_network(
+        &mut self,
+        settings: crate::domain::CoreNetworkSettings,
+    ) -> Result<(), AppError> {
+        settings.validate()?;
+        let Some(engine) = &mut self.engine else {
+            // Persist even without a subscription; the next start uses the same overrides.
+            return self.profiles.set_network_override(Some(settings));
+        };
+        use crate::application::RuntimeControl as _;
+        let current = engine.runtime.network_settings()?;
+        self.profiles.preserve_runtime_tun(current.tun_enabled);
+        let selected = self.profiles.selected().cloned();
+        let old_http = selected
+            .as_ref()
+            .and_then(|id| self.profiles.system_proxy_endpoint(id).ok());
+        let old_socks = selected
+            .as_ref()
+            .and_then(|id| self.profiles.system_proxy_socks_endpoint(id).ok().flatten());
+        let services = self.system_proxy.managed_services().to_vec();
+        let mut proxy = MacSystemProxy::new(ProcessRunner, self.config.recovery_path.clone());
+        let mut core = SupervisorControl::new(&mut engine.supervisor, Duration::from_secs(5));
+        let credentials = RuntimeCredentials {
+            controller: self.config.controller,
+            secret: self.config.secret.clone(),
+        };
+        crate::application::ConfigCommandHandler::with_runtime_credentials(
+            &mut self.profiles,
+            &mut core,
+            credentials,
+        )
+        .update_network_settings(settings, |profiles| {
+            if let (Some(id), Some(old)) = (&selected, &old_http) {
+                let new = profiles.system_proxy_endpoint(id)?;
+                if &new != old || old_socks.as_ref().is_some_and(|s| s != &new) {
+                    proxy.remap_endpoints(&services, old, old_socks.as_ref(), &new)?;
+                }
+            }
+            Ok(())
+        })?;
+        self.refresh_sensitive_values();
+        Ok(())
+    }
+
     /// 诊断导出的文本脱敏:controller secret、订阅地址、用户目录、认证头。
     /// 在写入 JSON 之前作用于各自由文本字段,保持结构与既有脱敏规则不变。
     fn redact_text(&self, text: &str) -> String {
@@ -692,6 +778,9 @@ impl Backend {
                 crate::domain::ProfileSource::Local => None,
             })
             .collect::<Vec<_>>();
+        if let Some(settings) = self.profiles.network_override() {
+            sensitive.push(settings.external_controller.secret);
+        }
         if let Ok(home) = env::var("HOME") {
             sensitive.push(home);
         }
@@ -1070,7 +1159,7 @@ impl Backend {
     }
 
     fn refresh_sensitive_values(&mut self) {
-        let values = self
+        let mut values = self
             .profiles
             .list()
             .iter()
@@ -1079,6 +1168,9 @@ impl Backend {
                 crate::domain::ProfileSource::Local => None,
             })
             .collect::<Vec<_>>();
+        if let Some(settings) = self.profiles.network_override() {
+            values.push(settings.external_controller.secret);
+        }
         if let Some(engine) = &mut self.engine {
             engine.runtime.set_sensitive_values(values);
         }
@@ -1966,6 +2058,30 @@ mod tests {
             state.enabled = enabled;
             Ok(())
         }
+    }
+
+    #[test]
+    fn network_settings_save_without_a_selected_profile() {
+        let (mut backend, dir) = test_backend("network-settings");
+        let settings = crate::domain::CoreNetworkSettings {
+            mixed_port: 19097,
+            ..Default::default()
+        };
+        backend
+            .execute_profile(AppCommand::UpdateCoreNetworkSettings {
+                settings: settings.clone(),
+            })
+            .unwrap();
+        let result = backend
+            .execute_profile(AppCommand::GetCoreNetworkSettings)
+            .unwrap();
+        assert_eq!(
+            result.output,
+            AppCommandOutput::CoreNetworkSettings(settings)
+        );
+        assert!(dir.join("profiles/network-settings.yaml").is_file());
+        drop(backend);
+        let _ = fs::remove_dir_all(dir);
     }
 
     fn test_backend(name: &str) -> (Backend, PathBuf) {

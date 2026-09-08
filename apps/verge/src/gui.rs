@@ -471,6 +471,7 @@ fn toast_for(lang: Lang, response: &UiResponse) -> Option<Notification> {
                 AppCommand::SelectProfile { .. } => Some(tr(lang, "toast.profile_selected")),
                 AppCommand::UpdateProfileYaml { .. } => Some(tr(lang, "toast.yaml_saved")),
                 AppCommand::UpdateMergeConfig { .. } => Some(tr(lang, "toast.merge_saved")),
+                AppCommand::UpdateCoreNetworkSettings { .. } => Some(tr(lang, "network.saved")),
                 AppCommand::UpdateRemoteProfile { .. } => Some(tr(lang, "toast.remote_updated")),
                 AppCommand::SetProfileUpdatePolicy { .. } => Some(tr(lang, "toast.policy_saved")),
                 AppCommand::DeleteProfile { .. } => Some(tr(lang, "toast.profile_deleted")),

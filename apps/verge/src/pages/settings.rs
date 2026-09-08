@@ -1,5 +1,6 @@
 mod actions;
 mod components;
+pub(crate) mod network;
 use crate::domain::{HelperStatus, SettingsScope, ThemePreference};
 use crate::ui::UiAction;
 use components::{SettingsSection, field, v_form};
@@ -201,52 +202,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 ),
         );
 
-    let mut network_group = SettingsSection::new()
-        .id("settings-network")
-        .title(tr(lang, "settings.group.network"));
-    if let Some(network) = view.state.network_settings.clone() {
-        network_group = network_group.child(
-            v_form()
-                .child(field().label(tr(lang, "settings.network.tun")).child({
-                    let n = network.clone();
-                    h_flex().child(
-                        Switch::new("switch-tun")
-                            .checked(network.tun_enabled)
-                            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
-                                let mut settings = n.clone();
-                                settings.tun_enabled = *checked;
-                                this.dispatch(UiAction::UpdateNetworkSettings(settings), cx);
-                            })),
-                    )
-                }))
-                .child(field().label("Mihomo DNS").child({
-                    let n = network.clone();
-                    h_flex().child(
-                        Switch::new("switch-dns")
-                            .checked(network.dns_enabled)
-                            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
-                                let mut settings = n.clone();
-                                settings.dns_enabled = *checked;
-                                this.dispatch(UiAction::UpdateNetworkSettings(settings), cx);
-                            })),
-                    )
-                }))
-                .child(field().label("IPv6").child({
-                    let n = network.clone();
-                    h_flex().child(
-                        Switch::new("switch-ipv6")
-                            .checked(network.ipv6_enabled)
-                            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
-                                let mut settings = n.clone();
-                                settings.ipv6_enabled = *checked;
-                                this.dispatch(UiAction::UpdateNetworkSettings(settings), cx);
-                            })),
-                    )
-                })),
-        );
-    } else {
-        network_group = network_group.child(muted(tr(lang, "settings.network.not_loaded"), cx));
-    }
+    let network_group = network::render(view, cx);
 
     let proxy_state = view.state.system_proxy.clone();
     let first_service = proxy_state

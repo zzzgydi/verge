@@ -61,6 +61,7 @@ pub struct MainView {
     pub sheet_state: Entity<SheetState>,
     /// 当前设置分类。
     pub settings_category: pages::settings::SettingsCategory,
+    pub network_form: pages::settings::network::NetworkForm,
     pub profile_id: Entity<InputState>,
     pub profile_name: Entity<InputState>,
     pub profile_url: Entity<InputState>,
@@ -172,6 +173,7 @@ impl MainView {
             state: UiState::default(),
             telemetry: cx.new(|_| pages::home::telemetry::Telemetry::new()),
             requests,
+            network_form: pages::settings::network::NetworkForm::new(window, cx),
             profile_id: cx.new(|cx| {
                 InputState::new(window, cx).placeholder(tr(lang, "placeholder.profile_id"))
             }),
@@ -278,6 +280,12 @@ impl MainView {
         self.telemetry
             .update(cx, |telemetry, cx| telemetry.set_language(lang, cx));
         self.sync_placeholders(window, cx);
+        self.network_form.sync(
+            self.state.core_network_settings.as_ref(),
+            self.state.core_network_revision,
+            window,
+            cx,
+        );
         let Some(snapshot) = self.state.application_settings.clone() else {
             return;
         };
@@ -342,7 +350,12 @@ impl MainView {
             return;
         }
         let empty_refresh = self.state.selected_profile.is_none()
-            && matches!(action, UiAction::RefreshHome | UiAction::RefreshSettings);
+            && matches!(
+                action,
+                UiAction::RefreshHome
+                    | UiAction::RefreshSettings
+                    | UiAction::UpdateCoreNetworkSettings(_)
+            );
         let requests: Vec<_> = action
             .requests()
             .into_iter()

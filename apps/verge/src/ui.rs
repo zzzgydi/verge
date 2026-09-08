@@ -163,6 +163,7 @@ pub enum UiAction {
     RefreshSettings,
     UpdateSettings(ApplicationSettings),
     UpdateNetworkSettings(NetworkSettings),
+    UpdateCoreNetworkSettings(crate::domain::CoreNetworkSettings),
     ExportApplicationSettings {
         destination: String,
     },
@@ -283,8 +284,15 @@ impl UiAction {
             ],
             Self::RefreshProfiles => vec![UiRequest::Profile(AppCommand::ListProfiles)],
             Self::RefreshSettings => vec![
+                UiRequest::Profile(AppCommand::GetCoreNetworkSettings),
                 UiRequest::Profile(AppCommand::GetApplicationSettings),
                 UiRequest::Profile(AppCommand::GetHelperStatus),
+                UiRequest::Profile(AppCommand::GetRuntimeSettings),
+                UiRequest::Runtime(RuntimeCommand::GetNetworkSettings),
+                UiRequest::SystemProxy(SystemProxyCommand::GetState),
+            ],
+            Self::UpdateCoreNetworkSettings(settings) => vec![
+                UiRequest::Profile(AppCommand::UpdateCoreNetworkSettings { settings }),
                 UiRequest::Profile(AppCommand::GetRuntimeSettings),
                 UiRequest::Runtime(RuntimeCommand::GetNetworkSettings),
                 UiRequest::SystemProxy(SystemProxyCommand::GetState),
@@ -500,6 +508,8 @@ pub struct UiState {
     pub runtime_settings: Option<RuntimeSettings>,
     pub application_settings: Option<ApplicationSettingsSnapshot>,
     pub network_settings: Option<NetworkSettings>,
+    pub core_network_settings: Option<crate::domain::CoreNetworkSettings>,
+    pub core_network_revision: u64,
     pub helper_status: Option<HelperStatus>,
     pub mihomo_version: Option<String>,
     /// 最近一次应用更新检查结果（当前/最新版本与是否有更新）。
@@ -608,6 +618,12 @@ impl UiState {
         self.pending
             .remove(request_key(&UiRequest::Profile(request.clone())));
         match result.output {
+            AppCommandOutput::CoreNetworkSettings(settings) => {
+                self.core_network_settings = Some(settings);
+                if matches!(request, AppCommand::UpdateCoreNetworkSettings { .. }) {
+                    self.core_network_revision = self.core_network_revision.wrapping_add(1);
+                }
+            }
             AppCommandOutput::RuntimeSettings(settings) => {
                 self.runtime_settings = Some(settings);
             }
@@ -797,6 +813,8 @@ fn is_write_request(request: &UiRequest) -> bool {
 fn request_key(request: &UiRequest) -> &'static str {
     match request {
         UiRequest::Profile(AppCommand::GetRuntimeSettings) => "runtime_settings",
+        UiRequest::Profile(AppCommand::GetCoreNetworkSettings) => "core_network",
+        UiRequest::Profile(AppCommand::UpdateCoreNetworkSettings { .. }) => "core_network_write",
         UiRequest::Profile(AppCommand::GetApplicationSettings) => "application_settings",
         UiRequest::Profile(AppCommand::GetHelperStatus) => "helper_status",
         UiRequest::Profile(AppCommand::CheckAppUpdate) => "app_update",

@@ -1,3 +1,6 @@
+mod network;
+pub use network::{CoreNetworkSettings, ExternalControllerSettings};
+
 use std::{error::Error, fmt, time::Duration};
 
 use serde::{Deserialize, Deserializer, Serialize};
@@ -70,6 +73,10 @@ pub struct CommandContext {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AppCommand {
+    GetCoreNetworkSettings,
+    UpdateCoreNetworkSettings {
+        settings: CoreNetworkSettings,
+    },
     GetRuntimeSettings,
     GetApplicationSettings,
     GetHelperStatus,
@@ -243,6 +250,7 @@ impl Profile {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum AppCommandOutput {
+    CoreNetworkSettings(CoreNetworkSettings),
     RuntimeSettings(RuntimeSettings),
     ApplicationSettings(ApplicationSettingsSnapshot),
     HelperStatus(HelperStatus),
@@ -855,7 +863,8 @@ pub struct SystemProxyCommandResult {
 impl AppCommand {
     pub fn risk(&self) -> CommandRisk {
         match self {
-            Self::GetRuntimeSettings
+            Self::GetCoreNetworkSettings
+            | Self::GetRuntimeSettings
             | Self::GetApplicationSettings
             | Self::GetHelperStatus
             | Self::PreviewApplicationSettingsImport { .. }
@@ -877,7 +886,8 @@ impl AppCommand {
             | Self::ResetApplicationSettingsScope { .. }
             | Self::ExportDiagnostics { .. }
             | Self::ExportEncryptedBackup { .. } => CommandRisk::LowRiskWrite,
-            Self::UpdateMihomo
+            Self::UpdateCoreNetworkSettings { .. }
+            | Self::UpdateMihomo
             | Self::InstallHelper
             | Self::UpdateApplication
             | Self::RestartApplication => CommandRisk::PrivilegedWrite,

@@ -23,6 +23,7 @@ use crate::mihomo::{
 use crate::platform::{HelperControl, SystemProxyPlatform, TunConfig};
 
 pub mod app_update;
+mod network;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CommandPolicy;
@@ -312,7 +313,7 @@ pub trait RuntimeControl {
 
 pub struct MihomoRuntime<T> {
     client: MihomoClient<T>,
-    controller: SocketAddr,
+    controller: crate::mihomo::ControllerEndpoint,
     secret: String,
     realtime_options: RealtimeOptions,
     subscriptions: HashMap<RealtimeTopic, RealtimeSubscription>,
@@ -341,12 +342,17 @@ impl<T: ControllerTransport> MihomoRuntime<T> {
         }
         Ok(Self {
             client,
-            controller,
+            controller: controller.into(),
             secret,
             realtime_options,
             subscriptions: HashMap::new(),
             sensitive_values: std::env::var("HOME").into_iter().collect(),
         })
+    }
+
+    #[cfg(unix)]
+    pub fn set_internal_socket(&mut self, path: PathBuf) {
+        self.controller = crate::mihomo::ControllerEndpoint::Unix(path);
     }
 
     pub fn set_sensitive_values(&mut self, values: impl IntoIterator<Item = String>) {
@@ -413,7 +419,7 @@ impl<T: ControllerTransport> RuntimeControl for MihomoRuntime<T> {
                 continue;
             }
             match RealtimeSubscription::spawn(
-                self.controller,
+                self.controller.clone(),
                 &self.secret,
                 topic,
                 self.realtime_options.clone(),
@@ -1528,7 +1534,9 @@ impl<'a, C: CoreControl> ProfileCommandHandler<'a, C> {
         now: i64,
     ) -> Result<AppCommandResult, CommandFailure> {
         let output = match command {
-            AppCommand::GetRuntimeSettings
+            AppCommand::GetCoreNetworkSettings
+            | AppCommand::UpdateCoreNetworkSettings { .. }
+            | AppCommand::GetRuntimeSettings
             | AppCommand::GetApplicationSettings
             | AppCommand::GetHelperStatus
             | AppCommand::InstallHelper
@@ -1827,6 +1835,47 @@ mod tests {
         }
         store.select(&first).unwrap();
         (store, first, second)
+    }
+
+    #[test]
+    fn network_update_rolls_back_validation_health_and_proxy_failures() {
+        for stage in ["validation", "health", "proxy"] {
+            let directory = TestDir::new(stage);
+            let (mut store, id, _) = store_with_profiles(&directory.0);
+            let mut core = FakeCore::default();
+            if stage == "validation" {
+                core.validation.push_back(Err(failure("invalid candidate")));
+            }
+            if stage == "health" {
+                core.health.push_back(Err(failure("unhealthy")));
+            }
+            let credentials = RuntimeCredentials {
+                controller: "127.0.0.1:12345".parse().unwrap(),
+                secret: "test".into(),
+            };
+            let original = store
+                .materialize_runtime(&id, credentials.controller, &credentials.secret)
+                .unwrap();
+            let before = fs::read_to_string(&original).unwrap();
+            let result =
+                ConfigCommandHandler::with_runtime_credentials(&mut store, &mut core, credentials)
+                    .update_network_settings(crate::domain::CoreNetworkSettings::default(), |_| {
+                        if stage == "proxy" {
+                            Err(failure("proxy remap failed"))
+                        } else {
+                            Ok(())
+                        }
+                    });
+            assert!(result.is_err());
+            assert!(store.network_override().is_none());
+            assert!(
+                FileProfileStore::open(&directory.0)
+                    .unwrap()
+                    .network_override()
+                    .is_none()
+            );
+            assert_eq!(fs::read_to_string(original).unwrap(), before);
+        }
     }
 
     #[test]

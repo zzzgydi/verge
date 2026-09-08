@@ -12,6 +12,8 @@ use std::{
 use crate::domain::{AppError, ErrorCode};
 
 mod controller;
+mod endpoint;
+pub use endpoint::ControllerEndpoint;
 mod realtime;
 mod sidecar;
 
@@ -209,6 +211,7 @@ impl LogBuffer {
 pub struct CoreSupervisor {
     config: MihomoConfig,
     config_path: PathBuf,
+    internal_socket: Option<PathBuf>,
     child: Option<Child>,
     state: SupervisorState,
     restart_attempts: u32,
@@ -230,6 +233,7 @@ impl CoreSupervisor {
         Ok(Self {
             config,
             config_path,
+            internal_socket: None,
             child: None,
             state: SupervisorState::Stopped,
             restart_attempts: 0,
@@ -237,6 +241,10 @@ impl CoreSupervisor {
             logs,
             log_readers: Vec::new(),
         })
+    }
+
+    pub fn set_internal_socket(&mut self, path: PathBuf) {
+        self.internal_socket = Some(path);
     }
 
     pub fn state(&self) -> &SupervisorState {
@@ -264,6 +272,50 @@ impl CoreSupervisor {
     }
 
     pub fn health(&self, timeout: Duration) -> Result<CoreHealth, AppError> {
+        #[cfg(unix)]
+        if let Some(path) = &self.internal_socket {
+            let transport = TcpControllerTransport::unix(path.clone(), timeout)?;
+            let health = CoreHealth {
+                version: MihomoClient::new(transport).version()?,
+            };
+            // The Unix listener can be healthy even when the external TCP port failed to bind.
+            let yaml = std::fs::read_to_string(&self.config_path).map_err(core_io_error)?;
+            let value: serde_yaml::Value =
+                serde_yaml::from_str(&yaml).map_err(|_| core_error("invalid runtime config"))?;
+            if let Some(address) = value
+                .get("external-controller")
+                .and_then(serde_yaml::Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
+                let mut address: SocketAddr = address
+                    .parse()
+                    .map_err(|_| core_error("invalid external controller address"))?;
+                if address.ip().is_unspecified() {
+                    address.set_ip(if address.is_ipv4() {
+                        std::net::Ipv4Addr::LOCALHOST.into()
+                    } else {
+                        std::net::Ipv6Addr::LOCALHOST.into()
+                    });
+                }
+                let secret = value
+                    .get("secret")
+                    .and_then(serde_yaml::Value::as_str)
+                    .unwrap_or_default();
+                let endpoint = ControllerEndpoint::Tcp(address);
+                let mut stream = endpoint.connect(timeout).map_err(core_io_error)?;
+                use std::io::Write as _;
+                write!(stream, "GET /version HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {secret}\r\nConnection: close\r\n\r\n").map_err(core_io_error)?;
+                let mut response = String::new();
+                stream
+                    .read_to_string(&mut response)
+                    .map_err(core_io_error)?;
+                if !response.starts_with("HTTP/1.1 200 ") && !response.starts_with("HTTP/1.0 200 ")
+                {
+                    return Err(core_error("external controller health check failed"));
+                }
+            }
+            return Ok(health);
+        }
         probe_health(self.config.controller, &self.config.secret, timeout)
     }
 

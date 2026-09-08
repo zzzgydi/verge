@@ -1,7 +1,8 @@
+use super::ControllerEndpoint;
 use std::{
     fmt,
     io::{Read, Write},
-    net::{SocketAddr, TcpStream},
+    net::SocketAddr,
     time::Duration,
 };
 
@@ -30,12 +31,28 @@ pub trait ControllerTransport {
 }
 
 pub struct TcpControllerTransport {
-    controller: SocketAddr,
+    controller: ControllerEndpoint,
     secret: String,
     timeout: Duration,
 }
 
 impl TcpControllerTransport {
+    #[cfg(unix)]
+    pub fn unix(path: std::path::PathBuf, timeout: Duration) -> Result<Self, AppError> {
+        let endpoint = ControllerEndpoint::Unix(path);
+        if !endpoint.is_local() {
+            return Err(AppError::new(
+                ErrorCode::InvalidInput,
+                "controller socket must be absolute",
+            ));
+        }
+        Ok(Self {
+            controller: endpoint,
+            secret: String::new(),
+            timeout,
+        })
+    }
+
     pub fn new(
         controller: SocketAddr,
         secret: impl Into<String>,
@@ -55,7 +72,7 @@ impl TcpControllerTransport {
             ));
         }
         Ok(Self {
-            controller,
+            controller: controller.into(),
             secret,
             timeout,
         })
@@ -70,13 +87,9 @@ impl ControllerTransport for TcpControllerTransport {
                 "invalid Mihomo controller request path",
             ));
         }
-        let mut stream = TcpStream::connect_timeout(&self.controller, self.timeout)
-            .map_err(controller_io_error)?;
-        stream
-            .set_read_timeout(Some(self.timeout))
-            .map_err(controller_io_error)?;
-        stream
-            .set_write_timeout(Some(self.timeout))
+        let mut stream = self
+            .controller
+            .connect(self.timeout)
             .map_err(controller_io_error)?;
         let body = request.body.unwrap_or_default();
         write!(
@@ -84,7 +97,7 @@ impl ControllerTransport for TcpControllerTransport {
             "{} {} HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             request.method,
             request.path,
-            self.controller,
+            self.controller.host(),
             self.secret,
             body.len(),
             body

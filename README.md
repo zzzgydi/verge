@@ -12,6 +12,7 @@ Verge is a native macOS proxy client built with Rust, GPUI, and Mihomo. It uses 
 - Persistent menu bar daemon: closing the window does not stop proxying.
 - Mihomo profiles from local YAML or remote subscriptions, with optional custom User-Agent and scheduled updates.
 - Merge configuration, generated-config preview, validation, atomic writes, health checks, and rollback.
+- Persistent network overrides: LAN, IPv6, unified delay, logging, mixed port, DNS, and external controller.
 - Rule, Global, and Direct modes; proxy-group selection and delay tests.
 - Live traffic, memory, connections, rules, providers, and logs.
 - macOS HTTP, HTTPS, SOCKS, PAC, and bypass settings with recovery records.
@@ -53,6 +54,24 @@ daemon, protocol, application, configuration, Mihomo, and platform responsibilit
 without requiring a separate Cargo package for every layer.
 
 The earlier React/Tauri/sing-box implementation and the Phase 0 spike projects have been removed.
+
+## Runtime configuration
+
+Settings → Network saves network overrides independently of subscription YAML. The daemon
+combines the selected profile, Merge rules, and these overrides into
+`<data_dir>/profiles/runtime-config.yaml`, validates it, and restarts Mihomo. Failed
+validation or health checks restore the previous settings and runtime configuration.
+The same merge runs when switching or updating profiles. Turning DNS override off restores
+the profile's DNS mapping.
+
+Overrides are stored in `<data_dir>/profiles/network-settings.yaml`. On macOS the external
+controller secret is stored in Keychain; the runtime YAML containing it is owner-readable
+only. The internal controller uses `<data_dir>/control/mihomo.sock` in a private directory,
+so disabling the external TCP controller does not disconnect Verge. Changed ports retarget
+only enabled system proxy endpoints that still point to Verge; existing recovery records
+are preserved. Applying network settings restarts the core and can interrupt active connections.
+Network overrides currently stay local and are not included in application settings exports
+or encrypted profile backups. TUN remains a separate helper-managed runtime switch.
 
 ## Requirements
 

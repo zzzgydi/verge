@@ -1,7 +1,7 @@
+use super::{ControllerEndpoint, endpoint::ControllerStream};
 use std::{
     collections::VecDeque,
     io,
-    net::{SocketAddr, TcpStream},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -110,13 +110,14 @@ pub struct RealtimeSubscription {
 
 impl RealtimeSubscription {
     pub fn spawn(
-        controller: SocketAddr,
+        controller: impl Into<ControllerEndpoint>,
         secret: impl Into<String>,
         topic: RealtimeTopic,
         options: RealtimeOptions,
     ) -> Result<Self, AppError> {
         options.validate()?;
-        if !controller.ip().is_loopback() {
+        let controller = controller.into();
+        if !controller.is_local() {
             return Err(AppError::new(
                 ErrorCode::InvalidInput,
                 "Mihomo realtime controller must use a loopback address",
@@ -136,7 +137,7 @@ impl RealtimeSubscription {
         let worker_events = events.clone();
         let worker = thread::spawn(move || {
             run_subscription(
-                controller,
+                &controller,
                 &secret,
                 topic,
                 &options,
@@ -170,7 +171,7 @@ impl Drop for RealtimeSubscription {
 }
 
 fn run_subscription(
-    controller: SocketAddr,
+    controller: &ControllerEndpoint,
     secret: &str,
     topic: RealtimeTopic,
     options: &RealtimeOptions,
@@ -230,20 +231,18 @@ fn run_subscription(
 }
 
 fn connect_stream(
-    controller: SocketAddr,
+    controller: &ControllerEndpoint,
     secret: &str,
     topic: RealtimeTopic,
     options: &RealtimeOptions,
-) -> Result<tungstenite::WebSocket<TcpStream>, AppError> {
-    let stream =
-        TcpStream::connect_timeout(&controller, options.connect_timeout).map_err(realtime_error)?;
-    stream
-        .set_read_timeout(Some(options.read_timeout))
+) -> Result<tungstenite::WebSocket<ControllerStream>, AppError> {
+    let stream = controller
+        .connect(options.connect_timeout)
         .map_err(realtime_error)?;
     stream
-        .set_write_timeout(Some(options.read_timeout))
+        .set_timeout(options.read_timeout)
         .map_err(realtime_error)?;
-    let mut request = format!("ws://{controller}{}", topic_path(topic))
+    let mut request = format!("ws://{}{}", controller.host(), topic_path(topic))
         .into_client_request()
         .map_err(realtime_error)?;
     request.headers_mut().insert(

@@ -1,3 +1,4 @@
+mod network;
 use std::{
     collections::HashSet,
     fs,
@@ -26,7 +27,13 @@ const BACKUP_AAD: &[u8] = b"verge-encrypted-backup-v1";
 const MERGE_RULE_LIMIT: usize = 64;
 const MERGE_KEY_LIMIT: usize = 128;
 /// 由运行物化注入的私有字段不允许出现在 merge 配置中,避免被误导为可覆盖。
-const RESERVED_MERGE_KEYS: [&str; 2] = ["external-controller", "secret"];
+const RESERVED_MERGE_KEYS: [&str; 5] = [
+    "external-controller",
+    "external-controller-unix",
+    "external-controller-pipe",
+    "external-controller-tls",
+    "secret",
+];
 
 /// 应用级 Merge 配置(全局一份):对源配置顶层键做受控的结构化深合并,
 /// 在物化私有运行配置之前应用。首版不做任意脚本增强。
@@ -524,11 +531,22 @@ pub struct FileProfileStore {
     root: PathBuf,
     manifest: Manifest,
     merge: MergeConfig,
+    network: Option<crate::domain::CoreNetworkSettings>,
+    internal_socket: Option<PathBuf>,
+    keychain_service: Option<String>,
+    runtime_tun: Option<bool>,
 }
 
 impl FileProfileStore {
     pub fn open(root: impl Into<PathBuf>) -> Result<Self, AppError> {
-        let root = root.into();
+        Self::open_inner(root.into(), None)
+    }
+
+    pub fn open_with_keychain(root: impl Into<PathBuf>) -> Result<Self, AppError> {
+        Self::open_inner(root.into(), Some("com.zzzgydi.verge.network".into()))
+    }
+
+    fn open_inner(root: PathBuf, keychain_service: Option<String>) -> Result<Self, AppError> {
         fs::create_dir_all(root.join("profiles")).map_err(storage_error)?;
         fs::create_dir_all(root.join("snapshots")).map_err(storage_error)?;
         fs::create_dir_all(root.join("candidates")).map_err(storage_error)?;
@@ -561,10 +579,15 @@ impl FileProfileStore {
         } else {
             MergeConfig::default()
         };
+        let network = network::load(&root, keychain_service.as_deref())?;
         Ok(Self {
             root,
             manifest,
             merge,
+            network,
+            internal_socket: None,
+            keychain_service,
+            runtime_tun: None,
         })
     }
 
@@ -732,7 +755,7 @@ impl FileProfileStore {
                 format!("invalid YAML: {error}"),
             )
         })?;
-        apply_merge(&value, &self.merge)
+        self.apply_network(apply_merge(&value, &self.merge)?)
     }
 
     pub fn materialize_runtime(
@@ -742,11 +765,8 @@ impl FileProfileStore {
         secret: &str,
     ) -> Result<PathBuf, AppError> {
         let source = self.yaml(id)?;
-        let runtime = render_runtime_yaml(&source, &self.merge, controller, secret)?;
-        let path = self
-            .root
-            .join("runtime")
-            .join(format!("{}.yaml", id.as_str()));
+        let runtime = self.render_runtime(&source, controller, secret)?;
+        let path = self.root.join("runtime-config.yaml");
         atomic_write_private(&path, runtime.as_bytes()).map_err(storage_error)?;
         Ok(path)
     }
@@ -824,7 +844,7 @@ impl FileProfileStore {
         secret: &str,
     ) -> Result<CandidateConfig, AppError> {
         self.require_profile(id)?;
-        let runtime = render_runtime_yaml(yaml, &self.merge, controller, secret)?;
+        let runtime = self.render_runtime(yaml, controller, secret)?;
         let path = self
             .root
             .join("candidates")
@@ -1348,10 +1368,10 @@ mod tests {
 
     use super::*;
 
-    struct TestDir(PathBuf);
+    pub(super) struct TestDir(pub(super) PathBuf);
 
     impl TestDir {
-        fn new(name: &str) -> Self {
+        pub(super) fn new(name: &str) -> Self {
             let nonce = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
@@ -1371,7 +1391,7 @@ mod tests {
         }
     }
 
-    fn profile(id: &str, policy: UpdatePolicy) -> Profile {
+    pub(super) fn profile(id: &str, policy: UpdatePolicy) -> Profile {
         Profile::new(
             ProfileId::parse(id).unwrap(),
             "Daily",

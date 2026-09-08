@@ -481,3 +481,82 @@ fn sidebar_animation_reverses_without_jumping(cx: &mut TestAppContext) {
         px(56.)
     );
 }
+
+#[gpui::test]
+fn network_dialogs_render_and_save_only_after_backend_success(cx: &mut TestAppContext) {
+    use crate::{
+        domain::{AppCommand, AppCommandOutput, AppCommandResult, CoreNetworkSettings},
+        ui::UiRequest,
+    };
+    cx.update(gpui_component::init);
+    let (tx, rx) = mpsc::channel();
+    let holder: ViewHolder = Default::default();
+    let copy = holder.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| MainView::new(tx, window, cx));
+        *copy.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = holder.borrow().clone().unwrap();
+    cx.simulate_resize(gpui::size(gpui::px(1080.), gpui::px(800.)));
+    cx.run_until_parked();
+    for dns in [false, true] {
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.state.core_network_settings = Some(CoreNetworkSettings::default());
+                view.open_core_network_dialog(dns, window, cx);
+            })
+        });
+        cx.run_until_parked();
+        assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+        for _ in 0..25 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(16));
+            cx.update(|window, cx| window.simulate_next_frame(cx));
+            cx.run_until_parked();
+        }
+        if dns {
+            let toggle = cx.debug_bounds("dialog-dns-enabled").unwrap();
+            cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+            cx.run_until_parked();
+        }
+        let bounds = cx
+            .debug_bounds("network-dialog-save")
+            .expect("network save button");
+        cx.simulate_mouse_move(bounds.center(), None, gpui::Modifiers::default());
+        cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+        cx.run_until_parked();
+        let request = rx.try_recv().expect("save sends a request").request;
+        let UiRequest::Profile(command @ AppCommand::UpdateCoreNetworkSettings { .. }) = request
+        else {
+            panic!("wrong save command");
+        };
+        if let AppCommand::UpdateCoreNetworkSettings { settings } = &command {
+            assert_eq!(
+                settings.dns_override, dns,
+                "dialog toggles update retained draft"
+            );
+        }
+        assert!(
+            cx.update(|window, cx| window.has_active_dialog(cx)),
+            "keep draft until backend confirms"
+        );
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.state.apply_profile(
+                    &command,
+                    AppCommandResult {
+                        output: AppCommandOutput::CoreNetworkSettings(
+                            CoreNetworkSettings::default(),
+                        ),
+                        summary: "saved".into(),
+                    },
+                );
+                view.sync_form_inputs(window, cx);
+            })
+        });
+        cx.run_until_parked();
+        assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+        while rx.try_recv().is_ok() {}
+    }
+}
