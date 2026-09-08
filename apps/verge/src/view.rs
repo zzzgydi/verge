@@ -90,6 +90,7 @@ pub struct MainView {
     pub connections_table: Entity<TableState<ConnectionsDelegate>>,
     /// 日志页虚拟列表滚动位置。
     pub log_scroll: VirtualListScrollHandle,
+    pub log_layout: pages::logs::LogLayout,
     pub proxy_page: Entity<pages::proxies::ProxyPage>,
     pub rule_scroll: VirtualListScrollHandle,
     /// 日志级别过滤，None 表示全部。
@@ -221,6 +222,7 @@ impl MainView {
             merged_editor: cx.new(|cx| TextareaState::new(window, cx)),
             connections_table,
             log_scroll: VirtualListScrollHandle::new(),
+            log_layout: pages::logs::LogLayout::default(),
             proxy_page,
             rule_scroll: VirtualListScrollHandle::new(),
             log_filter: None,
@@ -564,7 +566,7 @@ impl Render for MainView {
             Page::Profiles => pages::profiles::render(self, cx),
             Page::Connections => pages::connections::render(self, cx),
             Page::Rules => pages::rules::render(self, cx),
-            Page::Logs => pages::logs::render(self, cx),
+            Page::Logs => pages::logs::render(self, window, cx),
             Page::Settings => pages::settings::render(self, cx),
         };
 

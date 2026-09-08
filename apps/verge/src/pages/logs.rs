@@ -1,3 +1,8 @@
+mod layout;
+pub use layout::LogLayout;
+#[cfg(test)]
+mod tests;
+
 use std::rc::Rc;
 
 use gpui::*;
@@ -5,6 +10,7 @@ use gpui_component::{
     ActiveTheme as _, Sizable as _,
     button::Button,
     menu::{DropdownMenu as _, PopupMenuItem},
+    scroll::{Scrollbar, ScrollbarMode},
     v_flex, v_virtual_list,
 };
 
@@ -26,6 +32,16 @@ const LEVELS: [(&str, Option<&'static str>); 5] = [
 
 /// 日志行高。虚拟列表要求渲染行高与 item_sizes 逐像素一致。
 const LOG_ROW_HEIGHT: f32 = 24.;
+const LOG_FONT_SIZE: f32 = 12.;
+const LOG_INSET: f32 = 8.;
+
+fn display_text(row: &crate::domain::LogEvent) -> String {
+    // Preserve physical lines, with identical text for measuring and painting.
+    format!("[{}] {}", row.level, row.payload)
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\t', "    ")
+}
 
 /// 按级别着色：错误红、警告黄、调试灰、信息默认前景。
 fn level_color(level: &str, cx: &Context<MainView>) -> Hsla {
@@ -40,28 +56,31 @@ fn level_color(level: &str, cx: &Context<MainView>) -> Hsla {
 fn render_log_row(
     source_index: usize,
     row: &crate::domain::LogEvent,
+    dimensions: Size<Pixels>,
     cx: &Context<MainView>,
 ) -> AnyElement {
     div()
         .id(SharedString::from(format!("log-row-{}", source_index)))
-        .h(px(LOG_ROW_HEIGHT))
-        .w_full()
-        .px_2()
+        .debug_selector(move || format!("log-row-{source_index}"))
+        .h(dimensions.height)
+        .w(dimensions.width)
+        .px(px(LOG_INSET))
         .flex_shrink_0()
-        .flex()
-        .items_center()
-        .overflow_hidden()
         .whitespace_nowrap()
-        .text_ellipsis()
         .line_height(px(LOG_ROW_HEIGHT))
-        .text_xs()
+        .text_size(px(LOG_FONT_SIZE))
         .font_family(cx.theme().mono_font_family.clone())
         .text_color(level_color(&row.level, cx))
-        .child(format!("[{}] {}", row.level, row.payload))
+        .child(
+            div()
+                .debug_selector(move || format!("log-text-{source_index}"))
+                .child(display_text(row)),
+        )
         .into_any_element()
 }
 
-pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
+pub fn render(view: &mut MainView, window: &mut Window, cx: &mut Context<MainView>) -> AnyElement {
+    view.log_layout.sync(&view.state, window, cx);
     let lang = view.lang();
     let filter = view.log_filter;
     let filter_label = LEVELS
@@ -134,13 +153,20 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         });
     } else {
         // 按行虚拟列表：每行独立渲染并带级别着色；长日志滚动不卡。
+        let width = rows
+            .iter()
+            .map(|&ix| view.log_layout.size(ix).width)
+            .max()
+            .unwrap_or_default();
         let item_sizes = Rc::new(
             rows.iter()
-                .map(|_| size(px(0.), px(LOG_ROW_HEIGHT)))
+                .map(|&ix| size(width, view.log_layout.size(ix).height))
                 .collect::<Vec<_>>(),
         );
+        let row_sizes = item_sizes.clone();
         content = content.child(
             div()
+                .debug_selector(|| "log-viewport".into())
                 .relative()
                 .flex_1()
                 .min_h_0()
@@ -148,7 +174,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 .border_1()
                 .border_color(cx.theme().border)
                 .rounded_lg()
-                .py_2()
+                .p(px(LOG_INSET))
                 .child(
                     v_virtual_list(
                         view_entity,
@@ -158,18 +184,21 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                             range
                                 .filter_map(|ix| {
                                     rows.get(ix).and_then(|&source| {
-                                        this.state.logs.get(source).map(|log| (source, log))
+                                        this.state
+                                            .logs
+                                            .get(source)
+                                            .map(|log| (source, log, row_sizes[ix]))
                                     })
                                 })
-                                .map(|(source, log)| render_log_row(source, log, cx))
+                                .map(|(source, log, dimensions)| {
+                                    render_log_row(source, log, dimensions, cx)
+                                })
                                 .collect()
                         },
                     )
                     .track_scroll(&view.log_scroll),
                 )
-                .child(gpui_component::scroll::Scrollbar::vertical(
-                    &view.log_scroll,
-                )),
+                .child(Scrollbar::new(&view.log_scroll).mode(ScrollbarMode::Always)),
         );
     }
     content.into_any_element()

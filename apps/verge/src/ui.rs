@@ -586,6 +586,8 @@ pub struct UiState {
     pub settings_import_preview: Option<SettingsImportPreview>,
     pub connections: Option<Arc<ConnectionSnapshot>>,
     pub logs: VecDeque<LogEvent>,
+    /// Monotonic sequence for incremental log layout, including buffer eviction.
+    pub log_revision: u64,
     log_bytes: usize,
     pub delays: HashMap<String, u32>,
     pub delay_errors: HashMap<String, AppError>,
@@ -820,6 +822,7 @@ impl UiState {
                 }
                 self.log_bytes += bytes;
                 self.logs.push_back(log);
+                self.log_revision += 1;
             }
             RealtimeEvent::Reconnecting { .. } => self.core_status = CoreStatus::Offline,
         }

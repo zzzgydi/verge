@@ -40,7 +40,10 @@ GPUI spacing utilities match this scale; the application body explicitly uses
   lines (name, protocol/capabilities), a centered selection marker, and a 28px
   delay action. Use 12px horizontal padding and a 4px gap between text lines.
 - Rules use 36px rows (56px provider rows); connections retain compact table rows;
-  logs use 24px lines. These data views keep their own virtualized scrolling.
+  logs use 24px physical lines, preserving embedded line breaks. The log viewport
+  scrolls in both axes and measures the longest filtered message; never apply
+  ellipsis or a fixed single-line height to an entire log event. These data views
+  keep their own virtualized scrolling.
 - Navigation uses 40px rows. Keep icon alignment stable during sidebar animation.
   At 960×640, actions must fit and long names truncate without pushing controls
   out of view. Larger windows add visible data, not larger padding.
