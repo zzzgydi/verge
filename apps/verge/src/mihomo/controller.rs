@@ -7,8 +7,8 @@ use std::{
 };
 
 use crate::domain::{
-    AppError, ErrorCode, NetworkSettings, ProviderKind, ProviderSummary, ProxyGroup, RuleEntry,
-    RunMode,
+    AppError, ErrorCode, NetworkSettings, ProviderKind, ProviderSummary, ProxyDetails, ProxyGroup,
+    ProxySnapshot, RuleEntry, RunMode,
 };
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Deserialize;
@@ -111,6 +111,39 @@ impl ControllerTransport for TcpControllerTransport {
     }
 }
 
+fn proxy_details(proxy: &serde_json::Value) -> ProxyDetails {
+    let flag = |key: &str| {
+        proxy
+            .get(key)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    };
+    ProxyDetails {
+        kind: proxy
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("Unknown")
+            .to_owned(),
+        udp: proxy.get("udp").and_then(serde_json::Value::as_bool),
+        xudp: flag("xudp"),
+        tfo: flag("tfo"),
+        mptcp: flag("mptcp"),
+        smux: flag("smux"),
+        hidden: flag("hidden"),
+        selected: proxy
+            .get("now")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        delay: proxy
+            .get("history")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|history| history.last())
+            .and_then(|entry| entry.get("delay"))
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|ms| u32::try_from(ms).ok()),
+    }
+}
+
 pub struct MihomoClient<T> {
     transport: T,
 }
@@ -172,14 +205,16 @@ impl<T: ControllerTransport> MihomoClient<T> {
         self.empty("PATCH", "/configs", Some(body))
     }
 
-    pub fn proxy_groups(&mut self) -> Result<Vec<ProxyGroup>, AppError> {
+    pub fn proxy_groups(&mut self) -> Result<ProxySnapshot, AppError> {
         let response: serde_json::Value = self.json("GET", "/proxies", None)?;
         let proxies = response
             .get("proxies")
             .and_then(serde_json::Value::as_object)
             .ok_or_else(|| controller_error("Mihomo proxies response has no proxies object"))?;
         let mut groups = Vec::new();
+        let mut details = std::collections::BTreeMap::new();
         for (name, proxy) in proxies {
+            details.insert(name.clone(), proxy_details(proxy));
             let members = proxy
                 .get("all")
                 .and_then(serde_json::Value::as_array)
@@ -191,7 +226,7 @@ impl<T: ControllerTransport> MihomoClient<T> {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
-            if members.is_empty() {
+            if !proxy.get("all").is_some_and(serde_json::Value::is_array) {
                 continue;
             }
             groups.push(ProxyGroup {
@@ -208,8 +243,53 @@ impl<T: ControllerTransport> MihomoClient<T> {
                 members,
             });
         }
+        // Provider-only nodes may be omitted from /proxies. Resolve unique names;
+        // ambiguous or unavailable details remain unknown instead of guessing capabilities.
+        let missing: std::collections::HashSet<_> = groups
+            .iter()
+            .flat_map(|g| &g.members)
+            .filter(|name| !details.contains_key(*name))
+            .cloned()
+            .collect();
+        if !missing.is_empty()
+            && let Ok(response) = self.json::<serde_json::Value>("GET", "/providers/proxies", None)
+        {
+            let mut candidates = std::collections::HashMap::new();
+            if let Some(providers) = response
+                .get("providers")
+                .and_then(serde_json::Value::as_object)
+            {
+                for provider in providers.values() {
+                    for proxy in provider
+                        .get("proxies")
+                        .and_then(serde_json::Value::as_array)
+                        .into_iter()
+                        .flatten()
+                    {
+                        if let Some(name) = proxy
+                            .get("name")
+                            .and_then(serde_json::Value::as_str)
+                            .filter(|name| missing.contains(*name))
+                        {
+                            candidates
+                                .entry(name.to_owned())
+                                .and_modify(|value| *value = None)
+                                .or_insert_with(|| Some(proxy_details(proxy)));
+                        }
+                    }
+                }
+            }
+            details.extend(
+                candidates
+                    .into_iter()
+                    .filter_map(|(name, details)| details.map(|details| (name, details))),
+            );
+        }
         groups.sort_by(|left, right| left.name.cmp(&right.name));
-        Ok(groups)
+        Ok(ProxySnapshot {
+            groups,
+            proxies: details,
+        })
     }
 
     pub fn rules(&mut self) -> Result<Vec<RuleEntry>, AppError> {
@@ -543,11 +623,11 @@ mod tests {
     fn proxies_contract_extracts_groups() {
         let transport = FakeTransport::new([response(
             200,
-            r#"{"proxies":{"Node":{"type":"Shadowsocks"},"Select":{"type":"Selector","now":"Node","all":["Node","DIRECT"]}}}"#,
+            r#"{"proxies":{"Node":{"type":"Shadowsocks"},"DIRECT":{"type":"Direct"},"Select":{"type":"Selector","now":"Node","all":["Node","DIRECT"]}}}"#,
         )]);
         let mut client = MihomoClient::new(transport);
         assert_eq!(
-            client.proxy_groups().unwrap(),
+            client.proxy_groups().unwrap().groups,
             [ProxyGroup {
                 name: "Select".into(),
                 kind: "Selector".into(),
@@ -555,6 +635,36 @@ mod tests {
                 members: vec!["Node".into(), "DIRECT".into()],
             }]
         );
+    }
+
+    #[test]
+    fn proxy_snapshot_keeps_protocol_capabilities_provider_nodes_and_empty_groups() {
+        let transport = FakeTransport::new([
+            response(
+                200,
+                r#"{"proxies":{"Route":{"type":"Selector","now":"Remote","all":["Remote","Ambiguous","Missing"]},"Empty":{"type":"Selector","all":[]},"Core":{"type":"VLESS","udp":false,"tfo":true,"history":[{"delay":8},{"delay":0}]}}}"#,
+            ),
+            response(
+                200,
+                r#"{"providers":{"one":{"proxies":[{"name":"Remote","type":"Hysteria2","udp":true,"xudp":true,"smux":true},{"name":"Ambiguous","type":"Trojan"}]},"two":{"proxies":[{"name":"Ambiguous","type":"Shadowsocks"}]}}}"#,
+            ),
+        ]);
+        let snapshot = MihomoClient::new(transport).proxy_groups().unwrap();
+        assert_eq!(snapshot.groups.len(), 2);
+        assert!(
+            snapshot
+                .groups
+                .iter()
+                .any(|g| g.name == "Empty" && g.members.is_empty())
+        );
+        assert_eq!(snapshot.proxies["Core"].udp, Some(false));
+        assert_eq!(snapshot.proxies["Core"].delay, Some(0));
+        assert!(snapshot.proxies["Core"].tfo);
+        assert_eq!(snapshot.proxies["Remote"].kind, "Hysteria2");
+        assert_eq!(snapshot.proxies["Remote"].udp, Some(true));
+        assert!(snapshot.proxies["Remote"].xudp && snapshot.proxies["Remote"].smux);
+        assert!(!snapshot.proxies.contains_key("Ambiguous"));
+        assert!(!snapshot.proxies.contains_key("Missing"));
     }
 
     #[test]

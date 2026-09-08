@@ -129,7 +129,7 @@ fn application_commands_drive_pinned_mihomo() {
             .unwrap()
             .output,
         RuntimeCommandOutput::ProxyGroups(groups)
-            if groups.iter().any(|group| group.name == "contract")
+            if groups.groups.iter().any(|group| group.name == "contract")
     ));
     handler
         .execute(RuntimeCommand::SelectProxy {

@@ -231,6 +231,30 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("home.run_mode", "运行模式", "Mode"),
     ("home.system_proxy", "系统代理", "System Proxy"),
     // ---- 代理页 ----
+    (
+        "proxies.search",
+        "筛选代理名称、分组或协议",
+        "Filter names, groups or protocols",
+    ),
+    ("proxies.collapse_all", "全部收起", "Collapse all"),
+    ("proxies.locate", "定位选中", "Locate selected"),
+    ("proxies.timeout", "超时", "Timeout"),
+    ("proxies.direct.title", "直连模式", "Direct mode"),
+    (
+        "proxies.direct.desc",
+        "流量直接连接目标。切换规则或全局模式以选择代理。",
+        "Traffic connects directly. Switch to Rule or Global to select proxies.",
+    ),
+    (
+        "proxies.no_match",
+        "没有可显示的代理",
+        "No proxies to display",
+    ),
+    (
+        "proxies.no_match.desc",
+        "尝试清除筛选，或启用配置后刷新。",
+        "Clear the filter, or activate a profile and refresh.",
+    ),
     ("proxies.test_delay", "测速", "Test"),
     ("proxies.empty.title", "暂无代理组", "No Proxy Groups"),
     (

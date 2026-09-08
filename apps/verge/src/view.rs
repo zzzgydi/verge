@@ -90,7 +90,7 @@ pub struct MainView {
     pub connections_table: Entity<TableState<ConnectionsDelegate>>,
     /// 日志页虚拟列表滚动位置。
     pub log_scroll: VirtualListScrollHandle,
-    pub proxy_scroll: VirtualListScrollHandle,
+    pub proxy_page: Entity<pages::proxies::ProxyPage>,
     pub rule_scroll: VirtualListScrollHandle,
     /// 日志级别过滤，None 表示全部。
     pub log_filter: Option<&'static str>,
@@ -131,6 +131,7 @@ impl MainView {
         })
         .detach();
         let actions = cx.entity().downgrade();
+        let proxy_page = cx.new(|cx| pages::proxies::ProxyPage::new(actions.clone(), window, cx));
         let connections_table = cx.new(|cx| {
             TableState::new(ConnectionsDelegate::new(actions), window, cx)
                 .col_selectable(false)
@@ -220,7 +221,7 @@ impl MainView {
             merged_editor: cx.new(|cx| TextareaState::new(window, cx)),
             connections_table,
             log_scroll: VirtualListScrollHandle::new(),
-            proxy_scroll: VirtualListScrollHandle::new(),
+            proxy_page,
             rule_scroll: VirtualListScrollHandle::new(),
             log_filter: None,
             pending_settings_import: None,
@@ -245,6 +246,10 @@ impl MainView {
             return;
         }
         self.placeholders_lang = Some(lang);
+        let search = self.proxy_page.read(cx).search.clone();
+        search.update(cx, |input, cx| {
+            input.set_placeholder(tr(lang, "proxies.search"), window, cx)
+        });
         let fields: [(Entity<InputState>, &'static str); 8] = [
             (self.profile_id.clone(), "placeholder.profile_id"),
             (self.profile_name.clone(), "placeholder.profile_name"),
@@ -391,6 +396,7 @@ impl MainView {
             self.state.begin_envelope(&envelope);
             let _ = self.requests.send(envelope);
         }
+        self.sync_proxies(cx);
         cx.notify();
     }
 
@@ -410,6 +416,11 @@ impl MainView {
                 table.refresh(cx);
             }
         });
+    }
+
+    pub fn sync_proxies(&self, cx: &mut Context<Self>) {
+        self.proxy_page
+            .update(cx, |page, cx| page.sync(&self.state, self.lang(), cx));
     }
 
     /// 任一请求仍在途时返回 true，用于刷新按钮的加载态（防重复提交）。

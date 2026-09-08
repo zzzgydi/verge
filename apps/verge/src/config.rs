@@ -731,6 +731,22 @@ impl FileProfileStore {
         serde_yaml::to_string(&value).map_err(storage_error)
     }
 
+    /// Preserve the proxy-group order declared by the selected source and Merge config.
+    pub fn proxy_group_order(&self) -> Result<Vec<String>, AppError> {
+        let Some(id) = self.selected() else {
+            return Ok(Vec::new());
+        };
+        let value = self.effective_value(id)?;
+        Ok(value
+            .get("proxy-groups")
+            .and_then(serde_yaml::Value::as_sequence)
+            .into_iter()
+            .flatten()
+            .filter_map(|group| group.get("name").and_then(serde_yaml::Value::as_str))
+            .map(str::to_owned)
+            .collect())
+    }
+
     /// 合并后的配置写入独立候选文件,供无运行凭据时的内核校验使用。
     pub fn prepare_merge_candidate(&self, id: &ProfileId) -> Result<CandidateConfig, AppError> {
         self.require_profile(id)?;

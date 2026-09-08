@@ -241,6 +241,7 @@ pub fn run() {
                                         view.sync_theme(window, cx);
                                         view.sync_form_inputs(window, cx);
                                         view.sync_connections(cx);
+                                        view.sync_proxies(cx);
                                         // 增量补齐：RefreshHome 同时建立实时订阅，
                                         // 后续变更全部走 Response / RealtimeBatch。
                                         view.dispatch(UiAction::RefreshHome, cx);
@@ -304,6 +305,7 @@ pub fn run() {
                                             // 设置首次到达后同步一次表单初值。
                                             view.sync_form_inputs(window, cx);
                                             view.sync_connections(cx);
+                                            view.sync_proxies(cx);
                                             // “查看 YAML”在加载完成后打开 Sheet。
                                             view.maybe_open_yaml_sheet(window, cx);
                                             // Merge 配置与合并结果 Sheet 同样在加载完成后填充。

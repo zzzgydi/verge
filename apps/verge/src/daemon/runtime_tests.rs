@@ -197,10 +197,14 @@ fn daemon_queries_use_internal_socket_with_external_controller_disabled() {
             RuntimeCommand::GetMode => {
                 assert_eq!(result.output, RuntimeCommandOutput::Mode(RunMode::Rule))
             }
-            RuntimeCommand::ListProxyGroups => assert!(matches!(
-                result.output,
-                RuntimeCommandOutput::ProxyGroups(_)
-            )),
+            RuntimeCommand::ListProxyGroups => {
+                let RuntimeCommandOutput::ProxyGroups(snapshot) = result.output else {
+                    panic!("expected proxy snapshot");
+                };
+                assert!(snapshot.groups.iter().any(|group| group.name == "GLOBAL"));
+                assert_eq!(snapshot.proxies["DIRECT"].kind, "Direct");
+                assert_eq!(snapshot.proxies["DIRECT"].udp, Some(true));
+            }
             RuntimeCommand::ListRules => assert!(
                 matches!(result.output, RuntimeCommandOutput::Rules(rules) if rules.len() == 1)
             ),
@@ -217,4 +221,49 @@ fn daemon_queries_use_internal_socket_with_external_controller_disabled() {
     }
     server.shutdown();
     backend.shutdown();
+}
+
+#[test]
+fn proxy_groups_follow_merged_config_order() {
+    let (_dir, config) = fixture();
+    let mut backend = Backend::new(config).unwrap();
+    let id = ProfileId::parse("order").unwrap();
+    backend.profiles.import(Profile::new(id.clone(), "Order", ProfileSource::Local, UpdatePolicy::Manual, 0, None).unwrap(),
+        "proxy-groups:\n  - name: Z\n    type: select\n    proxies: [DIRECT]\n  - name: A\n    type: select\n    proxies: [DIRECT]\n").unwrap();
+    backend.profiles.select(&id).unwrap();
+    let mut response = UiResponse::Runtime {
+        request: RuntimeCommand::ListProxyGroups,
+        result: Ok(crate::domain::RuntimeCommandResult {
+            output: RuntimeCommandOutput::ProxyGroups(crate::domain::ProxySnapshot {
+                groups: ["GLOBAL", "A", "Z"]
+                    .map(|name| crate::domain::ProxyGroup {
+                        name: name.into(),
+                        kind: "Selector".into(),
+                        selected: None,
+                        members: vec![],
+                    })
+                    .into(),
+                ..Default::default()
+            }),
+            summary: String::new(),
+        }),
+    };
+    backend.order_proxy_groups(&mut response);
+    let UiResponse::Runtime {
+        result: Ok(result), ..
+    } = response
+    else {
+        unreachable!()
+    };
+    let RuntimeCommandOutput::ProxyGroups(snapshot) = result.output else {
+        unreachable!()
+    };
+    assert_eq!(
+        snapshot
+            .groups
+            .iter()
+            .map(|g| g.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Z", "A", "GLOBAL"]
+    );
 }

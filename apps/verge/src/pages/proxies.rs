@@ -1,237 +1,253 @@
-use std::rc::Rc;
-
-use crate::ui::UiAction;
-use gpui::{prelude::FluentBuilder as _, *};
-use gpui_component::{
-    ActiveTheme as _, IconName, Sizable as _, StyledExt as _,
-    button::{Button, ButtonVariants as _},
-    h_flex, v_flex, v_virtual_list,
-};
-
-use crate::{i18n::tr, view::MainView};
+mod model;
+mod rows;
+#[cfg(test)]
+mod tests;
 
 use super::components::{mode_selector, page_heading};
-use gpui_component::scroll::Scrollbar;
+use crate::{
+    domain::{ProfileId, ProxySnapshot, RunMode},
+    i18n::{Lang, tr},
+    ui::{UiAction, UiState},
+    view::MainView,
+};
+use gpui::{prelude::FluentBuilder as _, *};
+use gpui_component::{
+    ActiveTheme as _, IconName, Sizable as _, VirtualListScrollHandle,
+    button::{Button, ButtonVariants as _},
+    h_flex,
+    input::{Input, InputEvent, InputState},
+    scroll::Scrollbar,
+    v_flex, v_virtual_list,
+};
+use model::Row;
+use std::{
+    collections::{HashMap, HashSet},
+    rc::Rc,
+    sync::Arc,
+};
 
-/// 组标题行高。虚拟列表要求渲染行高与 item_sizes 逐像素一致。
-const GROUP_ROW_HEIGHT: f32 = 52.;
-/// 节点行高。
-const NODE_ROW_HEIGHT: f32 = 44.;
-
-/// 代理页拍平后的行：组标题行 + 节点行。
-#[derive(Clone, Copy)]
-enum ProxyRow {
-    Group(usize),
-    Node { group: usize, member: usize },
+/// Retained page state. Only visible cards are constructed by the virtual list.
+pub struct ProxyPage {
+    actions: WeakEntity<MainView>,
+    snapshot: Arc<ProxySnapshot>,
+    mode: Option<RunMode>,
+    profile: Option<ProfileId>,
+    revision: u64,
+    lang: Lang,
+    expanded: HashSet<String>,
+    pub search: Entity<InputState>,
+    query: String,
+    filter_collapsed: HashSet<String>,
+    pub scroll: VirtualListScrollHandle,
+    rows: Rc<Vec<Row>>,
+    sizes: Rc<Vec<Size<Pixels>>>,
+    columns: usize,
+    delays: HashMap<String, u32>,
+    pending: HashSet<String>,
+    _subscriptions: Vec<Subscription>,
 }
 
-impl ProxyRow {
-    fn height(&self) -> Pixels {
-        match self {
-            Self::Group(_) => px(GROUP_ROW_HEIGHT),
-            Self::Node { .. } => px(NODE_ROW_HEIGHT),
+impl ProxyPage {
+    pub fn new(actions: WeakEntity<MainView>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let search =
+            cx.new(|cx| InputState::new(window, cx).placeholder(tr(Lang::En, "proxies.search")));
+        let subscription = cx.subscribe(&search, |this, input, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                this.query = input.read(cx).value().to_string();
+                this.filter_collapsed.clear();
+                this.rebuild();
+                this.scroll.set_offset(point(px(0.), px(0.)));
+                cx.notify();
+            }
+        });
+        let bounds = cx.observe_window_bounds(window, |this, window, cx| {
+            let columns = Self::columns(window);
+            if columns != this.columns {
+                this.columns = columns;
+                this.rebuild();
+                cx.notify();
+            }
+        });
+        Self {
+            actions,
+            snapshot: Arc::default(),
+            mode: None,
+            profile: None,
+            revision: 0,
+            lang: Lang::En,
+            expanded: HashSet::new(),
+            search,
+            query: String::new(),
+            filter_collapsed: HashSet::new(),
+            scroll: VirtualListScrollHandle::new(),
+            rows: Rc::default(),
+            sizes: Rc::default(),
+            columns: Self::columns(window),
+            delays: HashMap::new(),
+            pending: HashSet::new(),
+            _subscriptions: vec![subscription, bounds],
         }
+    }
+
+    fn columns(window: &Window) -> usize {
+        if window.viewport_size().width >= px(1080.) {
+            2
+        } else {
+            1
+        }
+    }
+
+    pub fn sync(&mut self, state: &UiState, lang: Lang, cx: &mut Context<Self>) {
+        let layout_changed = !Arc::ptr_eq(&self.snapshot, &state.proxies)
+            || self.mode != state.mode
+            || self.profile != state.selected_profile;
+        let changed = layout_changed
+            || self.revision != state.proxy_revision
+            || self.lang != lang
+            || self.pending != state.delay_pending;
+        if !changed {
+            return;
+        }
+        if self.profile != state.selected_profile {
+            self.expanded.clear();
+        }
+        if self.mode != state.mode || self.profile != state.selected_profile {
+            self.scroll.set_offset(point(px(0.), px(0.)));
+        }
+        self.snapshot = state.proxies.clone();
+        self.mode = state.mode;
+        self.profile = state.selected_profile.clone();
+        self.revision = state.proxy_revision;
+        self.lang = lang;
+        self.delays.clone_from(&state.delays);
+        self.pending.clone_from(&state.delay_pending);
+        self.expanded
+            .retain(|name| self.snapshot.groups.iter().any(|g| &g.name == name));
+        if layout_changed {
+            self.rebuild();
+        }
+        cx.notify();
+    }
+
+    fn rebuild(&mut self) {
+        let rows = model::rows(
+            &self.snapshot,
+            self.mode,
+            &self.expanded,
+            &self.query,
+            &self.filter_collapsed,
+            self.columns,
+        );
+        self.sizes = Rc::new(
+            rows.iter()
+                .map(|row| size(px(0.), px(row.height())))
+                .collect(),
+        );
+        self.rows = Rc::new(rows);
+    }
+
+    fn toggle(&mut self, group: usize, cx: &mut Context<Self>) {
+        let name = self.snapshot.groups[group].name.clone();
+        if !self.query.trim().is_empty() {
+            if !self.filter_collapsed.remove(&name) {
+                self.filter_collapsed.insert(name);
+            }
+        } else if !self.expanded.remove(&name) {
+            self.expanded.insert(name);
+        }
+        self.rebuild();
+        cx.notify();
+    }
+
+    fn locate(&mut self, group: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.snapshot.groups[group].selected.is_none() {
+            return;
+        }
+        self.query.clear();
+        self.search
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.expanded
+            .insert(self.snapshot.groups[group].name.clone());
+        self.rebuild();
+        if let Some(ix) = model::selected_row(&self.snapshot, &self.rows, group) {
+            self.scroll.scroll_to_item(ix, ScrollStrategy::Center);
+        }
+        cx.notify();
+    }
+
+    fn dispatch(&self, action: UiAction, cx: &mut Context<Self>) {
+        let actions = self.actions.clone();
+        cx.defer(move |cx| {
+            let _ = actions.update(cx, |view, cx| view.dispatch(action, cx));
+        });
     }
 }
 
-fn proxy_rows(view: &MainView) -> Vec<ProxyRow> {
-    view.state
-        .proxy_groups
-        .iter()
-        .enumerate()
-        .flat_map(|(group, value)| {
-            std::iter::once(ProxyRow::Group(group))
-                .chain((0..value.members.len()).map(move |member| ProxyRow::Node { group, member }))
-        })
-        .collect()
-}
-
-/// 延迟分级颜色：<200ms 绿、<800ms 黄，其余（含超时、未测）灰。
-fn delay_color(delay: Option<u32>, cx: &App) -> Hsla {
-    match delay {
-        Some(ms) if ms < 200 => cx.theme().success,
-        Some(ms) if ms < 800 => cx.theme().warning,
-        _ => cx.theme().muted_foreground,
-    }
-}
-
-fn render_row(row: &ProxyRow, view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
-    match row {
-        ProxyRow::Group(ix) => {
-            let group = &view.state.proxy_groups[*ix];
-            let (name, kind) = (&group.name, &group.kind);
-            div()
-                .h(px(GROUP_ROW_HEIGHT))
-                .px_3()
-                .flex()
-                .items_center()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_semibold()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(format!("{name}   /   {kind}   ·   {}", group.members.len())),
-                )
-                .into_any_element()
-        }
-        ProxyRow::Node { group, member } => {
-            let entry = &view.state.proxy_groups[*group];
-            let (group, proxy) = (&entry.name, &entry.members[*member]);
-            let selected = entry.selected.as_deref() == Some(proxy.as_str());
-            let delay = view.state.delays.get(proxy).copied();
-            let delay_text = delay.map_or_else(
-                || tr(view.lang(), "proxies.test_delay").to_owned(),
-                |ms| format!("{ms} ms"),
-            );
-            let delay_color = delay_color(delay, cx);
-            let select_group = group.clone();
-            let select_proxy = proxy.clone();
-            let test_proxy = proxy.clone();
-            let testing = view.state.delay_pending.contains(proxy);
-            div()
-                .id(SharedString::from(format!("proxy-{group}-{proxy}")))
-                .h_flex()
-                .w_full()
-                .h(px(NODE_ROW_HEIGHT))
-                .px_3()
-                .gap_2()
-                .items_center()
-                .justify_between()
-                .border_b_1()
-                .border_color(cx.theme().border.opacity(0.5))
-                .when(selected, |this| {
-                    this.bg(cx.theme().list_active)
-                        .border_1()
-                        .border_color(cx.theme().list_active_border)
-                })
-                .when(!selected, |this| {
-                    this.hover(|this| this.bg(cx.theme().list_hover))
-                })
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.dispatch(
-                        UiAction::SelectProxy {
-                            group: select_group.clone(),
-                            proxy: select_proxy.clone(),
-                        },
-                        cx,
-                    );
-                }))
-                .child(
-                    gpui_component::Icon::new(if selected {
-                        IconName::CircleCheck
-                    } else {
-                        IconName::Globe
-                    })
-                    .size_4()
-                    .text_color(if selected {
-                        cx.theme().foreground
-                    } else {
-                        cx.theme().muted_foreground
-                    }),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .overflow_x_hidden()
-                        .child(div().text_sm().truncate().child(proxy.clone())),
-                )
-                .child(
-                    Button::new(SharedString::from(format!("delay-{group}-{test_proxy}")))
-                        .label(delay_text)
-                        .xsmall()
+impl Render for ProxyPage {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let global = self.mode == Some(RunMode::Global);
+        let direct = self.mode == Some(RunMode::Direct);
+        let global_index = self
+            .snapshot
+            .groups
+            .iter()
+            .position(|group| group.name == "GLOBAL");
+        let toolbar = h_flex()
+            .gap_3()
+            .flex_shrink_0()
+            .child(
+                div().flex_1().min_w_0().child(
+                    Input::new(&self.search)
+                        .small()
+                        .cleanable(true)
+                        .prefix(gpui_component::Icon::new(IconName::Search).size_4()),
+                ),
+            )
+            .when(!global && !direct, |this| {
+                this.child(
+                    Button::new("collapse-proxies")
+                        .debug_selector(|| "collapse-proxies".into())
+                        .label(tr(self.lang, "proxies.collapse_all"))
+                        .small()
                         .ghost()
-                        .loading(testing)
-                        .when(delay.is_some(), |this| this.text_color(delay_color))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.dispatch(
-                                UiAction::TestDelay {
-                                    proxy: test_proxy.clone(),
-                                    url: "https://www.gstatic.com/generate_204".into(),
-                                    timeout_ms: 5_000,
-                                },
-                                cx,
-                            );
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.expanded.clear();
+                            this.query.clear();
+                            this.search
+                                .update(cx, |input, cx| input.set_value("", window, cx));
+                            this.rebuild();
+                            this.scroll.set_offset(point(px(0.), px(0.)));
+                            cx.notify();
                         })),
                 )
-                .into_any_element()
-        }
-    }
-}
-
-pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
-    let lang = view.lang();
-    let refreshing = view.is_pending(&["proxy_groups"]);
-    let header = h_flex()
-        .justify_between()
-        .flex_shrink_0()
-        .child(page_heading(
-            tr(lang, "proxies.title"),
-            tr(lang, "proxies.subtitle"),
-            cx,
-        ))
-        .child(
-            Button::new("refresh-proxies")
-                .label(tr(lang, "common.refresh"))
-                .small()
-                .ghost()
-                .loading(refreshing)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.dispatch(UiAction::RefreshProxies, cx);
-                })),
-        );
-
-    let controls = h_flex()
-        .flex_shrink_0()
-        .justify_between()
-        .py_3()
-        .border_b_1()
-        .border_color(cx.theme().border)
-        .child(div().text_sm().child(tr(lang, "home.run_mode")))
-        .child(mode_selector(view, cx));
-    if view.state.proxy_groups.is_empty() {
-        let body = if refreshing {
-            super::skeleton_rows(3).into_any_element()
-        } else {
+            })
+            .when_some(global_index.filter(|_| global), |this, ix| {
+                this.child(
+                    Button::new("locate-global")
+                        .label(tr(self.lang, "proxies.locate"))
+                        .small()
+                        .outline()
+                        .on_click(
+                            cx.listener(move |this, _, window, cx| this.locate(ix, window, cx)),
+                        ),
+                )
+            });
+        let body = if direct {
             super::EmptyState::new(
                 IconName::Globe,
-                tr(lang, "proxies.empty.title"),
-                tr(lang, "proxies.empty.desc"),
-            )
-            .action(
-                Button::new("goto-profiles")
-                    .label(tr(lang, "proxies.empty.action"))
-                    .small()
-                    .outline()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.navigate(crate::ui::Page::Profiles, cx);
-                    })),
+                tr(self.lang, "proxies.direct.title"),
+                tr(self.lang, "proxies.direct.desc"),
             )
             .into_any_element()
-        };
-        return v_flex()
-            .size_full()
-            .gap_4()
-            .child(header)
-            .child(controls)
-            .child(body)
-            .into_any_element();
-    }
-
-    let rows = proxy_rows(view);
-    let item_sizes = Rc::new(
-        rows.iter()
-            .map(|row| size(px(0.), row.height()))
-            .collect::<Vec<_>>(),
-    );
-    let view_entity = cx.entity();
-    v_flex()
-        .flex_1()
-        .min_h_0()
-        .gap_4()
-        .child(header)
-        .child(controls)
-        .child(
+        } else if self.rows.is_empty() {
+            super::EmptyState::new(
+                IconName::Search,
+                tr(self.lang, "proxies.no_match"),
+                tr(self.lang, "proxies.no_match.desc"),
+            )
+            .into_any_element()
+        } else {
+            let rows = self.rows.clone();
             div()
                 .debug_selector(|| "proxy-list".into())
                 .relative()
@@ -240,19 +256,66 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 .overflow_hidden()
                 .child(
                     v_virtual_list(
-                        view_entity,
+                        cx.entity(),
                         "proxy-list",
-                        item_sizes,
+                        self.sizes.clone(),
                         move |this, range, _, cx| {
                             range
                                 .filter_map(|ix| rows.get(ix))
-                                .map(|row| render_row(row, this, cx))
+                                .map(|row| rows::render(row, this, cx))
                                 .collect()
                         },
                     )
-                    .track_scroll(&view.proxy_scroll),
+                    .track_scroll(&self.scroll),
                 )
-                .child(Scrollbar::vertical(&view.proxy_scroll)),
+                .child(Scrollbar::vertical(&self.scroll))
+                .into_any_element()
+        };
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .gap_3()
+            .child(toolbar)
+            .child(body)
+    }
+}
+
+pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
+    let lang = view.lang();
+    v_flex()
+        .flex_1()
+        .min_h_0()
+        .gap_4()
+        .child(
+            h_flex()
+                .justify_between()
+                .flex_shrink_0()
+                .child(page_heading(
+                    tr(lang, "proxies.title"),
+                    tr(lang, "proxies.subtitle"),
+                    cx,
+                ))
+                .child(
+                    Button::new("refresh-proxies")
+                        .label(tr(lang, "common.refresh"))
+                        .small()
+                        .ghost()
+                        .loading(view.is_pending(&["proxy_groups"]))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.dispatch(UiAction::RefreshProxies, cx)
+                        })),
+                ),
         )
+        .child(
+            h_flex()
+                .justify_between()
+                .flex_shrink_0()
+                .pb_3()
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .child(div().text_sm().child(tr(lang, "home.run_mode")))
+                .child(mode_selector(view, cx)),
+        )
+        .child(view.proxy_page.clone())
         .into_any_element()
 }

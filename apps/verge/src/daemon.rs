@@ -1194,6 +1194,31 @@ impl Backend {
         })
     }
 
+    fn order_proxy_groups(&self, response: &mut UiResponse) {
+        let UiResponse::Runtime {
+            result: Ok(result), ..
+        } = response
+        else {
+            return;
+        };
+        let RuntimeCommandOutput::ProxyGroups(snapshot) = &mut result.output else {
+            return;
+        };
+        if let Ok(order) = self.profiles.proxy_group_order() {
+            let indices: std::collections::HashMap<_, _> = order
+                .iter()
+                .enumerate()
+                .map(|(i, name)| (name.as_str(), i))
+                .collect();
+            snapshot.groups.sort_by_key(|group| {
+                indices
+                    .get(group.name.as_str())
+                    .copied()
+                    .unwrap_or(usize::MAX)
+            });
+        }
+    }
+
     fn query_runtime(&self) -> Result<MihomoRuntime<TcpControllerTransport>, AppError> {
         if self.engine.is_none() {
             return Err(self.runtime_unavailable());
@@ -1514,8 +1539,9 @@ fn run_daemon_backend(
             DaemonEvent::WorkerDone {
                 conn_id,
                 envelope,
-                response,
+                mut response,
             } => {
+                backend.order_proxy_groups(&mut response);
                 isolated_jobs = isolated_jobs.saturating_sub(1);
                 let risk = envelope.request.risk();
                 let last_in_operation = envelope.operation_index + 1 == envelope.operation_len;

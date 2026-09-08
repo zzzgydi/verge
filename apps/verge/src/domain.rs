@@ -600,6 +600,26 @@ pub struct ProxyGroup {
     pub members: Vec<String>,
 }
 
+/// One controller snapshot; node details are shared by all group occurrences.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProxySnapshot {
+    pub groups: Vec<ProxyGroup>,
+    pub proxies: std::collections::BTreeMap<String, ProxyDetails>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProxyDetails {
+    pub kind: String,
+    pub udp: Option<bool>,
+    pub xudp: bool,
+    pub tfo: bool,
+    pub mptcp: bool,
+    pub smux: bool,
+    pub hidden: bool,
+    pub selected: Option<String>,
+    pub delay: Option<u32>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RuleEntry {
     pub kind: String,
@@ -757,7 +777,7 @@ impl RuntimeCommand {
 pub enum RuntimeCommandOutput {
     None,
     Mode(RunMode),
-    ProxyGroups(Vec<ProxyGroup>),
+    ProxyGroups(ProxySnapshot),
     Rules(Vec<RuleEntry>),
     Providers(Vec<ProviderSummary>),
     NetworkSettings(NetworkSettings),

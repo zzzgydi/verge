@@ -11,9 +11,9 @@ use crate::ui::{UiRequestEnvelope, UiResponseEnvelope};
 use serde::{Deserialize, Serialize};
 
 /// IPC 协议版本。守护进程与 GUI 进程必须一致；升级不匹配时拒绝连接。
-/// v4: persistent network overrides and their application commands.
+/// v5: proxy snapshots include shared node details and capabilities.
 /// 应用更新后旧守护进程与新 GUI 的配对靠这个版本号明确拒绝。
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// GUI → Daemon 的消息。
 #[derive(Clone, Debug, Serialize, Deserialize)]

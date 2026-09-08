@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::domain::ProxyGroup;
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     fmt, fs,
@@ -12,8 +14,8 @@ use crate::config::{FileProfileStore, ProfileUpdateJob, UpdateScheduler, UpdateT
 use crate::domain::{
     AppCommand, AppCommandOutput, AppCommandResult, AppError, CommandActor, CommandContext,
     CommandRisk, ErrorCode, HelperStatus, NetworkSettings, Profile, ProfileId, ProviderKind,
-    ProviderSummary, ProxyEndpoint, ProxyGroup, RealtimeEvent, RealtimeTopic, RuleEntry, RunMode,
-    RuntimeCommand, RuntimeCommandOutput, RuntimeCommandResult, SystemProxyCommand,
+    ProviderSummary, ProxyEndpoint, ProxySnapshot, RealtimeEvent, RealtimeTopic, RuleEntry,
+    RunMode, RuntimeCommand, RuntimeCommandOutput, RuntimeCommandResult, SystemProxyCommand,
     SystemProxyCommandResult, SystemProxyState,
 };
 use crate::mihomo::{
@@ -297,7 +299,7 @@ impl<'a, C: SystemProxyControl> SystemProxyCommandHandler<'a, C> {
 pub trait RuntimeControl {
     fn mode(&mut self) -> Result<RunMode, AppError>;
     fn set_mode(&mut self, mode: RunMode) -> Result<(), AppError>;
-    fn proxy_groups(&mut self) -> Result<Vec<ProxyGroup>, AppError>;
+    fn proxy_groups(&mut self) -> Result<ProxySnapshot, AppError>;
     fn rules(&mut self) -> Result<Vec<RuleEntry>, AppError>;
     fn providers(&mut self) -> Result<Vec<ProviderSummary>, AppError>;
     fn update_provider(&mut self, kind: ProviderKind, name: &str) -> Result<(), AppError>;
@@ -376,7 +378,7 @@ impl<T: ControllerTransport> RuntimeControl for MihomoRuntime<T> {
         self.client.set_mode(mode)
     }
 
-    fn proxy_groups(&mut self) -> Result<Vec<ProxyGroup>, AppError> {
+    fn proxy_groups(&mut self) -> Result<ProxySnapshot, AppError> {
         self.client.proxy_groups()
     }
 
@@ -2474,11 +2476,17 @@ mod tests {
             Ok(())
         }
 
-        fn proxy_groups(&mut self) -> Result<Vec<ProxyGroup>, AppError> {
+        fn proxy_groups(&mut self) -> Result<ProxySnapshot, AppError> {
             self.calls.push("proxy_groups".into());
-            self.failure
-                .take()
-                .map_or_else(|| Ok(self.groups.clone()), Err)
+            self.failure.take().map_or_else(
+                || {
+                    Ok(ProxySnapshot {
+                        groups: self.groups.clone(),
+                        ..Default::default()
+                    })
+                },
+                Err,
+            )
         }
 
         fn rules(&mut self) -> Result<Vec<RuleEntry>, AppError> {
@@ -2578,7 +2586,7 @@ mod tests {
                 .execute(RuntimeCommand::ListProxyGroups)
                 .unwrap()
                 .output,
-            RuntimeCommandOutput::ProxyGroups(groups) if groups.len() == 1
+            RuntimeCommandOutput::ProxyGroups(snapshot) if snapshot.groups.len() == 1
         ));
         assert!(matches!(
             handler.execute(RuntimeCommand::ListRules).unwrap().output,
@@ -2930,7 +2938,7 @@ mod tun_coordination_tests {
 
     use super::{RuntimeCommandHandler, RuntimeControl};
     use crate::domain::{
-        ProviderKind, ProviderSummary, ProxyGroup, RealtimeEvent, RealtimeTopic, RuleEntry,
+        ProviderKind, ProviderSummary, ProxySnapshot, RealtimeEvent, RealtimeTopic, RuleEntry,
     };
 
     #[derive(Default)]
@@ -2947,7 +2955,7 @@ mod tun_coordination_tests {
         fn set_mode(&mut self, _mode: RunMode) -> Result<(), AppError> {
             unimplemented!()
         }
-        fn proxy_groups(&mut self) -> Result<Vec<ProxyGroup>, AppError> {
+        fn proxy_groups(&mut self) -> Result<ProxySnapshot, AppError> {
             unimplemented!()
         }
         fn rules(&mut self) -> Result<Vec<RuleEntry>, AppError> {

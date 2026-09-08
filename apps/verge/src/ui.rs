@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::domain::ProxyGroup;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
@@ -5,8 +7,8 @@ use crate::domain::{
     AppCommand, AppCommandOutput, AppCommandResult, AppError, AppUpdateStatus, ApplicationSettings,
     ApplicationSettingsSnapshot, CommandContext, CommandRisk, ConnectionSnapshot, HelperStatus,
     LogEvent, MemoryEvent, NetworkSettings, Profile, ProfileId, ProfileSource, ProviderKind,
-    ProviderSummary, ProxyEndpoint, ProxyGroup, RealtimeEvent, RealtimeTopic, RuleEntry, RunMode,
-    RuntimeCommand, RuntimeCommandOutput, RuntimeCommandResult, RuntimeSettings,
+    ProviderSummary, ProxyEndpoint, ProxySnapshot, RealtimeEvent, RealtimeTopic, RuleEntry,
+    RunMode, RuntimeCommand, RuntimeCommandOutput, RuntimeCommandResult, RuntimeSettings,
     SettingsImportPreview, SettingsScope, SystemProxyCommand, SystemProxyCommandResult,
     SystemProxyState, TrafficEvent, UpdatePolicy,
 };
@@ -462,10 +464,10 @@ impl UiAction {
                 })]
             }
             Self::SelectProxy { group, proxy } => {
-                vec![UiRequest::Runtime(RuntimeCommand::SelectProxy {
-                    group,
-                    proxy,
-                })]
+                vec![
+                    UiRequest::Runtime(RuntimeCommand::SelectProxy { group, proxy }),
+                    UiRequest::Runtime(RuntimeCommand::ListProxyGroups),
+                ]
             }
             Self::TestDelay {
                 proxy,
@@ -495,7 +497,8 @@ pub struct UiState {
     pub traffic: Option<TrafficEvent>,
     pub memory: Option<MemoryEvent>,
     pub system_proxy: Option<SystemProxyState>,
-    pub proxy_groups: Vec<ProxyGroup>,
+    pub proxies: Arc<ProxySnapshot>,
+    pub proxy_revision: u64,
     pub rules: Vec<RuleEntry>,
     pub providers: Vec<ProviderSummary>,
     pub profiles: Vec<Profile>,
@@ -582,19 +585,35 @@ impl UiState {
         self.pending
             .remove(request_key(&UiRequest::Runtime(request.clone())));
         self.core_status = CoreStatus::Running;
+        if matches!(
+            request,
+            RuntimeCommand::ListProxyGroups
+                | RuntimeCommand::SelectProxy { .. }
+                | RuntimeCommand::TestProxyDelay { .. }
+        ) {
+            self.proxy_revision = self.proxy_revision.wrapping_add(1);
+        }
         match result.output {
             RuntimeCommandOutput::None => {
-                if let RuntimeCommand::SelectProxy { group, proxy } = request
-                    && let Some(proxy_group) = self
-                        .proxy_groups
+                if let RuntimeCommand::SelectProxy { group, proxy } = request {
+                    let snapshot = Arc::make_mut(&mut self.proxies);
+                    if let Some(entry) = snapshot
+                        .groups
                         .iter_mut()
-                        .find(|candidate| candidate.name == *group)
-                {
-                    proxy_group.selected = Some(proxy.clone());
+                        .find(|entry| entry.name == *group)
+                    {
+                        entry.selected = Some(proxy.clone());
+                    }
+                    if let Some(entry) = snapshot.proxies.get_mut(group) {
+                        entry.selected = Some(proxy.clone());
+                    }
                 }
             }
             RuntimeCommandOutput::Mode(mode) => self.mode = Some(mode),
-            RuntimeCommandOutput::ProxyGroups(groups) => self.proxy_groups = groups,
+            RuntimeCommandOutput::ProxyGroups(snapshot) => {
+                self.proxies = Arc::new(snapshot);
+                self.delays.clear();
+            }
             RuntimeCommandOutput::Rules(rules) => self.rules = rules,
             RuntimeCommandOutput::Providers(providers) => self.providers = providers,
             RuntimeCommandOutput::NetworkSettings(settings) => {
@@ -1014,12 +1033,15 @@ mod tests {
     #[test]
     fn selected_proxy_and_delay_are_merged_without_reloading_the_page() {
         let mut state = UiState {
-            proxy_groups: vec![ProxyGroup {
-                name: "Select".into(),
-                kind: "Selector".into(),
-                selected: Some("A".into()),
-                members: vec!["A".into(), "B".into()],
-            }],
+            proxies: Arc::new(ProxySnapshot {
+                groups: vec![ProxyGroup {
+                    name: "Select".into(),
+                    kind: "Selector".into(),
+                    selected: Some("A".into()),
+                    members: vec!["A".into(), "B".into()],
+                }],
+                ..Default::default()
+            }),
             ..UiState::default()
         };
         let selection = RuntimeCommand::SelectProxy {
@@ -1045,7 +1067,7 @@ mod tests {
                 summary: "tested".into(),
             },
         );
-        assert_eq!(state.proxy_groups[0].selected.as_deref(), Some("B"));
+        assert_eq!(state.proxies.groups[0].selected.as_deref(), Some("B"));
         assert_eq!(state.delays.get("B"), Some(&42));
     }
 

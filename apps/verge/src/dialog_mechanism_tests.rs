@@ -305,12 +305,16 @@ fn populated_proxy_and_rule_lists_scroll_inside_viewport(cx: &mut TestAppContext
     cx.simulate_resize(gpui::size(gpui::px(960.), gpui::px(640.)));
     cx.update(|_, cx| {
         view.update(cx, |view, _| {
-            view.state.proxy_groups = vec![ProxyGroup {
-                name: "Test".into(),
-                kind: "Selector".into(),
-                selected: None,
-                members: (0..500).map(|i| format!("Node {i}")).collect(),
-            }];
+            view.state.proxies = std::sync::Arc::new(crate::domain::ProxySnapshot {
+                groups: vec![ProxyGroup {
+                    name: "GLOBAL".into(),
+                    kind: "Selector".into(),
+                    selected: None,
+                    members: (0..500).map(|i| format!("Node {i}")).collect(),
+                }],
+                ..Default::default()
+            });
+            view.state.mode = Some(crate::domain::RunMode::Global);
             view.state.rules = (0..500)
                 .map(|i| RuleEntry {
                     kind: "DOMAIN".into(),
@@ -348,7 +352,7 @@ fn populated_proxy_and_rule_lists_scroll_inside_viewport(cx: &mut TestAppContext
         cx.update(|_, cx| {
             let view = view.read(cx);
             let scroll = if page == Page::Proxies {
-                &view.proxy_scroll
+                &view.proxy_page.read(cx).scroll
             } else {
                 &view.rule_scroll
             };
