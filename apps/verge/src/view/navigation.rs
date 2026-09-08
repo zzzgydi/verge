@@ -62,7 +62,7 @@ impl MainView {
                             .debug_selector(move || format!("nav-{page:?}"))
                             .ghost()
                             .w_full()
-                            .h(px(46.))
+                            .h(px(40.))
                             .px(px(15.))
                             .rounded_lg()
                             .border_1()
@@ -80,7 +80,7 @@ impl MainView {
                                             .min_w_0()
                                             .overflow_hidden()
                                             .whitespace_nowrap()
-                                            .text_size(px(15.))
+                                            .text_size(px(14.))
                                             .child(tr(lang, label)),
                                         SharedString::from(format!("sidebar-label-{page:?}")),
                                         expanded,

@@ -82,11 +82,16 @@ fn group_filter_locate_selection_and_global_layout(cx: &mut TestAppContext) {
     let viewport = cx.debug_bounds("proxy-list").unwrap();
     assert!(second.right() >= viewport.right() - px(20.));
     assert!((first.size.width - second.size.width).abs() < px(1.));
+    // A compact two-line card must fit the text and leave room for more rows.
+    assert_eq!(first.size.height, px(64.));
+    let name = cx.debug_bounds("proxy-name-0-0").unwrap();
+    assert!(name.top() >= first.top() + px(8.));
+    assert!(name.bottom() <= first.bottom() - px(8.));
     let marker = cx.debug_bounds("proxy-marker-0-0").unwrap();
     let test_button = cx.debug_bounds("delay-0-0").unwrap();
     assert!((marker.center().y - first.center().y).abs() < px(1.));
     assert!((test_button.center().y - first.center().y).abs() < px(1.));
-    assert!(test_button.size.height >= px(36.));
+    assert!(test_button.size.height >= px(28.));
     cx.update(|window, cx| {
         let search = page.read(cx).search.clone();
         search.read(cx).focus_handle(cx).focus(window, cx);
@@ -175,7 +180,7 @@ fn group_filter_locate_selection_and_global_layout(cx: &mut TestAppContext) {
         .debug_bounds("proxy-card-0-140")
         .expect("selected node must be painted after locating");
     let selected_marker = cx.debug_bounds("proxy-marker-0-140").unwrap();
-    assert_eq!(selected_marker.size, size(px(24.), px(24.)));
+    assert_eq!(selected_marker.size, size(px(20.), px(20.)));
     assert!((selected_marker.center().y - node.center().y).abs() < px(1.));
     let list = cx.debug_bounds("proxy-list").unwrap();
     assert!(node.top() >= list.top() && node.bottom() <= list.bottom());

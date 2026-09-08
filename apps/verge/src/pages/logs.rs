@@ -4,7 +4,6 @@ use gpui::*;
 use gpui_component::{
     ActiveTheme as _, Sizable as _,
     button::Button,
-    h_flex,
     menu::{DropdownMenu as _, PopupMenuItem},
     v_flex, v_virtual_list,
 };
@@ -14,7 +13,7 @@ use crate::{
     view::MainView,
 };
 
-use super::components::page_heading;
+use super::components::PageHeader;
 
 /// (文案 key, 级别过滤值)。
 const LEVELS: [(&str, Option<&'static str>); 5] = [
@@ -26,7 +25,7 @@ const LEVELS: [(&str, Option<&'static str>); 5] = [
 ];
 
 /// 日志行高。虚拟列表要求渲染行高与 item_sizes 逐像素一致。
-const LOG_ROW_HEIGHT: f32 = 22.;
+const LOG_ROW_HEIGHT: f32 = 24.;
 
 /// 按级别着色：错误红、警告黄、调试灰、信息默认前景。
 fn level_color(level: &str, cx: &Context<MainView>) -> Hsla {
@@ -73,6 +72,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
     let view_entity = cx.entity();
     let filter_button = Button::new("log-level-filter")
         .small()
+        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
         .outline()
         .label(i18n::fmt_logs_filter(lang, filter_label))
         .dropdown_menu({
@@ -92,17 +92,11 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
             }
         });
 
-    let mut content = v_flex().flex_1().min_h_0().gap_5().child(
-        h_flex()
-            .justify_between()
-            .flex_shrink_0()
-            .child(page_heading(
-                tr(lang, "logs.title"),
-                tr(lang, "logs.subtitle"),
-                cx,
-            ))
-            .child(filter_button),
-    );
+    let mut content = v_flex()
+        .flex_1()
+        .min_h_0()
+        .gap_4()
+        .child(PageHeader::new(tr(lang, "logs.title")).child(filter_button));
 
     // Retain only indices; clone/format payloads only for the visible range.
     let rows: Vec<usize> = view
@@ -128,6 +122,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 Button::new("clear-log-filter")
                     .label(tr(lang, "logs.clear_filter"))
                     .small()
+                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.log_filter = None;

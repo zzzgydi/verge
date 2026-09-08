@@ -1,4 +1,5 @@
 //! Application palette. Component behavior continues to come from gpui-component.
+pub mod metrics;
 use gpui::{App, Hsla, px, rgb};
 use gpui_component::theme::{Theme, ThemeMode};
 
@@ -8,9 +9,9 @@ pub fn apply(mode: ThemeMode, cx: &mut App) {
         rgb(if dark { dark_value } else { light_value }).into()
     };
     let theme = Theme::global_mut(cx);
-    theme.font_size = px(15.);
+    theme.font_size = px(metrics::REM);
     theme.radius = px(8.);
-    theme.radius_lg = px(14.);
+    theme.radius_lg = px(metrics::PANEL_RADIUS);
     let c = &mut theme.colors;
     c.background = color(0x141416, 0xf4f4f5);
     c.foreground = color(0xf0f0f2, 0x222226);

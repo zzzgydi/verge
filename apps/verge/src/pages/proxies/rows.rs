@@ -2,10 +2,10 @@ use super::{
     ProxyPage,
     model::{GROUP_HEIGHT, NODES_HEIGHT, Row},
 };
-use crate::{i18n::tr, ui::UiAction};
+use crate::{appearance::metrics, i18n::tr, ui::UiAction};
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, StyledExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     h_flex, v_flex,
 };
@@ -14,11 +14,10 @@ fn badge(text: impl Into<SharedString>, cx: &App) -> impl IntoElement {
     div()
         .flex_shrink_0()
         .whitespace_nowrap()
-        .px_2()
-        .py_1()
-        .rounded(px(5.))
-        .text_size(px(11.))
-        .line_height(px(14.))
+        .px(px(4.))
+        .rounded(px(4.))
+        .text_size(px(12.))
+        .line_height(px(16.))
         .bg(cx.theme().muted.opacity(0.55))
         .text_color(cx.theme().muted_foreground)
         .child(text.into())
@@ -37,14 +36,14 @@ pub fn render(row: &Row, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyEl
             let label = format!("proxy-group-{ix}");
             div()
                 .h(px(GROUP_HEIGHT))
-                .pb_3()
+                .pb(px(metrics::ITEM_GAP))
                 .child(
                     h_flex()
                         .id(SharedString::from(label.clone()))
                         .debug_selector(move || label.clone())
                         .size_full()
-                        .px_5()
-                        .gap_3()
+                        .px(px(metrics::ITEM_INSET))
+                        .gap(px(metrics::ITEM_GAP))
                         .rounded_lg()
                         .bg(cx.theme().muted.opacity(0.35))
                         .border_1()
@@ -54,7 +53,7 @@ pub fn render(row: &Row, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyEl
                         .on_click(cx.listener(move |this, _, _, cx| this.toggle(ix, cx)))
                         .child(
                             h_flex()
-                                .size(px(28.))
+                                .size(px(20.))
                                 .flex_shrink_0()
                                 .justify_center()
                                 .child(
@@ -63,7 +62,7 @@ pub fn render(row: &Row, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyEl
                                     } else {
                                         IconName::ChevronRight
                                     })
-                                    .size(px(18.))
+                                    .size(px(16.))
                                     .text_color(cx.theme().muted_foreground),
                                 ),
                         )
@@ -74,7 +73,8 @@ pub fn render(row: &Row, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyEl
                                 .gap_1()
                                 .child(
                                     div()
-                                        .text_size(px(16.))
+                                        .text_size(px(14.))
+                                        .line_height(px(20.))
                                         .font_semibold()
                                         .truncate()
                                         .child(group.name.clone()),
@@ -87,7 +87,7 @@ pub fn render(row: &Row, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyEl
                                         .child(
                                             div()
                                                 .flex_1()
-                                                .text_size(px(13.))
+                                                .text_size(px(12.))
                                                 .truncate()
                                                 .text_color(cx.theme().muted_foreground)
                                                 .child(
@@ -101,9 +101,10 @@ pub fn render(row: &Row, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyEl
                         )
                         .child(
                             Button::new(SharedString::from(format!("locate-{ix}")))
+                                .small()
                                 .debug_selector(move || format!("locate-{ix}"))
                                 .label(tr(page.lang, "proxies.locate"))
-                                .h(px(36.))
+                                .h(px(metrics::COMPACT_CONTROL))
                                 .ghost()
                                 .disabled(group.selected.is_none())
                                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -126,8 +127,8 @@ pub fn render(row: &Row, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyEl
             let mut row = h_flex()
                 .w_full()
                 .h(px(NODES_HEIGHT))
-                .pb_3()
-                .gap_3()
+                .pb(px(metrics::ITEM_GAP))
+                .gap(px(metrics::ITEM_GAP))
                 .items_stretch();
             for &member in members {
                 row = row.child(card(*group, member, page, cx));
@@ -204,9 +205,9 @@ fn card(group: usize, member: usize, page: &ProxyPage, cx: &mut Context<ProxyPag
         .flex_1()
         .min_w_0()
         .h_full()
-        .px_4()
-        .gap_3()
-        .rounded(px(12.))
+        .px(px(metrics::ITEM_INSET))
+        .gap(px(metrics::ITEM_GAP))
+        .rounded_lg()
         .border_1()
         .border_color(if selected {
             selection_color(cx)
@@ -237,7 +238,7 @@ fn card(group: usize, member: usize, page: &ProxyPage, cx: &mut Context<ProxyPag
         .child(
             h_flex()
                 .debug_selector(move || format!("proxy-marker-{group}-{member}"))
-                .size(px(24.))
+                .size(px(20.))
                 .flex_shrink_0()
                 .justify_center()
                 .rounded_full()
@@ -250,7 +251,7 @@ fn card(group: usize, member: usize, page: &ProxyPage, cx: &mut Context<ProxyPag
                 .when(selected, |this| {
                     this.bg(selection_color(cx)).child(
                         Icon::new(IconName::Check)
-                            .size(px(14.))
+                            .size(px(12.))
                             .text_color(cx.theme().tiles),
                     )
                 }),
@@ -259,14 +260,14 @@ fn card(group: usize, member: usize, page: &ProxyPage, cx: &mut Context<ProxyPag
             v_flex()
                 .flex_1()
                 .min_w_0()
-                .gap_2()
+                .gap_1()
                 .child(
                     div()
                         .debug_selector(move || format!("proxy-name-{group}-{member}"))
                         .flex_1()
                         .min_w_0()
-                        .text_size(px(15.))
-                        .line_height(px(22.))
+                        .text_size(px(14.))
+                        .line_height(px(20.))
                         .font_medium()
                         .truncate()
                         .child(proxy.clone()),
@@ -277,15 +278,15 @@ fn card(group: usize, member: usize, page: &ProxyPage, cx: &mut Context<ProxyPag
             Button::new(SharedString::from(format!("delay-{group}-{member}")))
                 .debug_selector(move || format!("delay-{group}-{member}"))
                 .accessibility_label(format!("{}: {}", proxy, delay_view.label))
-                .min_w(px(88.))
-                .h(px(36.))
+                .min_w(px(72.))
+                .h(px(metrics::COMPACT_CONTROL))
                 .flex_shrink_0()
                 .custom(delay_view.button_style(cx))
                 // Keep the foreground on the content as well: pointer/disabled styles
                 // must never replace the color of a newly received measurement.
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(px(12.))
                         .font_semibold()
                         .text_color(delay_view.color)
                         .child(delay_view.label),
@@ -402,7 +403,7 @@ mod tests {
             Button::new("delay-probe")
                 .debug_selector(|| "delay-probe".into())
                 .w(px(120.))
-                .h(px(36.))
+                .h(px(metrics::COMPACT_CONTROL))
                 .custom(presentation.button_style(cx))
                 .loading(self.pending)
                 .label(presentation.label)

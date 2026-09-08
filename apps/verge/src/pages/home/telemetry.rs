@@ -118,7 +118,7 @@ impl Render for Telemetry {
                     )
                     .child(
                         h_flex()
-                            .gap_8()
+                            .gap_6()
                             .child(
                                 v_flex()
                                     .gap_1()
@@ -128,7 +128,7 @@ impl Render for Telemetry {
                                             .text_color(cx.theme().muted_foreground)
                                             .child(tr(lang, "home.tile.download")),
                                     )
-                                    .child(div().text_3xl().child(down)),
+                                    .child(div().text_2xl().child(down)),
                             )
                             .child(
                                 v_flex()
@@ -141,7 +141,7 @@ impl Render for Telemetry {
                                     )
                                     .child(
                                         div()
-                                            .text_3xl()
+                                            .text_2xl()
                                             .text_color(cx.theme().muted_foreground)
                                             .child(up),
                                     ),

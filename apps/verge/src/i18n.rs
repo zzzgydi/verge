@@ -79,11 +79,6 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("network.controller.address", "监听地址", "Listen address"),
     ("network.controller.secret", "API 访问密钥", "API secret"),
     ("network.disabled", "已关闭", "Disabled"),
-    (
-        "home.subtitle",
-        "网络状态，尽在眼前。",
-        "Your network, at a glance.",
-    ),
     ("home.traffic", "实时流量", "Network activity"),
     ("home.samples", "最近 40 次采样", "LAST 40 SAMPLES"),
     (
@@ -102,10 +97,6 @@ const ENTRIES: &[(&str, &str, &str)] = &[
         "Import and activate a profile to get connected.",
     ),
     ("home.manage_profiles", "管理配置", "Manage profiles"),
-    ("home.quick_access", "工作区", "Workspace"),
-    ("home.proxy_hint", "查看节点与延迟", "Nodes & latency"),
-    ("home.rules_hint", "查看流量路由规则", "Routing & providers"),
-    ("home.logs_hint", "查看运行日志", "Events & diagnostics"),
     // ---- 通用 ----
     ("common.refresh", "刷新", "Refresh"),
     ("common.cancel", "取消", "Cancel"),
@@ -144,40 +135,10 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("nav.header", "导航", "Navigation"),
     ("nav.group.proxy", "代理", "Proxy"),
     ("nav.group.system", "系统", "System"),
-    (
-        "settings.subtitle",
-        "让 Verge 适合你的使用习惯。",
-        "Make Verge work the way you do.",
-    ),
-    (
-        "proxies.subtitle",
-        "选择流量模式与代理节点。",
-        "Choose how traffic is routed and where it connects.",
-    ),
-    (
-        "rules.subtitle",
-        "查看流量匹配规则与订阅资源。",
-        "Inspect routing rules and subscription resources.",
-    ),
-    (
-        "profiles.subtitle",
-        "管理订阅、本地配置与合并规则。",
-        "Manage subscriptions, local profiles and merge rules.",
-    ),
     ("rules.providers", "订阅资源", "Providers"),
     ("rules.column.type", "类型", "Type"),
     ("rules.column.match", "匹配内容", "Match"),
     ("rules.column.target", "目标策略", "Policy"),
-    (
-        "connections.subtitle",
-        "查看活跃连接与实时用量。",
-        "Monitor active connections and live usage.",
-    ),
-    (
-        "logs.subtitle",
-        "按级别查看内核运行记录。",
-        "Inspect core activity by log level.",
-    ),
     ("home.title", "概览", "Overview"),
     ("proxies.title", "代理", "Proxies"),
     ("rules.title", "规则", "Rules"),
@@ -901,9 +862,9 @@ pub fn fmt_statusbar_connections(lang: Lang, count: usize) -> String {
 /// 连接页汇总行。
 pub fn fmt_connections_summary(lang: Lang, count: usize, upload: &str, download: &str) -> String {
     match lang {
-        Lang::ZhCn => format!("{count} 条活跃连接 · 累计上传 {upload} · 累计下载 {download}"),
+        Lang::ZhCn => format!("{count} 条连接 · ↑ {upload} · ↓ {download}"),
         Lang::En => {
-            format!("{count} active connections · uploaded {upload} · downloaded {download}")
+            format!("{count} connections · ↑ {upload} · ↓ {download}")
         }
     }
 }
@@ -1025,7 +986,7 @@ mod tests {
         );
         assert_eq!(
             fmt_connections_summary(Lang::En, 3, "1.0 KB", "2.0 KB"),
-            "3 active connections · uploaded 1.0 KB · downloaded 2.0 KB"
+            "3 connections · ↑ 1.0 KB · ↓ 2.0 KB"
         );
         assert_eq!(
             fmt_toast_error(Lang::En, "boom", Some("try again")),

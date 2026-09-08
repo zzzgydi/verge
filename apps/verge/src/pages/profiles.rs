@@ -1,6 +1,6 @@
 mod actions;
 mod sheets;
-use super::components::{page_heading, panel};
+use super::components::{PageHeader, panel};
 use crate::{
     domain::{Profile, ProfileSource, UpdatePolicy},
     format,
@@ -55,6 +55,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 Button::new("empty-import")
                     .label(tr(lang, "profiles.import"))
                     .small()
+                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                     .primary()
                     .on_click(
                         cx.listener(|this, _, window, cx| this.open_import_dialog(window, cx)),
@@ -81,6 +82,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 Button::new(format!("load-profile-{}", id.as_str()))
                     .label(tr(lang, "profiles.view_yaml"))
                     .small()
+                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                     .ghost()
                     .loading(view.is_pending(&["profile_yaml"]))
                     .on_click(cx.listener({
@@ -93,6 +95,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                     Button::new(format!("update-profile-{}", id.as_str()))
                         .label(tr(lang, "common.update_now"))
                         .small()
+                        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                         .ghost()
                         .on_click(cx.listener({
                             let id = id.clone();
@@ -113,6 +116,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                         },
                     ))
                     .small()
+                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                     .primary()
                     .disabled(selected)
                     .loading(view.is_pending(&["profile_write"]))
@@ -125,6 +129,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 Button::new(format!("profile-more-{}", id.as_str()))
                     .icon(IconName::Ellipsis)
                     .small()
+                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                     .ghost()
                     .tooltip(tr(lang, "common.more"))
                     .dropdown_menu({
@@ -189,16 +194,16 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 .overflow_hidden()
                 .when(selected, |card| {
                     card.border_color(cx.theme().list_active_border)
-                        .bg(cx.theme().list_active.opacity(0.35))
+                        .bg(cx.theme().list_active)
                 })
                 .child(
                     h_flex()
-                        .px_5()
-                        .py_5()
+                        .px_3()
+                        .py_3()
                         .gap_4()
                         .child(
                             div()
-                                .size_10()
+                                .size_8()
                                 .flex_shrink_0()
                                 .rounded_lg()
                                 .bg(cx.theme().accent)
@@ -221,7 +226,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 .gap_1()
                                 .child(
                                     div()
-                                        .text_lg()
+                                        .text_base()
                                         .font_medium()
                                         .truncate()
                                         .child(profile.name.clone()),
@@ -245,8 +250,8 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 )
                 .child(
                     h_flex()
-                        .px_5()
-                        .py_3()
+                        .px_3()
+                        .py_2()
                         .gap_3()
                         .flex_wrap()
                         .border_t_1()
@@ -264,50 +269,48 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         );
     }
     v_flex()
-        .gap_6()
+        .gap_4()
         .child(
-            h_flex()
-                .justify_between()
-                .child(page_heading(
-                    tr(lang, "profiles.title"),
-                    tr(lang, "profiles.subtitle"),
-                    cx,
-                ))
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(
-                            Button::new("refresh-profiles")
-                                .icon(IconName::Redo)
-                                .tooltip(tr(lang, "common.refresh"))
-                                .small()
-                                .ghost()
-                                .loading(refreshing)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.dispatch(UiAction::RefreshProfiles, cx)
-                                })),
-                        )
-                        .child(
-                            Button::new("open-merge-sheet")
-                                .label(tr(lang, "profiles.merge_config"))
-                                .small()
-                                .outline()
-                                .loading(view.is_pending(&["merge_config"]))
-                                .on_click(cx.listener(|this, _, window, cx| {
+            PageHeader::new(tr(lang, "profiles.title")).child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Button::new("refresh-profiles")
+                            .icon(IconName::Redo)
+                            .tooltip(tr(lang, "common.refresh"))
+                            .small()
+                            .h(px(crate::appearance::metrics::COMPACT_CONTROL))
+                            .ghost()
+                            .loading(refreshing)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.dispatch(UiAction::RefreshProfiles, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("open-merge-sheet")
+                            .label(tr(lang, "profiles.merge_config"))
+                            .small()
+                            .h(px(crate::appearance::metrics::COMPACT_CONTROL))
+                            .outline()
+                            .loading(view.is_pending(&["merge_config"]))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| {
                                     this.open_merge_sheet(window, cx)
-                                })),
-                        )
-                        .child(
-                            Button::new("open-import-dialog")
-                                .label(tr(lang, "profiles.import"))
-                                .icon(IconName::Plus)
-                                .small()
-                                .primary()
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.open_import_dialog(window, cx)
-                                })),
-                        ),
-                ),
+                                }),
+                            ),
+                    )
+                    .child(
+                        Button::new("open-import-dialog")
+                            .label(tr(lang, "profiles.import"))
+                            .icon(IconName::Plus)
+                            .small()
+                            .h(px(crate::appearance::metrics::COMPACT_CONTROL))
+                            .primary()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_import_dialog(window, cx)
+                            })),
+                    ),
+            ),
         )
         .child(list)
         .into_any_element()

@@ -17,11 +17,6 @@ use gpui_component::{
 
 use crate::view::MainView;
 
-/// 统一页标题。
-pub fn page_title(title: &'static str) -> Div {
-    div().text_xl().font_semibold().child(title)
-}
-
 /// 次要说明文字样式。
 pub fn muted(text: impl Into<SharedString>, cx: &Context<MainView>) -> Div {
     div()

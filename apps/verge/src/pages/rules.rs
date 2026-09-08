@@ -1,4 +1,4 @@
-use super::components::page_heading;
+use super::components::PageHeader;
 use crate::{domain::ProviderKind, i18n::tr, ui::UiAction, view::MainView};
 use gpui::*;
 use gpui_component::{
@@ -7,7 +7,7 @@ use gpui_component::{
 };
 use std::rc::Rc;
 
-const ROW_HEIGHT: f32 = 40.;
+const ROW_HEIGHT: f32 = 36.;
 #[derive(Clone, Copy)]
 enum RuleRow {
     Providers,
@@ -19,8 +19,8 @@ enum RuleRow {
 impl RuleRow {
     fn height(self) -> Pixels {
         px(match self {
-            Self::Providers | Self::Rules => 52.,
-            Self::Provider(_) => 64.,
+            Self::Providers | Self::Rules => 40.,
+            Self::Provider(_) => 56.,
             _ => ROW_HEIGHT,
         })
     }
@@ -33,12 +33,8 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         return v_flex()
             .flex_1()
             .min_h_0()
-            .gap_6()
-            .child(page_heading(
-                tr(lang, "rules.title"),
-                tr(lang, "rules.subtitle"),
-                cx,
-            ))
+            .gap_4()
+            .child(PageHeader::new(tr(lang, "rules.title")))
             .child(if refreshing {
                 super::skeleton_rows(5).into_any_element()
             } else {
@@ -51,6 +47,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                     Button::new("empty-refresh-rules")
                         .label(tr(lang, "common.refresh"))
                         .small()
+                        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                         .outline()
                         .on_click(
                             cx.listener(|this, _, _, cx| this.dispatch(UiAction::RefreshRules, cx)),
@@ -139,6 +136,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                     Button::new(format!("update-provider-{kind:?}-{name}"))
                                         .label(tr(lang, "rules.update"))
                                         .small()
+                                        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                                         .outline()
                                         .loading(this.is_pending(&["provider_write"]))
                                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -209,24 +207,18 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         .min_h_0()
         .gap_4()
         .child(
-            h_flex()
-                .flex_shrink_0()
-                .justify_between()
-                .child(page_heading(
-                    tr(lang, "rules.title"),
-                    tr(lang, "rules.subtitle"),
-                    cx,
-                ))
-                .child(
-                    Button::new("refresh-rules")
-                        .label(tr(lang, "common.refresh"))
-                        .small()
-                        .outline()
-                        .loading(refreshing)
-                        .on_click(
-                            cx.listener(|this, _, _, cx| this.dispatch(UiAction::RefreshRules, cx)),
-                        ),
-                ),
+            PageHeader::new(tr(lang, "rules.title")).child(
+                Button::new("refresh-rules")
+                    .debug_selector(|| "refresh-rules".into())
+                    .label(tr(lang, "common.refresh"))
+                    .small()
+                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
+                    .outline()
+                    .loading(refreshing)
+                    .on_click(
+                        cx.listener(|this, _, _, cx| this.dispatch(UiAction::RefreshRules, cx)),
+                    ),
+            ),
         )
         .child(
             div()

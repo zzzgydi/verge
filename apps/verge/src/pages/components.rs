@@ -1,6 +1,7 @@
 //! Value-like visual components; retained behavior belongs to feature entities.
+use crate::appearance::metrics;
 use gpui::*;
-use gpui_component::{ActiveTheme as _, Icon, IconName, StyledExt as _, v_flex};
+use gpui_component::{ActiveTheme as _, Icon, IconName, StyledExt as _, h_flex, v_flex};
 
 #[derive(IntoElement)]
 pub struct Metric {
@@ -43,29 +44,56 @@ impl RenderOnce for Metric {
 
 pub fn panel(cx: &App) -> Div {
     v_flex()
-        .p_5()
-        .gap_4()
+        .p(px(metrics::PANEL_INSET))
+        .gap(px(metrics::SECTION_GAP))
         .bg(cx.theme().tiles)
         .border_1()
         .border_color(cx.theme().border)
-        .rounded(px(14.))
+        .rounded(px(metrics::PANEL_RADIUS))
 }
 
-pub fn page_heading(
-    title: impl Into<SharedString>,
-    subtitle: impl Into<SharedString>,
-    cx: &App,
-) -> Div {
-    v_flex()
-        .gap_2()
-        .flex_shrink_0()
-        .child(div().text_size(px(28.)).font_semibold().child(title.into()))
-        .child(
-            div()
-                .text_size(px(14.))
-                .text_color(cx.theme().muted_foreground)
-                .child(subtitle.into()),
-        )
+/// Single-line title with optional trailing actions. No reserved subtitle space.
+#[derive(IntoElement)]
+pub struct PageHeader {
+    title: SharedString,
+    actions: Vec<AnyElement>,
+}
+
+impl PageHeader {
+    pub fn new(title: impl Into<SharedString>) -> Self {
+        Self {
+            title: title.into(),
+            actions: Vec::new(),
+        }
+    }
+}
+
+impl ParentElement for PageHeader {
+    fn extend(&mut self, children: impl IntoIterator<Item = AnyElement>) {
+        self.actions.extend(children);
+    }
+}
+
+impl RenderOnce for PageHeader {
+    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        h_flex()
+            .debug_selector(|| "page-header".into())
+            .w_full()
+            .h(px(metrics::CONTROL))
+            .flex_shrink_0()
+            .gap_4()
+            .justify_between()
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(metrics::PAGE_TITLE))
+                    .line_height(px(metrics::CONTROL))
+                    .font_semibold()
+                    .child(self.title),
+            )
+            .child(h_flex().flex_shrink_0().gap_2().children(self.actions))
+    }
 }
 
 pub fn mode_selector(
@@ -74,17 +102,19 @@ pub fn mode_selector(
 ) -> impl IntoElement {
     use crate::{domain::RunMode, ui::UiAction};
     use gpui_component::{
-        Disableable as _, Selectable as _,
+        Disableable as _, Selectable as _, Sizable as _,
         button::{Button, ButtonGroup},
     };
     const MODES: [RunMode; 3] = [RunMode::Rule, RunMode::Global, RunMode::Direct];
     ButtonGroup::new("mode-group")
+        .small()
         .outline()
         .children(MODES.map(|mode| {
             Button::new(format!("mode-{mode:?}"))
                 .debug_selector(move || format!("mode-{mode:?}"))
                 .label(super::home::mode_label(view.lang(), mode))
                 .min_w(px(64.))
+                .h(px(metrics::CONTROL))
                 .disabled(view.state.mode.is_none() || view.is_pending(&["mode"]))
                 .selected(view.state.mode == Some(mode))
         }))

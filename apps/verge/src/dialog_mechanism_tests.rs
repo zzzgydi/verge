@@ -226,6 +226,11 @@ fn all_pages_render_at_minimum_window_size(cx: &mut TestAppContext) {
     ] {
         cx.update(|_, cx| view.update(cx, |view, cx| view.navigate(page, cx)));
         cx.run_until_parked();
+        let header = cx
+            .debug_bounds("page-header")
+            .expect("every page has one shared header");
+        assert_eq!(header.size.height, gpui::px(32.), "{page:?}");
+        assert!(header.right() <= gpui::px(960.), "{page:?}");
     }
 }
 
@@ -241,6 +246,7 @@ fn connection_close_button_dispatches_immediately(cx: &mut TestAppContext) {
         *copy.borrow_mut() = Some(view.clone());
         Root::new(view, window, cx)
     });
+    cx.simulate_resize(gpui::size(gpui::px(960.), gpui::px(640.)));
     let view = holder.borrow().clone().unwrap();
     cx.update(|_, cx| {
         view.update(cx, |view, cx| {
@@ -262,6 +268,10 @@ fn connection_close_button_dispatches_immediately(cx: &mut TestAppContext) {
     let bounds = cx
         .debug_bounds("close-connection-0")
         .expect("close button must be visible");
+    assert!(
+        bounds.right() <= gpui::px(936.),
+        "close action must fit at minimum width"
+    );
     cx.simulate_click(bounds.center(), gpui::Modifiers::default());
     assert!(matches!(rx.try_recv().unwrap().request,
         crate::ui::UiRequest::Runtime(RuntimeCommand::CloseConnection { id }) if id == "close-now"));
@@ -338,6 +348,12 @@ fn populated_proxy_and_rule_lists_scroll_inside_viewport(cx: &mut TestAppContext
         cx.update(|_, cx| view.update(cx, |view, cx| view.navigate(page, cx)));
         cx.run_until_parked();
         let bounds = cx.debug_bounds(id).expect("list must have bounds");
+        if page == Page::Rules {
+            let header = cx.debug_bounds("page-header").unwrap();
+            let refresh = cx.debug_bounds("refresh-rules").unwrap();
+            assert!(refresh.right() <= header.right());
+            assert!(refresh.bottom() <= header.bottom());
+        }
         assert!(
             bounds.size.height > gpui::px(100.) && bounds.size.height < gpui::px(550.),
             "{id}: {bounds:?}"

@@ -578,7 +578,7 @@ impl Render for MainView {
                 .flex_1()
                 .min_h_0()
                 .overflow_hidden()
-                .p_6()
+                .p(px(crate::appearance::metrics::PAGE_INSET))
                 .child(content)
                 .into_any_element()
         } else {
@@ -587,7 +587,7 @@ impl Render for MainView {
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scrollbar()
-                .p_6()
+                .p(px(crate::appearance::metrics::PAGE_INSET))
                 .child(content)
                 .into_any_element()
         };
@@ -615,6 +615,7 @@ impl Render for MainView {
             .on_action(cx.listener(|this, _: &RefreshPage, _, cx| this.refresh_current_page(cx)))
             .size_full()
             .bg(cx.theme().background)
+            .text_size(px(crate::appearance::metrics::BODY))
             .text_color(cx.theme().foreground)
             .child(self.title_bar(cx))
             .child(

@@ -121,6 +121,7 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
                             .icon(IconName::Settings)
                             .ghost()
                             .small()
+                            .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                             .disabled(busy)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.open_core_network_dialog(true, window, cx)
@@ -148,6 +149,8 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
         field().label(tr(lang, "network.log")).child(
             h_flex().justify_end().child(
                 Button::new("core-log-level")
+                    .small()
+                    .h(px(crate::appearance::metrics::CONTROL))
                     .label(settings.log_level)
                     .icon(IconName::ChevronDown)
                     .outline()
@@ -186,6 +189,8 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
                     .child(Input::new(&view.network_form.port).disabled(busy))
                     .child(
                         Button::new("save-core-port")
+                            .small()
+                            .h(px(crate::appearance::metrics::CONTROL))
                             .label(tr(lang, "common.save"))
                             .outline()
                             .disabled(busy)
@@ -229,6 +234,8 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
             .child(
                 h_flex().justify_end().child(
                     Button::new("external-controller-options")
+                        .small()
+                        .h(px(crate::appearance::metrics::CONTROL))
                         .label(if controller.enabled {
                             controller.address
                         } else {

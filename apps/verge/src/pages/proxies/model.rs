@@ -1,8 +1,10 @@
 use crate::domain::{ProxySnapshot, RunMode};
 use std::collections::HashSet;
 
-pub const GROUP_HEIGHT: f32 = 92.;
-pub const NODES_HEIGHT: f32 = 112.;
+use crate::appearance::metrics;
+
+pub const GROUP_HEIGHT: f32 = metrics::PROXY_ITEM + metrics::ITEM_GAP;
+pub const NODES_HEIGHT: f32 = metrics::PROXY_ITEM + metrics::ITEM_GAP;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Row {

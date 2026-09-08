@@ -3,7 +3,7 @@ mod rows;
 #[cfg(test)]
 mod tests;
 
-use super::components::{mode_selector, page_heading};
+use super::components::{PageHeader, mode_selector};
 use crate::{
     domain::{AppError, ProfileId, ProxySnapshot, RunMode},
     i18n::{Lang, tr},
@@ -12,7 +12,7 @@ use crate::{
 };
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
-    IconName, VirtualListScrollHandle,
+    IconName, Sizable as _, VirtualListScrollHandle,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, InputEvent, InputState},
@@ -208,9 +208,10 @@ impl Render for ProxyPage {
             .when(!global && !direct, |this| {
                 this.child(
                     Button::new("collapse-proxies")
+                        .small()
                         .debug_selector(|| "collapse-proxies".into())
                         .label(tr(self.lang, "proxies.collapse_all"))
-                        .h(px(36.))
+                        .h(px(crate::appearance::metrics::CONTROL))
                         .ghost()
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.expanded.clear();
@@ -226,8 +227,9 @@ impl Render for ProxyPage {
             .when_some(global_index.filter(|_| global), |this, ix| {
                 this.child(
                     Button::new("locate-global")
+                        .small()
                         .label(tr(self.lang, "proxies.locate"))
-                        .h(px(36.))
+                        .h(px(crate::appearance::metrics::CONTROL))
                         .outline()
                         .on_click(
                             cx.listener(move |this, _, window, cx| this.locate(ix, window, cx)),
@@ -287,27 +289,21 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
     v_flex()
         .flex_1()
         .min_h_0()
-        .gap_5()
+        .gap_4()
         .child(
-            h_flex()
-                .justify_between()
-                .flex_shrink_0()
-                .child(page_heading(
-                    tr(lang, "proxies.title"),
-                    tr(lang, "proxies.subtitle"),
-                    cx,
-                ))
-                .child(
-                    h_flex().gap_3().child(mode_selector(view, cx)).child(
-                        Button::new("refresh-proxies")
-                            .label(tr(lang, "common.refresh"))
-                            .ghost()
-                            .loading(view.is_pending(&["proxy_groups"]))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.dispatch(UiAction::RefreshProxies, cx)
-                            })),
-                    ),
+            PageHeader::new(tr(lang, "proxies.title")).child(
+                h_flex().gap_3().child(mode_selector(view, cx)).child(
+                    Button::new("refresh-proxies")
+                        .small()
+                        .h(px(crate::appearance::metrics::CONTROL))
+                        .label(tr(lang, "common.refresh"))
+                        .ghost()
+                        .loading(view.is_pending(&["proxy_groups"]))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.dispatch(UiAction::RefreshProxies, cx)
+                        })),
                 ),
+            ),
         )
         .child(view.proxy_page.clone())
         .into_any_element()

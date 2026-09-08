@@ -1,6 +1,6 @@
 pub mod telemetry;
 
-use super::components::panel;
+use super::components::{PageHeader, panel};
 use crate::domain::RunMode;
 use crate::ui::{CoreStatus, Page, UiAction};
 use crate::{
@@ -52,7 +52,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         .justify_between()
         .child(
             v_flex()
-                .gap_5()
+                .gap_4()
                 .child(
                     h_flex()
                         .justify_between()
@@ -84,13 +84,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 .text_color(cx.theme().muted_foreground)
                                 .child(tr(lang, "home.active_profile")),
                         )
-                        .child(
-                            div()
-                                .text_2xl()
-                                .font_medium()
-                                .truncate()
-                                .child(profile_name),
-                        )
+                        .child(div().text_xl().font_medium().truncate().child(profile_name))
                         .when(profile.is_none(), |this| {
                             this.child(
                                 div()
@@ -104,7 +98,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         .child(
             v_flex()
                 .gap_4()
-                .mt_6()
+                .mt_4()
                 .child(
                     h_flex()
                         .justify_between()
@@ -142,6 +136,8 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 )
                 .child(
                     Button::new("manage-profiles")
+                        .small()
+                        .h(px(crate::appearance::metrics::CONTROL))
                         .primary()
                         .w_full()
                         .label(tr(lang, "home.manage_profiles"))
@@ -150,92 +146,36 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         );
 
     let quick_links = [
-        (
-            Page::Proxies,
-            IconName::Globe,
-            "proxies.title",
-            "home.proxy_hint",
-        ),
-        (
-            Page::Rules,
-            IconName::BookOpen,
-            "rules.title",
-            "home.rules_hint",
-        ),
-        (
-            Page::Logs,
-            IconName::SquareTerminal,
-            "logs.title",
-            "home.logs_hint",
-        ),
+        (Page::Proxies, IconName::Globe, "proxies.title"),
+        (Page::Rules, IconName::BookOpen, "rules.title"),
+        (Page::Logs, IconName::SquareTerminal, "logs.title"),
     ]
-    .map(|(page, icon, title, hint)| {
-        h_flex()
+    .map(|(page, icon, title)| {
+        Button::new(format!("open-{page:?}"))
+            .small()
+            .outline()
             .flex_1()
-            .min_w_0()
-            .gap_3()
-            .items_center()
-            .child(
-                div()
-                    .size_10()
-                    .rounded_lg()
-                    .bg(cx.theme().accent)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(Icon::new(icon).size_4()),
-            )
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_1()
-                    .child(div().text_sm().child(tr(lang, title)))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(tr(lang, hint)),
-                    ),
-            )
-            .child(
-                Button::new(format!("open-{page:?}"))
-                    .ghost()
-                    .small()
-                    .icon(IconName::ArrowRight)
-                    .tooltip(tr(lang, title))
-                    .on_click(cx.listener(move |this, _, _, cx| this.navigate(page, cx))),
-            )
+            .h(px(40.))
+            .icon(Icon::new(icon).size_4())
+            .label(tr(lang, title))
+            .on_click(cx.listener(move |this, _, _, cx| this.navigate(page, cx)))
     });
 
     v_flex()
-        .gap_6()
+        .gap_4()
         .child(
-            h_flex()
-                .justify_between()
-                .items_center()
-                .child(
-                    v_flex()
-                        .gap_2()
-                        .child(div().text_2xl().font_medium().child(tr(lang, "home.title")))
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(tr(lang, "home.subtitle")),
-                        ),
-                )
-                .child(
-                    Button::new("refresh-home")
-                        .outline()
-                        .small()
-                        .icon(IconName::Redo)
-                        .label(tr(lang, "common.refresh"))
-                        .loading(view.is_pending(&["runtime_settings", "mode", "system_proxy"]))
-                        .on_click(
-                            cx.listener(|this, _, _, cx| this.dispatch(UiAction::RefreshHome, cx)),
-                        ),
-                ),
+            PageHeader::new(tr(lang, "home.title")).child(
+                Button::new("refresh-home")
+                    .outline()
+                    .small()
+                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
+                    .icon(IconName::Redo)
+                    .label(tr(lang, "common.refresh"))
+                    .loading(view.is_pending(&["runtime_settings", "mode", "system_proxy"]))
+                    .on_click(
+                        cx.listener(|this, _, _, cx| this.dispatch(UiAction::RefreshHome, cx)),
+                    ),
+            ),
         )
         .child(
             h_flex()
@@ -244,15 +184,6 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 .child(connection)
                 .child(div().flex_1().min_w_0().child(view.telemetry.clone())),
         )
-        .child(
-            panel(cx)
-                .child(
-                    div()
-                        .text_sm()
-                        .font_medium()
-                        .child(tr(lang, "home.quick_access")),
-                )
-                .child(h_flex().gap_5().children(quick_links)),
-        )
+        .child(h_flex().gap_3().children(quick_links))
         .into_any_element()
 }

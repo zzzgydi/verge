@@ -6,7 +6,6 @@ use gpui::*;
 use gpui_component::{
     ActiveTheme as _, Sizable as _,
     button::{Button, ButtonVariants as _},
-    h_flex,
     menu::{PopupMenu, PopupMenuItem},
     table::{Column, DataTable, TableDelegate, TableState},
     tooltip::Tooltip,
@@ -19,7 +18,7 @@ use crate::{
     view::MainView,
 };
 
-use super::components::page_heading;
+use super::components::PageHeader;
 use super::muted;
 
 /// 列名对应的 i18n key（与 columns 的声明顺序一致）。
@@ -47,19 +46,19 @@ impl ConnectionsDelegate {
         let language = Lang::En;
         Self {
             snapshot: None,
-            // 7 列总宽控制在内容区（约 850px）内，避免横向挤压。
+            // Keep all seven columns, including close actions, visible at 960px window width.
             columns: vec![
-                Column::new("process", tr(language, COLUMN_KEYS[0])).width(110.),
-                Column::new("target", tr(language, COLUMN_KEYS[1])).width(170.),
-                Column::new("rule", tr(language, COLUMN_KEYS[2])).width(130.),
-                Column::new("chains", tr(language, COLUMN_KEYS[3])).width(140.),
+                Column::new("process", tr(language, COLUMN_KEYS[0])).width(80.),
+                Column::new("target", tr(language, COLUMN_KEYS[1])).width(160.),
+                Column::new("rule", tr(language, COLUMN_KEYS[2])).width(100.),
+                Column::new("chains", tr(language, COLUMN_KEYS[3])).width(100.),
                 Column::new("upload", tr(language, COLUMN_KEYS[4]))
                     .width(80.)
                     .text_right(),
                 Column::new("download", tr(language, COLUMN_KEYS[5]))
                     .width(80.)
                     .text_right(),
-                Column::new("actions", tr(language, COLUMN_KEYS[6])).width(60.),
+                Column::new("actions", tr(language, COLUMN_KEYS[6])).width(48.),
             ],
             actions,
             language,
@@ -223,18 +222,8 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
     v_flex()
         .flex_1()
         .min_h_0()
-        .gap_5()
-        .child(
-            h_flex()
-                .justify_between()
-                .flex_shrink_0()
-                .child(page_heading(
-                    tr(lang, "connections.title"),
-                    tr(lang, "connections.subtitle"),
-                    cx,
-                ))
-                .child(muted(summary, cx)),
-        )
+        .gap_4()
+        .child(PageHeader::new(tr(lang, "connections.title")).child(muted(summary, cx)))
         .child(
             div().flex_1().min_h_0().child(
                 DataTable::new(&view.connections_table)

@@ -8,7 +8,10 @@ The crate keeps UI state, typed protocol messages, daemon orchestration, configu
 and platform integration in separate Rust modules. Views emit typed requests and do not call
 Mihomo or macOS APIs directly.
 
-The GUI provides Home, Proxies, Profiles, Connections, Logs, and Settings pages. The daemon mode
+UI changes follow the shared [UI guidelines](../../docs/ui-guidelines.md), with dimensions
+in `src/appearance/metrics.rs` and common page headers and panels in `src/pages/components.rs`.
+
+The GUI provides Home, Proxies, Rules, Profiles, Connections, Logs, and Settings pages. The daemon mode
 owns the native tray, Mihomo lifecycle, persistence, and long-lived system state.
 
 ```bash

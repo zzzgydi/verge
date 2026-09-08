@@ -32,8 +32,8 @@ impl RenderOnce for SettingRow {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         h_flex()
             .w_full()
-            .gap_6()
-            .py_4()
+            .gap_4()
+            .py_3()
             .items_center()
             .border_b_1()
             .border_color(cx.theme().border.opacity(0.5))
@@ -42,10 +42,17 @@ impl RenderOnce for SettingRow {
                     .flex_1()
                     .min_w_0()
                     .gap_1()
-                    .child(div().text_sm().font_medium().child(self.label))
+                    .child(
+                        div()
+                            .text_sm()
+                            .line_height(px(20.))
+                            .font_medium()
+                            .child(self.label),
+                    )
                     .children(self.description.map(|text| {
                         div()
                             .text_xs()
+                            .line_height(px(16.))
                             .text_color(cx.theme().muted_foreground)
                             .child(text)
                     })),
@@ -87,9 +94,16 @@ impl RenderOnce for SettingsSection {
         super::super::components::panel(cx)
             .id(self.id.unwrap_or("settings-section".into()))
             .gap_1()
-            .px_5()
-            .py_3()
-            .child(div().py_2().text_lg().font_medium().child(self.title))
+            .px_4()
+            .py_2()
+            .child(
+                div()
+                    .py_2()
+                    .text_base()
+                    .line_height(px(24.))
+                    .font_medium()
+                    .child(self.title),
+            )
             .children(self.children)
     }
 }

@@ -19,7 +19,7 @@ use crate::{
     view::MainView,
 };
 
-use super::{muted, page_title};
+use super::{components::PageHeader, muted};
 
 fn helper_label(lang: Lang, view: &MainView) -> String {
     match &view.state.helper_status {
@@ -47,7 +47,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
     let Some(snapshot) = view.state.application_settings.clone() else {
         return v_flex()
             .gap_4()
-            .child(page_title(tr(lang, "settings.title")))
+            .child(PageHeader::new(tr(lang, "settings.title")))
             .child(super::skeleton_rows(4))
             .into_any_element();
     };
@@ -84,6 +84,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 Button::new(format!("theme-{theme:?}"))
                                     .label(label)
                                     .small()
+                                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                                     .outline()
                                     .selected(settings.theme == theme)
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -106,6 +107,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 Button::new(format!("language-{language}"))
                                     .label(label)
                                     .small()
+                                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                                     .outline()
                                     .selected(settings.language == language)
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -152,6 +154,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                     Button::new("save-global-hotkey")
                                         .label(tr(lang, "common.save"))
                                         .small()
+                                        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                                         .outline()
                                         .loading(view.is_pending(&["application_settings_write"]))
                                         .on_click(cx.listener(|this, _, _, cx| {
@@ -192,6 +195,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                     Button::new(format!("reset-scope-{scope:?}"))
                                         .label(label)
                                         .small()
+                                        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                                         .outline()
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             this.confirm_reset_scope(scope, window, cx);
@@ -297,6 +301,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                     Button::new("apply-pac")
                                         .label(tr(lang, "common.enable"))
                                         .small()
+                                        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                                         .outline()
                                         .loading(view.is_pending(&["system_proxy"]))
                                         .on_click(cx.listener(|this, _, _, cx| {
@@ -317,6 +322,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                             Button::new("disable-pac")
                                                 .label(tr(lang, "common.disable"))
                                                 .small()
+                                                .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                                                 .outline()
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.dispatch(
@@ -345,6 +351,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                     Button::new("save-bypass")
                                         .label(tr(lang, "common.save"))
                                         .small()
+                                        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                                         .outline()
                                         .loading(view.is_pending(&["system_proxy"]))
                                         .on_click(cx.listener(|this, _, _, cx| {
@@ -381,6 +388,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 Button::new("update-mihomo")
                                     .label(tr(lang, "common.update_now"))
                                     .small()
+                                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                                     .outline()
                                     .loading(view.is_pending(&["application_settings_write"]))
                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -423,6 +431,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 Button::new("check-app-update")
                                     .label(tr(lang, "settings.app.check"))
                                     .small()
+                                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                                     .outline()
                                     .loading(view.is_pending(&["app_update"]))
                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -449,6 +458,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                     Button::new("update-application")
                                         .label(tr(lang, "settings.app.update.download"))
                                         .small()
+                                        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                                         .outline()
                                         .loading(view.is_pending(&["app_update_write"]))
                                         .on_click(cx.listener(|this, _, window, cx| {
@@ -471,6 +481,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                         Button::new("restart-application")
                                             .label(tr(lang, "settings.app.restart"))
                                             .small()
+                                            .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                                             .primary()
                                             .loading(view.is_pending(&["app_update_write"]))
                                             .on_click(cx.listener(|this, _, window, cx| {
@@ -504,6 +515,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                     Button::new("install-helper")
                                         .label(tr(lang, "settings.system.helper.install"))
                                         .small()
+                                        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                                         .outline()
                                         .loading(view.is_pending(&["helper_write"]))
                                         .on_click(cx.listener(|this, _, _, cx| {
@@ -516,6 +528,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                     Button::new("uninstall-helper")
                                         .label(tr(lang, "settings.system.helper.uninstall"))
                                         .small()
+                                        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                                         .outline()
                                         .danger()
                                         .loading(view.is_pending(&["helper_write"]))
@@ -534,6 +547,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 Button::new("export-diagnostics")
                                     .label(tr(lang, "settings.system.diagnostics.export"))
                                     .small()
+                                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                                     .outline()
                                     .loading(view.is_pending(&["application_settings_write"]))
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -556,6 +570,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 Button::new("export-application-settings")
                                     .label(tr(lang, "settings.system.settings_export.button"))
                                     .small()
+                                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                                     .outline()
                                     .loading(view.is_pending(&["application_settings_write"]))
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -581,6 +596,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                     Button::new("preview-settings-import")
                                         .label(tr(lang, "settings.system.settings_import.button"))
                                         .small()
+                                        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                                         .outline()
                                         .loading(view.is_pending(&["settings_import_preview"]))
                                         .on_click(cx.listener(|this, _, _, cx| {
@@ -610,6 +626,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 Button::new("export-encrypted-backup")
                                     .label(tr(lang, "settings.backup.export"))
                                     .small()
+                                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                                     .outline()
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         let passphrase =
@@ -627,6 +644,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 Button::new("restore-encrypted-backup")
                                     .label(tr(lang, "settings.backup.restore"))
                                     .small()
+                                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                                     .outline()
                                     .danger()
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -664,7 +682,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
     ];
     let tabs = h_flex()
         .gap_2()
-        .pb_4()
+        .pb_2()
         .border_b_1()
         .border_color(cx.theme().border)
         .children(categories.map(|(category, label, icon)| {
@@ -672,6 +690,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 .label(tr(lang, label))
                 .icon(Icon::new(icon).size_4())
                 .small()
+                .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                 .ghost()
                 .selected(view.settings_category == category)
                 .when(view.settings_category == category, |button| {
@@ -692,12 +711,11 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         SettingsCategory::System => v_flex().gap_4().child(system_group).child(backup_group),
     };
     v_flex()
-        .gap_5()
-        .child(super::components::page_heading(
-            tr(lang, "settings.title"),
-            tr(lang, "settings.subtitle"),
-            cx,
-        ))
+        .gap_4()
+        .child(super::components::PageHeader::new(tr(
+            lang,
+            "settings.title",
+        )))
         .child(tabs)
         .child(content)
         .into_any_element()
