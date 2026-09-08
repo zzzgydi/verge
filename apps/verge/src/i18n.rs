@@ -256,6 +256,7 @@ const ENTRIES: &[(&str, &str, &str)] = &[
         "Clear the filter, or activate a profile and refresh.",
     ),
     ("proxies.test_delay", "测速", "Test"),
+    ("proxies.testing", "测速中…", "Testing…"),
     ("proxies.empty.title", "暂无代理组", "No Proxy Groups"),
     (
         "proxies.empty.desc",
@@ -733,8 +734,24 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ),
     (
         "hint.core_unavailable",
-        "请先在“设置”页安装或更新 Mihomo 内核",
-        "Install or update the Mihomo core on the Settings page first",
+        "无法连接 Mihomo，请检查内核运行状态和日志",
+        "Cannot connect to Mihomo; check the core status and logs",
+    ),
+    (
+        "hint.request_timeout",
+        "请求超时，请稍后重试",
+        "Request timed out; try again shortly",
+    ),
+    (
+        "hint.proxy_delay_failed",
+        "检查节点或测速地址后重试",
+        "Check the proxy or test URL and try again",
+    ),
+    ("proxies.delay_failed", "失败", "Failed"),
+    (
+        "proxies.delay_retry",
+        "点击重试测速",
+        "Click to retry delay test",
     ),
     (
         "hint.core_rejected",

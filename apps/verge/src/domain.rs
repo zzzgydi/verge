@@ -611,10 +611,15 @@ pub struct ProxySnapshot {
 pub struct ProxyDetails {
     pub kind: String,
     pub udp: Option<bool>,
+    #[serde(default)]
     pub xudp: bool,
+    #[serde(default)]
     pub tfo: bool,
+    #[serde(default)]
     pub mptcp: bool,
+    #[serde(default)]
     pub smux: bool,
+    #[serde(default)]
     pub hidden: bool,
     pub selected: Option<String>,
     pub delay: Option<u32>,
@@ -930,7 +935,13 @@ pub enum ErrorCode {
     StorageFailed,
     PlatformFailed,
     CoreUnavailable,
+    RequestTimeout,
+    ProxyDelayFailed,
     CoreRejectedConfig,
+    /// A newer peer may introduce codes without breaking the enclosing error response.
+    /// Keep its message, but do not infer core health or recovery actions from an unknown code.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

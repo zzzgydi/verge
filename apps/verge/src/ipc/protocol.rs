@@ -10,10 +10,16 @@ use crate::domain::{
 use crate::ui::{UiRequestEnvelope, UiResponseEnvelope};
 use serde::{Deserialize, Serialize};
 
-/// IPC 协议版本。守护进程与 GUI 进程必须一致；升级不匹配时拒绝连接。
-/// v5: proxy snapshots include shared node details and capabilities.
-/// 应用更新后旧守护进程与新 GUI 的配对靠这个版本号明确拒绝。
-pub const PROTOCOL_VERSION: u32 = 5;
+/// Wire compatibility generation, not an application version or feature counter.
+/// Keep this unchanged for internal/UI changes, optional fields with safe defaults, and
+/// new error codes (readers fall back to ErrorCode::Unknown and retain the message).
+/// Increment only for incompatible required fields, message shapes, or command semantics.
+/// Generation 6 is the baseline; earlier binaries lack the unknown-error fallback.
+/// See README.md in this module for the evolution rules and compatibility tests.
+pub const PROTOCOL_VERSION: u32 = 6;
+
+#[cfg(test)]
+mod compatibility_tests;
 
 /// GUI → Daemon 的消息。
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -81,6 +81,10 @@ fn isolated_queries_and_delay_use_unix_transport() {
                 }
             }
             let body = r#"{"mode":"rule","proxies":{},"rules":[],"providers":{},"delay":23}"#;
+            // A valid delay result can arrive after the ordinary 2 s controller deadline.
+            if path.contains("/delay?") {
+                std::thread::sleep(Duration::from_millis(2_500));
+            }
             write!(
                 stream,
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -99,7 +103,7 @@ fn isolated_queries_and_delay_use_unix_transport() {
         RuntimeCommand::TestProxyDelay {
             proxy: "node".into(),
             url: "https://example.invalid".into(),
-            timeout_ms: 1_000,
+            timeout_ms: 5_000,
         },
     ] {
         let response = execute_isolated_runtime(
@@ -216,6 +220,77 @@ fn daemon_queries_use_internal_socket_with_external_controller_disabled() {
                 RuntimeCommandOutput::NetworkSettings(_)
             )),
             _ => unreachable!(),
+        }
+        jobs -= 1;
+    }
+    // Test the real node-delay endpoint through the same dispatcher, without external traffic.
+    // The first succeeds after the old 2 s socket deadline; the second exceeds Mihomo's deadline.
+    for (index, timeout_ms, target_delay_ms) in [(10, 5_000, 2_500), (11, 100, 350)] {
+        use std::io::{BufRead, BufReader, Write};
+        let target = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = target.local_addr().unwrap();
+        target.set_nonblocking(true).unwrap();
+        let target_server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match target.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(
+                            Instant::now() < deadline,
+                            "Mihomo did not reach delay target"
+                        );
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("{error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut reader = BufReader::new(&stream);
+            loop {
+                let mut line = String::new();
+                assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(target_delay_ms));
+            let _ = stream.write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");
+        });
+        let command = RuntimeCommand::TestProxyDelay {
+            proxy: "DIRECT".into(),
+            url: format!("http://{address}/generate_204"),
+            timeout_ms,
+        };
+        let envelope = UiRequestEnvelope {
+            request_id: index,
+            operation_id: index,
+            operation_index: 0,
+            operation_len: 1,
+            context: CommandContext {
+                actor: CommandActor::UserInterface,
+                approval: None,
+            },
+            request: UiRequest::Runtime(command),
+        };
+        handle_daemon_request(&mut backend, &server, &mut bus, &tx, 1, envelope, &mut jobs);
+        assert_eq!(jobs, 1);
+        let result = rx.recv_timeout(Duration::from_secs(8));
+        target_server.join().unwrap();
+        let DaemonEvent::WorkerDone { response, .. } = result.unwrap() else {
+            panic!("expected worker response")
+        };
+        let UiResponse::Runtime { result, .. } = *response else {
+            panic!("expected runtime response")
+        };
+        if timeout_ms == 5_000 {
+            assert!(
+                matches!(result.unwrap().output, RuntimeCommandOutput::Delay(ms) if ms >= 2_000)
+            );
+        } else {
+            assert_eq!(result.unwrap_err().code, ErrorCode::RequestTimeout);
         }
         jobs -= 1;
     }

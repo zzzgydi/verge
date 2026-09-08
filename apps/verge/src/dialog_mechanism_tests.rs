@@ -564,3 +564,34 @@ fn network_dialogs_render_and_save_only_after_backend_success(cx: &mut TestAppCo
         while rx.try_recv().is_ok() {}
     }
 }
+#[test]
+fn delay_timeouts_stay_on_the_node_but_core_failures_still_notify() {
+    use crate::domain::{AppError, ErrorCode, RuntimeCommand};
+    use crate::ui::UiResponse;
+    for code in [
+        ErrorCode::RequestTimeout,
+        ErrorCode::ProxyDelayFailed,
+        ErrorCode::CoreUnavailable,
+    ] {
+        let response = UiResponse::Runtime {
+            request: RuntimeCommand::TestProxyDelay {
+                proxy: "Node".into(),
+                url: "https://example.invalid".into(),
+                timeout_ms: 5000,
+            },
+            result: Err(AppError::new(code, "test failed")),
+        };
+        assert_eq!(
+            super::toast_for(crate::i18n::Lang::En, &response).is_some(),
+            code == ErrorCode::CoreUnavailable
+        );
+    }
+}
+
+#[test]
+fn unknown_error_has_no_misleading_recovery_hint() {
+    let error: crate::domain::AppError =
+        serde_json::from_str(r#"{"code":"future_busy","message":"Try again later"}"#).unwrap();
+    assert_eq!(super::recovery_hint(Lang::ZhCn, &error), None);
+    assert_eq!(error.message, "Try again later");
+}

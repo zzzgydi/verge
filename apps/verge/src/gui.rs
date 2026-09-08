@@ -450,8 +450,10 @@ fn recovery_hint(lang: Lang, error: &crate::domain::AppError) -> Option<&'static
         ErrorCode::Conflict => "hint.conflict",
         ErrorCode::PermissionDenied => "hint.permission_denied",
         ErrorCode::CoreUnavailable => "hint.core_unavailable",
+        ErrorCode::RequestTimeout => "hint.request_timeout",
+        ErrorCode::ProxyDelayFailed => "hint.proxy_delay_failed",
         ErrorCode::CoreRejectedConfig => "hint.core_rejected",
-        ErrorCode::StorageFailed | ErrorCode::PlatformFailed => return None,
+        ErrorCode::StorageFailed | ErrorCode::PlatformFailed | ErrorCode::Unknown => return None,
     };
     Some(tr(lang, key))
 }
@@ -517,6 +519,14 @@ fn toast_for(lang: Lang, response: &UiResponse) -> Option<Notification> {
             }
         }
         UiResponse::Runtime { request, result } => {
+            if matches!(request, RuntimeCommand::TestProxyDelay { .. })
+                && result
+                    .as_ref()
+                    .is_err_and(|error| error.code != crate::domain::ErrorCode::CoreUnavailable)
+            {
+                // Node-specific failures are rendered on the proxy card with a retry action.
+                return None;
+            }
             let success = match request {
                 RuntimeCommand::UpdateProvider { .. } => Some(tr(lang, "toast.provider_updated")),
                 // SetMode / SelectProxy / SetNetworkSettings / CloseConnection 的结果

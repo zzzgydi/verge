@@ -43,7 +43,7 @@ impl RenderOnce for Metric {
 
 pub fn panel(cx: &App) -> Div {
     v_flex()
-        .p_4()
+        .p_5()
         .gap_4()
         .bg(cx.theme().tiles)
         .border_1()
@@ -59,10 +59,10 @@ pub fn page_heading(
     v_flex()
         .gap_2()
         .flex_shrink_0()
-        .child(div().text_2xl().font_medium().child(title.into()))
+        .child(div().text_size(px(28.)).font_semibold().child(title.into()))
         .child(
             div()
-                .text_sm()
+                .text_size(px(14.))
                 .text_color(cx.theme().muted_foreground)
                 .child(subtitle.into()),
         )
@@ -74,17 +74,17 @@ pub fn mode_selector(
 ) -> impl IntoElement {
     use crate::{domain::RunMode, ui::UiAction};
     use gpui_component::{
-        Disableable as _, Selectable as _, Sizable as _,
+        Disableable as _, Selectable as _,
         button::{Button, ButtonGroup},
     };
     const MODES: [RunMode; 3] = [RunMode::Rule, RunMode::Global, RunMode::Direct];
     ButtonGroup::new("mode-group")
         .outline()
-        .small()
         .children(MODES.map(|mode| {
             Button::new(format!("mode-{mode:?}"))
                 .debug_selector(move || format!("mode-{mode:?}"))
                 .label(super::home::mode_label(view.lang(), mode))
+                .min_w(px(64.))
                 .disabled(view.state.mode.is_none() || view.is_pending(&["mode"]))
                 .selected(view.state.mode == Some(mode))
         }))

@@ -18,6 +18,8 @@ pub struct ControllerRequest {
     pub method: &'static str,
     pub path: String,
     pub body: Option<String>,
+    /// Long-running operations supply their own response budget. Connect/write stay bounded.
+    pub response_timeout: Option<Duration>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -103,6 +105,9 @@ impl ControllerTransport for TcpControllerTransport {
             body
         )
         .map_err(controller_io_error)?;
+        if let Some(timeout) = request.response_timeout {
+            stream.set_timeout(timeout).map_err(controller_io_error)?;
+        }
         let mut response = Vec::new();
         stream
             .read_to_end(&mut response)
@@ -407,10 +412,44 @@ impl<T: ControllerTransport> MihomoClient<T> {
                 "delay test URL must use HTTP or HTTPS",
             ));
         }
+        if !(1..=60_000).contains(&timeout_ms) {
+            return Err(AppError::new(
+                ErrorCode::InvalidInput,
+                "delay test timeout must be between 1 and 60000 ms",
+            ));
+        }
         let proxy = encode_path_segment(proxy);
         let url = utf8_percent_encode(test_url, NON_ALPHANUMERIC);
         let path = format!("/proxies/{proxy}/delay?timeout={timeout_ms}&url={url}");
-        let response: DelayResponse = self.json("GET", &path, None)?;
+        let response = self.transport.send(ControllerRequest {
+            method: "GET",
+            path,
+            body: None,
+            // Allow Mihomo to finish its node test and return the result (including timeout).
+            response_timeout: Some(
+                Duration::from_millis(u64::from(timeout_ms)) + Duration::from_secs(2),
+            ),
+        })?;
+        if !(200..300).contains(&response.status) {
+            return Err(AppError::new(
+                if response.status == 504 {
+                    ErrorCode::RequestTimeout
+                } else {
+                    ErrorCode::ProxyDelayFailed
+                },
+                format!(
+                    "Proxy delay test returned HTTP {}: {}",
+                    response.status,
+                    response.body.trim()
+                ),
+            ));
+        }
+        let response: DelayResponse = serde_json::from_str(&response.body).map_err(|error| {
+            AppError::new(
+                ErrorCode::ProxyDelayFailed,
+                format!("Invalid proxy delay response: {error}"),
+            )
+        })?;
         Ok(response.delay)
     }
 
@@ -438,6 +477,7 @@ impl<T: ControllerTransport> MihomoClient<T> {
             method,
             path: path.to_owned(),
             body,
+            response_timeout: None,
         })?;
         ensure_success(&response).map(|_| ())
     }
@@ -452,6 +492,7 @@ impl<T: ControllerTransport> MihomoClient<T> {
             method,
             path: path.to_owned(),
             body,
+            response_timeout: None,
         })?;
         serde_json::from_str(ensure_success(&response)?).map_err(controller_data_error)
     }
@@ -528,7 +569,17 @@ fn encode_path_segment(value: &str) -> String {
 }
 
 fn controller_io_error(error: std::io::Error) -> AppError {
-    controller_error(error.to_string())
+    if matches!(
+        error.kind(),
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+    ) {
+        AppError::new(
+            ErrorCode::RequestTimeout,
+            "Timed out waiting for Mihomo controller response",
+        )
+    } else {
+        controller_error(error.to_string())
+    }
 }
 
 fn controller_data_error(error: impl fmt::Display) -> AppError {
@@ -686,6 +737,11 @@ mod tests {
             client.transport.requests[0].path,
             "/proxies/Auto%20%2F%20Select"
         );
+        assert_eq!(client.transport.requests[0].response_timeout, None);
+        assert_eq!(
+            client.transport.requests[1].response_timeout,
+            Some(Duration::from_secs(7))
+        );
         assert!(
             client.transport.requests[1]
                 .path
@@ -698,6 +754,7 @@ mod tests {
         );
         client.close_connection("id / 1").unwrap();
         assert_eq!(client.transport.requests[2].method, "DELETE");
+        assert_eq!(client.transport.requests[2].response_timeout, None);
         assert_eq!(
             client.transport.requests[2].path,
             "/connections/id%20%2F%201"
@@ -706,6 +763,89 @@ mod tests {
             client.close_connection("").unwrap_err().code,
             ErrorCode::InvalidInput
         );
+    }
+
+    #[test]
+    fn delay_rejections_are_not_core_unavailable() {
+        for (status, body, code) in [
+            (504, r#"{"message":"Timeout"}"#, ErrorCode::RequestTimeout),
+            (
+                503,
+                r#"{"message":"An error occurred in the delay test"}"#,
+                ErrorCode::ProxyDelayFailed,
+            ),
+            (
+                404,
+                r#"{"message":"Proxy not found"}"#,
+                ErrorCode::ProxyDelayFailed,
+            ),
+            (200, r#"{"delay":"invalid"}"#, ErrorCode::ProxyDelayFailed),
+        ] {
+            let mut client = MihomoClient::new(FakeTransport::new([response(status, body)]));
+            assert_eq!(
+                client
+                    .delay("node", "https://example.invalid", 5000)
+                    .unwrap_err()
+                    .code,
+                code
+            );
+        }
+        let mut client = MihomoClient::new(FakeTransport::new([]));
+        for timeout in [0, 60_001, u32::MAX] {
+            assert_eq!(
+                client
+                    .delay("node", "https://example.invalid", timeout)
+                    .unwrap_err()
+                    .code,
+                ErrorCode::InvalidInput
+            );
+        }
+        assert!(client.transport.requests.is_empty());
+    }
+
+    #[test]
+    fn socket_deadlines_are_distinct_from_connection_failure() {
+        for kind in [std::io::ErrorKind::WouldBlock, std::io::ErrorKind::TimedOut] {
+            assert_eq!(
+                controller_io_error(std::io::Error::from(kind)).code,
+                ErrorCode::RequestTimeout
+            );
+        }
+        assert_eq!(
+            controller_io_error(std::io::Error::from(std::io::ErrorKind::ConnectionRefused)).code,
+            ErrorCode::CoreUnavailable
+        );
+    }
+
+    #[test]
+    fn tcp_transport_reports_expired_response_deadline() {
+        use std::{
+            io::{BufRead, BufReader},
+            net::TcpListener,
+            thread,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut reader = BufReader::new(stream);
+            loop {
+                let mut line = String::new();
+                assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            thread::sleep(Duration::from_millis(300));
+        });
+        let transport =
+            TcpControllerTransport::new(address, "", Duration::from_millis(50)).unwrap();
+        let result = MihomoClient::new(transport).version();
+        server.join().unwrap();
+        assert_eq!(result.unwrap_err().code, ErrorCode::RequestTimeout);
     }
 
     #[test]

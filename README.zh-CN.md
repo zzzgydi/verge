@@ -115,38 +115,57 @@ make dev
 
 ## 构建 macOS 应用
 
-先下载 `assets/mihomo/manifest.json` 指定的 Mihomo，校验压缩包并解压：
+本机 Release 应用和压缩包可一键生成：
 
 ```bash
-curl -L \
-  https://github.com/MetaCubeX/mihomo/releases/download/v1.19.26/mihomo-darwin-arm64-v1.19.26.gz \
-  -o /tmp/mihomo-darwin-arm64-v1.19.26.gz
-
-echo "2d9db5acc7c814a31ff0c04df98b6ac333494ab1ab8e95673ad6e80b28ca6b68  /tmp/mihomo-darwin-arm64-v1.19.26.gz" \
-  | shasum -a 256 -c -
-
-gzip -dc /tmp/mihomo-darwin-arm64-v1.19.26.gz > /tmp/mihomo
-chmod 755 /tmp/mihomo
+make release
 ```
 
-构建并签名应用包：
+命令会自动准备并校验固定版本的 Mihomo，使用 Rust `1.97.1` 和
+`--release --locked` 构建主程序及 helper，移除包内 Rust 二进制的局部符号，
+再签名应用。Cargo 原始产物保留，方便性能分析。Mihomo 保留上游签名和固定
+SHA-256；helper 的摘要在签名完成后生成。
+
+产物：
+
+- `dist/Verge.app`：包含 Mihomo 和 TUN helper 的独立应用。
+- `dist/Verge-macos-arm64.zip`：应用压缩包。
+- `dist/Verge-macos-arm64.zip.sha256`：压缩包摘要。
+
+打包结束会显示应用、ZIP、主程序和内核的体积；之后可用 `make release-size`
+重新查看，无需构建。可以将 `Verge.app` 拷贝到 `/Applications`，也可以直接打开：
 
 ```bash
-VERGE_MIHOMO_BIN=/tmp/mihomo \
-  apps/verge/scripts/build-macos-app.sh
+open dist/Verge.app
 ```
 
-产物位于 `dist/Verge.app`。脚本会校验解压后的 Mihomo SHA-256，以 release 模式构建 GUI 和 helper，组装应用包，并执行 `codesign --verify --deep --strict`。默认使用 ad-hoc 签名。
-
-构建候选发布版时，可以指定 Developer ID Application 证书：
+在终端中构建并启动包内程序：
 
 ```bash
-VERGE_MIHOMO_BIN=/tmp/mihomo \
+make release-run
+# 使用独立数据目录测试：
+VERGE_DATA_DIR=/tmp/verge-release-test make release-run
+```
+
+使用同一数据目录切换 Debug 和 Release 前，请从 Verge 菜单栏选择“退出”，
+确保旧 daemon 结束。只关窗口会继续使用旧程序，内存对比也会失真。默认数据目录
+与 `make dev` 相同，都是 `~/Library/Application Support/Verge`。
+`make release-run` 在 GUI 退出后返回终端，daemon 仍需通过菜单栏“退出”结束。
+
+对比运行内存时，应使用相同配置、页面、流量和观察时长。在“活动监视器”中同时
+观察两个 `verge-gpui` 进程（GUI 和 daemon）及其 `mihomo` 子进程。文件体积和
+运行内存是不同指标，Release 文件变小不代表内存会同比下降。
+
+仍可指定 Mihomo 路径和签名证书：
+
+```bash
+VERGE_MIHOMO_BIN=/absolute/path/to/mihomo \
 VERGE_CODESIGN_IDENTITY="Developer ID Application: Example (TEAMID)" \
-  apps/verge/scripts/build-macos-app.sh
+make release
 ```
 
-当前脚本还不负责公证和发布。
+默认使用供本机测试的 ad-hoc 签名，并执行 `codesign --verify --deep --strict`
+验证应用包。脚本不负责公证或发布。
 
 ## 测试
 

@@ -137,38 +137,62 @@ These variables are for development and testing. Do not put real secrets in shel
 
 ## Build the macOS application
 
-Download the Mihomo asset named in `assets/mihomo/manifest.json`, verify the archive, and unpack it:
+Build a local Release app and ZIP with one command:
 
 ```bash
-curl -L \
-  https://github.com/MetaCubeX/mihomo/releases/download/v1.19.26/mihomo-darwin-arm64-v1.19.26.gz \
-  -o /tmp/mihomo-darwin-arm64-v1.19.26.gz
-
-echo "2d9db5acc7c814a31ff0c04df98b6ac333494ab1ab8e95673ad6e80b28ca6b68  /tmp/mihomo-darwin-arm64-v1.19.26.gz" \
-  | shasum -a 256 -c -
-
-gzip -dc /tmp/mihomo-darwin-arm64-v1.19.26.gz > /tmp/mihomo
-chmod 755 /tmp/mihomo
+make release
 ```
 
-Build and sign the bundle:
+This prepares and verifies the pinned Mihomo binary, uses Rust `1.97.1` with
+`--release --locked` for the application and helper, strips local symbols from
+the bundled Rust binaries, and signs the app for local use. Cargo's original
+binaries remain available for profiling. Mihomo keeps its upstream signature
+and pinned SHA-256; the helper checksum is recorded after signing.
+
+Outputs:
+
+- `dist/Verge.app`: standalone application with Mihomo and the TUN helper bundled.
+- `dist/Verge-macos-arm64.zip`: compressed application bundle.
+- `dist/Verge-macos-arm64.zip.sha256`: archive checksum.
+
+The command also reports the app, ZIP, executable, and sidecar sizes. To show
+sizes again without building, run `make release-size`. You can copy `Verge.app`
+to `/Applications` or open it directly:
 
 ```bash
-VERGE_MIHOMO_BIN=/tmp/mihomo \
-  apps/verge/scripts/build-macos-app.sh
+open dist/Verge.app
 ```
 
-The output is `dist/Verge.app`. The script verifies the unpacked Mihomo SHA-256, builds the GUI and helper in release mode, assembles the bundle, and runs `codesign --verify --deep --strict`. It uses an ad-hoc signature by default.
-
-For a release candidate, provide a Developer ID Application identity:
+To build and run the bundled executable from the terminal:
 
 ```bash
-VERGE_MIHOMO_BIN=/tmp/mihomo \
+make release-run
+# Use separate application data for a test run:
+VERGE_DATA_DIR=/tmp/verge-release-test make release-run
+```
+
+Before switching between Debug and Release with the same data directory, use
+**Quit** in Verge's menu bar to stop the old daemon. Closing only the window
+leaves the old executable running, which would invalidate a memory comparison.
+The app uses `~/Library/Application Support/Verge` by default, as `make dev` does.
+`make release-run` returns when the GUI exits; the daemon still requires **Quit**.
+
+Compare runtime memory using the same profile, page, traffic and observation
+period. In Activity Monitor, include both `verge-gpui` processes (GUI and daemon)
+and their `mihomo` child. File size and resident memory are different measurements;
+a smaller Release binary does not guarantee the same reduction in memory.
+
+A custom Mihomo binary and signing identity remain supported:
+
+```bash
+VERGE_MIHOMO_BIN=/absolute/path/to/mihomo \
 VERGE_CODESIGN_IDENTITY="Developer ID Application: Example (TEAMID)" \
-  apps/verge/scripts/build-macos-app.sh
+make release
 ```
 
-Notarization and distribution automation are not part of the current build script.
+The default signature is ad-hoc and is intended for local testing. The script
+verifies the bundle with `codesign --verify --deep --strict`; notarization and
+publishing are not included.
 
 ## Testing
 

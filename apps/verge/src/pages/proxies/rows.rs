@@ -5,8 +5,8 @@ use super::{
 use crate::{i18n::tr, ui::UiAction};
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
-    button::{Button, ButtonVariants as _},
+    ActiveTheme as _, Disableable as _, Icon, IconName, StyledExt as _,
+    button::{Button, ButtonCustomVariant, ButtonVariants as _},
     h_flex, v_flex,
 };
 
@@ -14,10 +14,10 @@ fn badge(text: impl Into<SharedString>, cx: &App) -> impl IntoElement {
     div()
         .flex_shrink_0()
         .whitespace_nowrap()
-        .px_1p5()
-        .py_0p5()
-        .rounded(px(4.))
-        .text_xs()
+        .px_2()
+        .py_1()
+        .rounded(px(5.))
+        .text_size(px(11.))
         .line_height(px(14.))
         .bg(cx.theme().muted.opacity(0.55))
         .text_color(cx.theme().muted_foreground)
@@ -43,7 +43,7 @@ pub fn render(row: &Row, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyEl
                         .id(SharedString::from(label.clone()))
                         .debug_selector(move || label.clone())
                         .size_full()
-                        .px_4()
+                        .px_5()
                         .gap_3()
                         .rounded_lg()
                         .bg(cx.theme().muted.opacity(0.35))
@@ -53,13 +53,19 @@ pub fn render(row: &Row, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyEl
                         .hover(|s| s.bg(cx.theme().list_hover))
                         .on_click(cx.listener(move |this, _, _, cx| this.toggle(ix, cx)))
                         .child(
-                            Icon::new(if expanded {
-                                IconName::ChevronDown
-                            } else {
-                                IconName::ChevronRight
-                            })
-                            .size_4()
-                            .text_color(cx.theme().muted_foreground),
+                            h_flex()
+                                .size(px(28.))
+                                .flex_shrink_0()
+                                .justify_center()
+                                .child(
+                                    Icon::new(if expanded {
+                                        IconName::ChevronDown
+                                    } else {
+                                        IconName::ChevronRight
+                                    })
+                                    .size(px(18.))
+                                    .text_color(cx.theme().muted_foreground),
+                                ),
                         )
                         .child(
                             v_flex()
@@ -68,7 +74,7 @@ pub fn render(row: &Row, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyEl
                                 .gap_1()
                                 .child(
                                     div()
-                                        .text_sm()
+                                        .text_size(px(16.))
                                         .font_semibold()
                                         .truncate()
                                         .child(group.name.clone()),
@@ -81,7 +87,7 @@ pub fn render(row: &Row, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyEl
                                         .child(
                                             div()
                                                 .flex_1()
-                                                .text_xs()
+                                                .text_size(px(13.))
                                                 .truncate()
                                                 .text_color(cx.theme().muted_foreground)
                                                 .child(
@@ -97,7 +103,7 @@ pub fn render(row: &Row, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyEl
                             Button::new(SharedString::from(format!("locate-{ix}")))
                                 .debug_selector(move || format!("locate-{ix}"))
                                 .label(tr(page.lang, "proxies.locate"))
-                                .xsmall()
+                                .h(px(36.))
                                 .ghost()
                                 .disabled(group.selected.is_none())
                                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -109,7 +115,7 @@ pub fn render(row: &Row, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyEl
                             div()
                                 .min_w(px(28.))
                                 .text_right()
-                                .text_xs()
+                                .text_sm()
                                 .text_color(cx.theme().muted_foreground)
                                 .child(group.members.len().to_string()),
                         ),
@@ -120,8 +126,8 @@ pub fn render(row: &Row, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyEl
             let mut row = h_flex()
                 .w_full()
                 .h(px(NODES_HEIGHT))
-                .pb_2()
-                .gap_2()
+                .pb_3()
+                .gap_3()
                 .items_stretch();
             for &member in members {
                 row = row.child(card(*group, member, page, cx));
@@ -146,17 +152,15 @@ fn card(group: usize, member: usize, page: &ProxyPage, cx: &mut Context<ProxyPag
         .get(proxy)
         .copied()
         .or_else(|| detail.and_then(|p| p.delay));
-    let delay_text = match delay {
-        Some(0) => tr(page.lang, "proxies.timeout").into(),
-        Some(ms) => format!("{ms} ms"),
-        None => tr(page.lang, "proxies.test_delay").into(),
-    };
+    let error = page.delay_errors.get(proxy);
+    let pending = page.pending.contains(proxy);
+    let delay_view = DelayPresentation::new(pending, delay, error, page.lang, cx);
     let select_group = entry.name.clone();
     let select_proxy = proxy.clone();
     let test_proxy = proxy.clone();
     let id = format!("proxy-card-{group}-{member}");
     let mut metadata = h_flex()
-        .gap_1()
+        .gap_1p5()
         .min_w_0()
         .overflow_hidden()
         .child(badge(
@@ -200,12 +204,12 @@ fn card(group: usize, member: usize, page: &ProxyPage, cx: &mut Context<ProxyPag
         .flex_1()
         .min_w_0()
         .h_full()
-        .px_3()
-        .gap_2()
-        .rounded_lg()
+        .px_4()
+        .gap_3()
+        .rounded(px(12.))
         .border_1()
         .border_color(if selected {
-            cx.theme().list_active_border
+            selection_color(cx)
         } else {
             cx.theme().border.opacity(0.7)
         })
@@ -215,8 +219,9 @@ fn card(group: usize, member: usize, page: &ProxyPage, cx: &mut Context<ProxyPag
             cx.theme().background
         })
         .when(selectable, |this| {
-            this.cursor_pointer()
-                .hover(|this| this.bg(cx.theme().list_hover))
+            this.cursor_pointer().when(!selected, |this| {
+                this.hover(|this| this.bg(cx.theme().list_hover))
+            })
         })
         .on_click(cx.listener(move |this, _, _, cx| {
             if selectable {
@@ -230,42 +235,69 @@ fn card(group: usize, member: usize, page: &ProxyPage, cx: &mut Context<ProxyPag
             }
         }))
         .child(
+            h_flex()
+                .debug_selector(move || format!("proxy-marker-{group}-{member}"))
+                .size(px(24.))
+                .flex_shrink_0()
+                .justify_center()
+                .rounded_full()
+                .border_1()
+                .border_color(if selected {
+                    selection_color(cx)
+                } else {
+                    cx.theme().border
+                })
+                .when(selected, |this| {
+                    this.bg(selection_color(cx)).child(
+                        Icon::new(IconName::Check)
+                            .size(px(14.))
+                            .text_color(cx.theme().tiles),
+                    )
+                }),
+        )
+        .child(
             v_flex()
                 .flex_1()
                 .min_w_0()
                 .gap_2()
                 .child(
-                    h_flex()
-                        .gap_2()
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_sm()
-                                .truncate()
-                                .child(proxy.clone()),
-                        )
-                        .when(selected, |this| {
-                            this.child(Icon::new(IconName::CircleCheck).size_4())
-                        }),
+                    div()
+                        .debug_selector(move || format!("proxy-name-{group}-{member}"))
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(px(15.))
+                        .line_height(px(22.))
+                        .font_medium()
+                        .truncate()
+                        .child(proxy.clone()),
                 )
                 .child(metadata),
         )
         .child(
             Button::new(SharedString::from(format!("delay-{group}-{member}")))
                 .debug_selector(move || format!("delay-{group}-{member}"))
-                .label(delay_text)
-                .xsmall()
-                .ghost()
+                .accessibility_label(format!("{}: {}", proxy, delay_view.label))
+                .min_w(px(88.))
+                .h(px(36.))
+                .flex_shrink_0()
+                .custom(delay_view.button_style(cx))
+                // Keep the foreground on the content as well: pointer/disabled styles
+                // must never replace the color of a newly received measurement.
+                .child(
+                    div()
+                        .text_size(px(13.))
+                        .font_semibold()
+                        .text_color(delay_view.color)
+                        .child(delay_view.label),
+                )
                 .disabled(detail.is_none())
-                .loading(page.pending.contains(proxy))
-                .when_some(delay, |this, ms| {
-                    this.text_color(match ms {
-                        0 => cx.theme().danger,
-                        1..200 => cx.theme().success,
-                        200..800 => cx.theme().warning,
-                        _ => cx.theme().muted_foreground,
-                    })
+                .loading(pending)
+                .when_some(error, |this, error| {
+                    this.tooltip(format!(
+                        "{}: {}",
+                        tr(page.lang, "proxies.delay_retry"),
+                        error.message
+                    ))
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
@@ -280,4 +312,143 @@ fn card(group: usize, member: usize, page: &ProxyPage, cx: &mut Context<ProxyPag
                 })),
         )
         .into_any_element()
+}
+
+fn selection_color(cx: &App) -> Hsla {
+    if cx.theme().is_dark() {
+        rgb(0xe1e5f2).into()
+    } else {
+        rgb(0x4b5f86).into()
+    }
+}
+
+/// Text and color are derived together, including while the pointer stays on the button.
+struct DelayPresentation {
+    label: String,
+    color: Hsla,
+}
+
+impl DelayPresentation {
+    fn new(
+        pending: bool,
+        delay: Option<u32>,
+        error: Option<&crate::domain::AppError>,
+        lang: crate::i18n::Lang,
+        cx: &App,
+    ) -> Self {
+        let (label, color) = if pending {
+            (
+                tr(lang, "proxies.testing").into(),
+                cx.theme().muted_foreground,
+            )
+        } else if let Some(error) = error {
+            (
+                tr(
+                    lang,
+                    if error.code == crate::domain::ErrorCode::RequestTimeout {
+                        "proxies.timeout"
+                    } else {
+                        "proxies.delay_failed"
+                    },
+                )
+                .into(),
+                cx.theme().danger,
+            )
+        } else {
+            match delay {
+                Some(0) => (tr(lang, "proxies.timeout").into(), cx.theme().danger),
+                Some(ms) => (
+                    format!("{ms} ms"),
+                    match ms {
+                        1..200 => cx.theme().success,
+                        200..800 => cx.theme().warning,
+                        _ => cx.theme().muted_foreground,
+                    },
+                ),
+                None => (
+                    tr(lang, "proxies.test_delay").into(),
+                    cx.theme().muted_foreground,
+                ),
+            }
+        };
+        Self { label, color }
+    }
+
+    fn button_style(&self, cx: &App) -> ButtonCustomVariant {
+        ButtonCustomVariant::new(cx)
+            .foreground(self.color)
+            .color(self.color.opacity(0.09))
+            .hover(self.color.opacity(0.16))
+            .active(self.color.opacity(0.22))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::prelude::v1::test;
+    use std::{cell::RefCell, rc::Rc};
+
+    struct DelayProbe {
+        pending: bool,
+        delay: Option<u32>,
+        color: Rc<RefCell<Option<Hsla>>>,
+    }
+    impl Render for DelayProbe {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let presentation =
+                DelayPresentation::new(self.pending, self.delay, None, crate::i18n::Lang::En, cx);
+            let color = self.color.clone();
+            Button::new("delay-probe")
+                .debug_selector(|| "delay-probe".into())
+                .w(px(120.))
+                .h(px(36.))
+                .custom(presentation.button_style(cx))
+                .loading(self.pending)
+                .label(presentation.label)
+                .child(
+                    canvas(
+                        |_, _, _| (),
+                        move |_, _, window, _| {
+                            *color.borrow_mut() = Some(window.text_style().color);
+                        },
+                    )
+                    .size(px(1.)),
+                )
+                .on_click(|_, _, _| {})
+        }
+    }
+
+    #[gpui::test]
+    fn completed_delay_keeps_its_color_under_hover_and_press(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let color = Rc::new(RefCell::new(None));
+        let probe_color = color.clone();
+        let (probe, cx) = cx.add_window_view(|_, _| DelayProbe {
+            pending: true,
+            delay: None,
+            color: probe_color,
+        });
+        cx.run_until_parked();
+        let bounds = cx.debug_bounds("delay-probe").unwrap();
+        cx.simulate_mouse_move(bounds.center(), None, Modifiers::default());
+        // The pointer does not move when a result arrives.
+        cx.update(|_, cx| {
+            probe.update(cx, |probe, cx| {
+                probe.pending = false;
+                probe.delay = Some(42);
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        let expected = cx.update(|_, cx| cx.theme().success);
+        assert_eq!(*color.borrow(), Some(expected));
+        cx.simulate_mouse_down(bounds.center(), MouseButton::Left, Modifiers::default());
+        cx.run_until_parked();
+        assert_eq!(*color.borrow(), Some(expected));
+        cx.simulate_mouse_up(bounds.center(), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(point(px(300.), px(300.)), None, Modifiers::default());
+        cx.run_until_parked();
+        assert_eq!(*color.borrow(), Some(expected));
+    }
 }

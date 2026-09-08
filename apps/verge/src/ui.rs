@@ -5,12 +5,12 @@ use std::sync::Arc;
 
 use crate::domain::{
     AppCommand, AppCommandOutput, AppCommandResult, AppError, AppUpdateStatus, ApplicationSettings,
-    ApplicationSettingsSnapshot, CommandContext, CommandRisk, ConnectionSnapshot, HelperStatus,
-    LogEvent, MemoryEvent, NetworkSettings, Profile, ProfileId, ProfileSource, ProviderKind,
-    ProviderSummary, ProxyEndpoint, ProxySnapshot, RealtimeEvent, RealtimeTopic, RuleEntry,
-    RunMode, RuntimeCommand, RuntimeCommandOutput, RuntimeCommandResult, RuntimeSettings,
-    SettingsImportPreview, SettingsScope, SystemProxyCommand, SystemProxyCommandResult,
-    SystemProxyState, TrafficEvent, UpdatePolicy,
+    ApplicationSettingsSnapshot, CommandContext, CommandRisk, ConnectionSnapshot, ErrorCode,
+    HelperStatus, LogEvent, MemoryEvent, NetworkSettings, Profile, ProfileId, ProfileSource,
+    ProviderKind, ProviderSummary, ProxyEndpoint, ProxySnapshot, RealtimeEvent, RealtimeTopic,
+    RuleEntry, RunMode, RuntimeCommand, RuntimeCommandOutput, RuntimeCommandResult,
+    RuntimeSettings, SettingsImportPreview, SettingsScope, SystemProxyCommand,
+    SystemProxyCommandResult, SystemProxyState, TrafficEvent, UpdatePolicy,
 };
 use serde::{Deserialize, Serialize};
 
@@ -75,6 +75,68 @@ mod envelope_tests {
         state.apply_response_envelope(mode_response(2, RunMode::Global));
         assert!(!state.pending.contains("mode"));
         assert_eq!(state.mode, Some(RunMode::Global));
+    }
+
+    #[test]
+    fn concurrent_delay_results_are_independent_and_same_node_retries_ignore_stale_results() {
+        let request = |id, proxy: &str| UiRequestEnvelope {
+            request: UiRequest::Runtime(RuntimeCommand::TestProxyDelay {
+                proxy: proxy.into(),
+                url: "https://example.invalid".into(),
+                timeout_ms: 5000,
+            }),
+            ..envelope(id)
+        };
+        let a = request(1, "A");
+        let b = request(2, "B");
+        let retry = request(3, "A");
+        let reply = |request: &UiRequestEnvelope, result| {
+            let UiRequest::Runtime(command) = &request.request else {
+                unreachable!()
+            };
+            UiResponseEnvelope::for_request(
+                request,
+                UiResponse::Runtime {
+                    request: command.clone(),
+                    result,
+                },
+            )
+        };
+        let success = |ms| {
+            Ok(RuntimeCommandResult {
+                output: RuntimeCommandOutput::Delay(ms),
+                summary: "tested".into(),
+            })
+        };
+        let mut state = UiState {
+            core_status: CoreStatus::Running,
+            ..Default::default()
+        };
+        state.begin_envelope(&a);
+        state.begin_envelope(&b);
+        state.apply_response_envelope(reply(&a, success(42)));
+        assert_eq!(state.delays.get("A"), Some(&42));
+        assert!(!state.delay_pending.contains("A"));
+        assert!(state.delay_pending.contains("B"));
+        state.apply_response_envelope(reply(
+            &b,
+            Err(AppError::new(ErrorCode::RequestTimeout, "timeout")),
+        ));
+        assert_eq!(state.delay_errors["B"].code, ErrorCode::RequestTimeout);
+        assert!(state.delay_pending.is_empty());
+        assert!(!state.pending.contains("delay"));
+        assert_eq!(state.core_status, CoreStatus::Running);
+        assert!(state.last_error.is_none());
+
+        state.begin_envelope(&a);
+        state.begin_envelope(&retry);
+        state.apply_response_envelope(reply(&a, success(99)));
+        assert_eq!(state.delays.get("A"), Some(&42));
+        assert!(state.delay_pending.contains("A"));
+        state.apply_response_envelope(reply(&retry, success(21)));
+        assert_eq!(state.delays.get("A"), Some(&21));
+        assert!(state.delay_pending.is_empty());
+        assert!(state.latest_delay_requests.is_empty());
     }
 }
 
@@ -526,11 +588,13 @@ pub struct UiState {
     pub logs: VecDeque<LogEvent>,
     log_bytes: usize,
     pub delays: HashMap<String, u32>,
+    pub delay_errors: HashMap<String, AppError>,
     /// 正在测速的节点名，用于按节点渲染加载态。
     pub delay_pending: HashSet<String>,
     pub pending: HashSet<&'static str>,
     pending_requests: HashMap<u64, &'static str>,
     latest_requests: HashMap<&'static str, u64>,
+    latest_delay_requests: HashMap<String, u64>,
     pub last_error: Option<AppError>,
     last_error_from_write: bool,
 }
@@ -540,6 +604,11 @@ impl UiState {
         let key = request_key(&envelope.request);
         self.pending_requests.insert(envelope.request_id, key);
         self.latest_requests.insert(key, envelope.request_id);
+        if let UiRequest::Runtime(RuntimeCommand::TestProxyDelay { proxy, .. }) = &envelope.request
+        {
+            self.latest_delay_requests
+                .insert(proxy.clone(), envelope.request_id);
+        }
         self.begin(&envelope.request);
     }
 
@@ -551,6 +620,7 @@ impl UiState {
         self.pending.insert(request_key(request));
         if let UiRequest::Runtime(RuntimeCommand::TestProxyDelay { proxy, .. }) = request {
             self.delay_pending.insert(proxy.clone());
+            self.delay_errors.remove(proxy);
         }
         self.last_error = None;
         self.last_error_from_write = false;
@@ -570,8 +640,15 @@ impl UiState {
         self.pending.remove(request_key(request));
         if let UiRequest::Runtime(RuntimeCommand::TestProxyDelay { proxy, .. }) = request {
             self.delay_pending.remove(proxy);
+            self.delays.remove(proxy);
+            self.delay_errors.insert(proxy.clone(), error.clone());
+            self.proxy_revision = self.proxy_revision.wrapping_add(1);
+            // A node's timeout/rejection says nothing about the health of the core.
+            if error.code != ErrorCode::CoreUnavailable {
+                return;
+            }
         }
-        if matches!(request, UiRequest::Runtime(_)) {
+        if matches!(request, UiRequest::Runtime(_)) && error.code == ErrorCode::CoreUnavailable {
             self.core_status = CoreStatus::Offline;
         }
         if is_write_request(request) {
@@ -613,6 +690,7 @@ impl UiState {
             RuntimeCommandOutput::ProxyGroups(snapshot) => {
                 self.proxies = Arc::new(snapshot);
                 self.delays.clear();
+                self.delay_errors.clear();
             }
             RuntimeCommandOutput::Rules(rules) => self.rules = rules,
             RuntimeCommandOutput::Providers(providers) => self.providers = providers,
@@ -622,6 +700,7 @@ impl UiState {
             RuntimeCommandOutput::Delay(delay) => {
                 if let RuntimeCommand::TestProxyDelay { proxy, .. } = request {
                     self.delay_pending.remove(proxy);
+                    self.delay_errors.remove(proxy);
                     self.delays.insert(proxy.clone(), delay);
                 }
             }
@@ -774,10 +853,13 @@ impl UiState {
             return;
         };
         let key = request_key(&request);
-        let stale = self
-            .latest_requests
-            .get(key)
-            .is_some_and(|latest| *latest != request_id);
+        let latest =
+            if let UiRequest::Runtime(RuntimeCommand::TestProxyDelay { proxy, .. }) = &request {
+                self.latest_delay_requests.get(proxy)
+            } else {
+                self.latest_requests.get(key)
+            };
+        let stale = latest.is_some_and(|latest| *latest != request_id);
         self.pending_requests.remove(&request_id);
         if !stale || is_write_request(&request) {
             self.apply_response(envelope.response);
@@ -791,6 +873,9 @@ impl UiState {
         } else {
             self.pending.remove(key);
             self.latest_requests.remove(key);
+            if key == "delay" {
+                self.latest_delay_requests.clear();
+            }
         }
     }
 
@@ -1354,6 +1439,41 @@ mod tests {
         );
         assert!(!state.delay_pending.contains("B"));
         assert_eq!(state.delays.get("B"), None);
+    }
+
+    #[test]
+    fn node_delay_failure_preserves_core_health_and_recovers_on_retry() {
+        for code in [ErrorCode::RequestTimeout, ErrorCode::ProxyDelayFailed] {
+            let mut state = UiState {
+                core_status: CoreStatus::Running,
+                ..Default::default()
+            };
+            let command = RuntimeCommand::TestProxyDelay {
+                proxy: "Node".into(),
+                url: "https://example.invalid".into(),
+                timeout_ms: 5000,
+            };
+            let request = UiRequest::Runtime(command.clone());
+            state.delays.insert("Node".into(), 42);
+            state.begin(&request);
+            state.fail(&request, AppError::new(code, "test failed"));
+            assert_eq!(state.core_status, CoreStatus::Running);
+            assert!(state.last_error.is_none());
+            assert!(state.delays.is_empty());
+            assert!(state.delay_pending.is_empty());
+            assert_eq!(state.delay_errors["Node"].code, code);
+            state.begin(&request);
+            assert!(state.delay_errors.is_empty());
+            state.apply_runtime(
+                &command,
+                RuntimeCommandResult {
+                    output: RuntimeCommandOutput::Delay(25),
+                    summary: "tested".into(),
+                },
+            );
+            assert_eq!(state.delays["Node"], 25);
+            assert!(state.delay_pending.is_empty());
+        }
     }
 
     #[test]

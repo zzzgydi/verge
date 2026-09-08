@@ -51,7 +51,7 @@ impl MainView {
                             .px_3()
                             .overflow_hidden()
                             .whitespace_nowrap()
-                            .text_size(px(10.))
+                            .text_size(px(12.))
                             .text_color(cx.theme().muted_foreground)
                             .child(tr(lang, label)),
                         SharedString::from(format!("sidebar-heading-{label}")),
@@ -62,7 +62,7 @@ impl MainView {
                             .debug_selector(move || format!("nav-{page:?}"))
                             .ghost()
                             .w_full()
-                            .h_10()
+                            .h(px(46.))
                             .px(px(15.))
                             .rounded_lg()
                             .border_1()
@@ -73,13 +73,14 @@ impl MainView {
                                     .w_full()
                                     .min_w_0()
                                     .overflow_hidden()
-                                    .child(Icon::new(icon).size(px(16.)).flex_shrink_0())
+                                    .child(Icon::new(icon).size(px(18.)).flex_shrink_0())
                                     .child(reveal(
                                         div()
                                             .flex_1()
                                             .min_w_0()
                                             .overflow_hidden()
                                             .whitespace_nowrap()
+                                            .text_size(px(15.))
                                             .child(tr(lang, label)),
                                         SharedString::from(format!("sidebar-label-{page:?}")),
                                         expanded,

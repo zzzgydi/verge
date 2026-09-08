@@ -270,6 +270,86 @@ mod tests {
     }
 
     #[test]
+    fn future_error_does_not_disconnect_client_or_drop_following_messages() {
+        use std::os::unix::net::UnixListener;
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let socket = std::path::PathBuf::from(format!(
+            "/tmp/verge-ipc-{}-{nonce}.sock",
+            std::process::id()
+        ));
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (done, wait_done) = mpsc::channel();
+        let daemon = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = BufWriter::new(stream);
+            assert!(matches!(
+                frame::read_message::<DaemonMessage>(&mut reader).unwrap(),
+                DaemonMessage::Hello {
+                    protocol_version: PROTOCOL_VERSION,
+                    ..
+                }
+            ));
+            frame::write_message(
+                &mut writer,
+                &ClientMessage::Welcome {
+                    protocol_version: PROTOCOL_VERSION,
+                    initial: InitialSnapshot::default(),
+                },
+            )
+            .unwrap();
+            // Simulate a future daemon; do not serialize the current error enum.
+            frame::write_frame(&mut writer, br#"{"Response":{"request_id":12,"operation_id":12,"response":{"Runtime":{"request":{"type":"get_mode"},"result":{"Err":{"code":"future_busy","message":"Try again later","retry_after_ms":50}}}}}}"#).unwrap();
+            frame::write_message(&mut writer, &ClientMessage::ActivateWindow).unwrap();
+            frame::write_message(
+                &mut writer,
+                &ClientMessage::Closed {
+                    reason: "test complete".into(),
+                },
+            )
+            .unwrap();
+            // Keep the socket alive while connect finishes configuring the read thread.
+            let _ = wait_done.recv_timeout(Duration::from_secs(5));
+        });
+        let client = IpcClient::connect(&socket, "test").unwrap();
+        let mut events = client.into_events();
+        assert!(matches!(
+            futures::executor::block_on(events.next()),
+            Some(ClientEvent::Welcome { .. })
+        ));
+        let Some(ClientEvent::Response(envelope)) = futures::executor::block_on(events.next())
+        else {
+            panic!("future error dropped")
+        };
+        assert_eq!(envelope.request_id, Some(12));
+        let crate::ui::UiResponse::Runtime {
+            result: Err(error), ..
+        } = envelope.response
+        else {
+            panic!("expected error")
+        };
+        assert_eq!(error.code, crate::domain::ErrorCode::Unknown);
+        assert_eq!(error.message, "Try again later");
+        assert!(matches!(
+            futures::executor::block_on(events.next()),
+            Some(ClientEvent::ActivateWindow)
+        ));
+        assert!(matches!(
+            futures::executor::block_on(events.next()),
+            Some(ClientEvent::Closed { .. })
+        ));
+        done.send(()).unwrap();
+        daemon.join().unwrap();
+        std::fs::remove_file(&socket).unwrap();
+    }
+
+    #[test]
     fn closed_reason_propagates() {
         let socket = temp_socket("closed");
         spawn_fake_daemon(

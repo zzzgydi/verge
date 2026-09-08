@@ -8,7 +8,7 @@ pub fn apply(mode: ThemeMode, cx: &mut App) {
         rgb(if dark { dark_value } else { light_value }).into()
     };
     let theme = Theme::global_mut(cx);
-    theme.font_size = px(14.);
+    theme.font_size = px(15.);
     theme.radius = px(8.);
     theme.radius_lg = px(14.);
     let c = &mut theme.colors;
@@ -47,8 +47,8 @@ pub fn apply(mode: ThemeMode, cx: &mut App) {
     c.secondary_foreground = c.foreground;
     c.input = c.border;
     c.list = c.tiles;
-    c.list_active = c.accent;
-    c.list_active_border = c.border;
+    c.list_active = color(0x34343d, 0xe8ebf3);
+    c.list_active_border = color(0x90909f, 0x8290ac);
     c.list_hover = c.accent;
     c.table = c.tiles;
     c.table_head = c.tiles;

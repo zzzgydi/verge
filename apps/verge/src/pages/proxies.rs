@@ -5,14 +5,14 @@ mod tests;
 
 use super::components::{mode_selector, page_heading};
 use crate::{
-    domain::{ProfileId, ProxySnapshot, RunMode},
+    domain::{AppError, ProfileId, ProxySnapshot, RunMode},
     i18n::{Lang, tr},
     ui::{UiAction, UiState},
     view::MainView,
 };
 use gpui::{prelude::FluentBuilder as _, *};
 use gpui_component::{
-    ActiveTheme as _, IconName, Sizable as _, VirtualListScrollHandle,
+    IconName, VirtualListScrollHandle,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, InputEvent, InputState},
@@ -43,6 +43,7 @@ pub struct ProxyPage {
     sizes: Rc<Vec<Size<Pixels>>>,
     columns: usize,
     delays: HashMap<String, u32>,
+    delay_errors: HashMap<String, AppError>,
     pending: HashSet<String>,
     _subscriptions: Vec<Subscription>,
 }
@@ -84,6 +85,7 @@ impl ProxyPage {
             sizes: Rc::default(),
             columns: Self::columns(window),
             delays: HashMap::new(),
+            delay_errors: HashMap::new(),
             pending: HashSet::new(),
             _subscriptions: vec![subscription, bounds],
         }
@@ -120,6 +122,7 @@ impl ProxyPage {
         self.revision = state.proxy_revision;
         self.lang = lang;
         self.delays.clone_from(&state.delays);
+        self.delay_errors.clone_from(&state.delay_errors);
         self.pending.clone_from(&state.delay_pending);
         self.expanded
             .retain(|name| self.snapshot.groups.iter().any(|g| &g.name == name));
@@ -198,7 +201,6 @@ impl Render for ProxyPage {
             .child(
                 div().flex_1().min_w_0().child(
                     Input::new(&self.search)
-                        .small()
                         .cleanable(true)
                         .prefix(gpui_component::Icon::new(IconName::Search).size_4()),
                 ),
@@ -208,7 +210,7 @@ impl Render for ProxyPage {
                     Button::new("collapse-proxies")
                         .debug_selector(|| "collapse-proxies".into())
                         .label(tr(self.lang, "proxies.collapse_all"))
-                        .small()
+                        .h(px(36.))
                         .ghost()
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.expanded.clear();
@@ -225,7 +227,7 @@ impl Render for ProxyPage {
                 this.child(
                     Button::new("locate-global")
                         .label(tr(self.lang, "proxies.locate"))
-                        .small()
+                        .h(px(36.))
                         .outline()
                         .on_click(
                             cx.listener(move |this, _, window, cx| this.locate(ix, window, cx)),
@@ -274,7 +276,7 @@ impl Render for ProxyPage {
         v_flex()
             .size_full()
             .min_h_0()
-            .gap_3()
+            .gap_4()
             .child(toolbar)
             .child(body)
     }
@@ -285,7 +287,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
     v_flex()
         .flex_1()
         .min_h_0()
-        .gap_4()
+        .gap_5()
         .child(
             h_flex()
                 .justify_between()
@@ -296,25 +298,16 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                     cx,
                 ))
                 .child(
-                    Button::new("refresh-proxies")
-                        .label(tr(lang, "common.refresh"))
-                        .small()
-                        .ghost()
-                        .loading(view.is_pending(&["proxy_groups"]))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.dispatch(UiAction::RefreshProxies, cx)
-                        })),
+                    h_flex().gap_3().child(mode_selector(view, cx)).child(
+                        Button::new("refresh-proxies")
+                            .label(tr(lang, "common.refresh"))
+                            .ghost()
+                            .loading(view.is_pending(&["proxy_groups"]))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.dispatch(UiAction::RefreshProxies, cx)
+                            })),
+                    ),
                 ),
-        )
-        .child(
-            h_flex()
-                .justify_between()
-                .flex_shrink_0()
-                .pb_3()
-                .border_b_1()
-                .border_color(cx.theme().border)
-                .child(div().text_sm().child(tr(lang, "home.run_mode")))
-                .child(mode_selector(view, cx)),
         )
         .child(view.proxy_page.clone())
         .into_any_element()
