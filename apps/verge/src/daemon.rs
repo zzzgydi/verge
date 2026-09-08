@@ -60,6 +60,30 @@ struct BackendConfig {
 }
 
 impl BackendConfig {
+    fn internal_socket(&self) -> PathBuf {
+        self.data_dir.join("control/mihomo.sock")
+    }
+
+    /// The primary runtime and background queries must use the same private controller.
+    fn build_runtime(&self) -> Result<MihomoRuntime<TcpControllerTransport>, AppError> {
+        let socket = self.internal_socket();
+        if socket.as_os_str().len() >= 104 {
+            return Err(AppError::new(
+                ErrorCode::InvalidInput,
+                "Verge data directory is too long for the internal controller socket",
+            ));
+        }
+        let transport = TcpControllerTransport::unix(socket.clone(), Duration::from_secs(2))?;
+        let mut runtime = MihomoRuntime::new(
+            MihomoClient::new(transport),
+            self.controller,
+            self.secret.clone(),
+            RealtimeOptions::default(),
+        )?;
+        runtime.set_internal_socket(socket);
+        Ok(runtime)
+    }
+
     fn from_env() -> Result<Self, AppError> {
         let controller = match env::var("VERGE_CONTROLLER") {
             Ok(value) => value
@@ -196,8 +220,7 @@ impl Backend {
             fs::set_permissions(&control_dir, fs::Permissions::from_mode(0o700))
                 .map_err(|e| AppError::new(ErrorCode::StorageFailed, e.to_string()))?;
         }
-        let socket = control_dir.join("mihomo.sock");
-        profiles.set_internal_socket(socket);
+        profiles.set_internal_socket(config.internal_socket());
         let settings = FileSettingsStore::open(&config.data_dir)?;
         let mut platform = MacSystemProxy::new(ProcessRunner, config.recovery_path.clone());
         let services = if config.services.is_empty() {
@@ -280,22 +303,8 @@ impl Backend {
             },
             runtime_config,
         )?;
-        let socket = config.data_dir.join("control/mihomo.sock");
-        if socket.as_os_str().len() >= 104 {
-            return Err(AppError::new(
-                ErrorCode::InvalidInput,
-                "Verge data directory is too long for the internal controller socket",
-            ));
-        }
-        supervisor.set_internal_socket(socket.clone());
-        let transport = TcpControllerTransport::unix(socket.clone(), Duration::from_secs(2))?;
-        let mut runtime = MihomoRuntime::new(
-            MihomoClient::new(transport),
-            config.controller,
-            config.secret.clone(),
-            RealtimeOptions::default(),
-        )?;
-        runtime.set_internal_socket(socket);
+        supervisor.set_internal_socket(config.internal_socket());
+        let mut runtime = config.build_runtime()?;
         runtime.set_sensitive_values(self.profiles.list().iter().filter_map(|profile| {
             match &profile.source {
                 crate::domain::ProfileSource::Remote { url } => Some(url.clone()),
@@ -1185,14 +1194,11 @@ impl Backend {
         })
     }
 
-    fn runtime_credentials(&self) -> Result<RuntimeCredentials, AppError> {
+    fn query_runtime(&self) -> Result<MihomoRuntime<TcpControllerTransport>, AppError> {
         if self.engine.is_none() {
             return Err(self.runtime_unavailable());
         }
-        Ok(RuntimeCredentials {
-            controller: self.config.controller,
-            secret: self.config.secret.clone(),
-        })
+        self.config.build_runtime()
     }
 
     /// 拉取实时事件缓冲（守护进程事件循环在 RealtimeTick 时调用）。
@@ -1685,11 +1691,11 @@ fn handle_daemon_request(
             );
             return;
         }
-        let credentials = match command_bus
+        let runtime = match command_bus
             .authorize(envelope.operation_id, envelope.context, risk)
-            .and_then(|()| backend.runtime_credentials())
+            .and_then(|()| backend.query_runtime())
         {
-            Ok(credentials) => credentials,
+            Ok(runtime) => runtime,
             Err(error) => {
                 let response = failed_response(request, error);
                 command_bus.complete(envelope.operation_id, risk, false, last_in_operation);
@@ -1703,7 +1709,7 @@ fn handle_daemon_request(
         *isolated_jobs += 1;
         let worker_tx = event_tx.clone();
         std::thread::spawn(move || {
-            let response = execute_isolated_runtime(request, credentials);
+            let response = execute_isolated_runtime(request, runtime);
             let _ = worker_tx.send(DaemonEvent::WorkerDone {
                 conn_id,
                 envelope,
@@ -1864,24 +1870,14 @@ fn is_isolated_runtime_request(request: &UiRequest) -> bool {
     )
 }
 
-fn execute_isolated_runtime(request: UiRequest, credentials: RuntimeCredentials) -> UiResponse {
+fn execute_isolated_runtime(
+    request: UiRequest,
+    mut runtime: MihomoRuntime<TcpControllerTransport>,
+) -> UiResponse {
     let UiRequest::Runtime(command) = request else {
         unreachable!("only runtime requests are sent to the runtime worker")
     };
-    let result = TcpControllerTransport::new(
-        credentials.controller,
-        &credentials.secret,
-        Duration::from_secs(2),
-    )
-    .and_then(|transport| {
-        MihomoRuntime::new(
-            MihomoClient::new(transport),
-            credentials.controller,
-            credentials.secret,
-            RealtimeOptions::default(),
-        )
-    })
-    .and_then(|mut runtime| RuntimeCommandHandler::new(&mut runtime).execute(command.clone()));
+    let result = RuntimeCommandHandler::new(&mut runtime).execute(command.clone());
     UiResponse::Runtime {
         request: command,
         result,
@@ -1949,6 +1945,9 @@ fn failed_response(request: UiRequest, error: AppError) -> UiResponse {
         },
     }
 }
+
+#[cfg(test)]
+mod runtime_tests;
 
 #[cfg(test)]
 mod tests {
