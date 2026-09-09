@@ -160,24 +160,13 @@ fn card(group: usize, member: usize, page: &ProxyPage, cx: &mut Context<ProxyPag
     let select_proxy = proxy.clone();
     let test_proxy = proxy.clone();
     let id = format!("proxy-card-{group}-{member}");
-    let mut metadata = h_flex()
-        .gap_1p5()
-        .min_w_0()
-        .overflow_hidden()
-        .child(badge(
-            detail.map_or("Unknown", |p| p.kind.as_str()).to_owned(),
-            cx,
-        ))
-        .child(badge(
-            match detail.and_then(|p| p.udp) {
-                Some(true) => "UDP",
-                Some(false) => "UDP ×",
-                None => "UDP ?",
-            },
-            cx,
-        ));
+    let mut metadata = h_flex().gap_1p5().min_w_0().overflow_hidden().child(badge(
+        detail.map_or("Unknown", |p| p.kind.as_str()).to_owned(),
+        cx,
+    ));
     if let Some(details) = detail {
         for (enabled, name) in [
+            (details.udp == Some(true), "UDP"),
             (details.xudp, "XUDP"),
             (details.tfo, "TFO"),
             (details.mptcp, "MPTCP"),
