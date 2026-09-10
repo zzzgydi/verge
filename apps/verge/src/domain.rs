@@ -1,3 +1,5 @@
+mod system_proxy;
+pub use system_proxy::{DEFAULT_PROXY_BYPASS, SystemProxySettings, SystemProxyTarget};
 mod network;
 pub use network::{CoreNetworkSettings, ExternalControllerSettings};
 
@@ -86,6 +88,9 @@ pub enum AppCommand {
     UninstallHelper,
     UpdateApplicationSettings {
         settings: ApplicationSettings,
+    },
+    UpdateSystemProxySettings {
+        settings: Box<SystemProxySettings>,
     },
     ExportApplicationSettings {
         destination: String,
@@ -302,6 +307,8 @@ pub enum ThemePreference {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ApplicationSettings {
     #[serde(default)]
+    pub system_proxy: Box<SystemProxySettings>,
+    #[serde(default)]
     pub theme: ThemePreference,
     #[serde(default = "default_language")]
     pub language: String,
@@ -318,6 +325,7 @@ pub struct ApplicationSettings {
 impl Default for ApplicationSettings {
     fn default() -> Self {
         Self {
+            system_proxy: Box::default(),
             theme: ThemePreference::System,
             language: default_language(),
             log_limit: default_log_limit(),
@@ -329,6 +337,7 @@ impl Default for ApplicationSettings {
 
 impl ApplicationSettings {
     pub fn validate(&self) -> Result<(), AppError> {
+        self.system_proxy.validate()?;
         if !matches!(self.language.as_str(), "en" | "zh-CN") {
             return Err(AppError::new(
                 ErrorCode::InvalidInput,
@@ -356,9 +365,7 @@ impl ApplicationSettings {
                 self.theme = defaults.theme;
                 self.language = defaults.language;
             }
-            // 应用设置当前没有持久化的网络字段(内核网络开关由运行时命令管理);
-            // 该作用域保留给后续字段,重置是显式的空操作。
-            SettingsScope::Network => {}
+            SettingsScope::Network => self.system_proxy = defaults.system_proxy,
             SettingsScope::System => {
                 self.log_limit = defaults.log_limit;
                 self.launch_at_login = defaults.launch_at_login;
@@ -843,10 +850,42 @@ pub struct SystemProxyState {
     pub recovery_pending: bool,
 }
 
+impl SystemProxyState {
+    /// Shared by GUI and tray: all services must use one complete proxy mode.
+    pub fn unified_enabled(&self) -> bool {
+        let Some(first) = self.services.first() else {
+            return false;
+        };
+        self.services.iter().all(|service| {
+            if first.auto_proxy.enabled {
+                service.auto_proxy.enabled
+                    && first
+                        .auto_proxy
+                        .url
+                        .as_ref()
+                        .is_some_and(|url| !url.is_empty())
+                    && service.auto_proxy.url == first.auto_proxy.url
+                    && !service.web.enabled
+                    && !service.secure_web.enabled
+                    && !service.socks.enabled
+            } else {
+                !service.auto_proxy.enabled
+                    && [&service.web, &service.secure_web, &service.socks]
+                        .iter()
+                        .all(|proxy| proxy.enabled && proxy.endpoint == first.web.endpoint)
+            }
+        })
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SystemProxyCommand {
     GetState,
+    /// Use the daemon-owned host, mixed port, PAC mode and bypass settings.
+    SetEnabled {
+        enabled: bool,
+    },
     Enable {
         services: Vec<String>,
         endpoint: ProxyEndpoint,
@@ -869,7 +908,8 @@ impl SystemProxyCommand {
     pub fn risk(&self) -> CommandRisk {
         match self {
             Self::GetState => CommandRisk::ReadOnly,
-            Self::Enable { .. }
+            Self::SetEnabled { .. }
+            | Self::Enable { .. }
             | Self::Disable
             | Self::RecoverPending
             | Self::SetSocks { .. }
@@ -912,6 +952,7 @@ impl AppCommand {
             | Self::ExportDiagnostics { .. }
             | Self::ExportEncryptedBackup { .. } => CommandRisk::LowRiskWrite,
             Self::UpdateCoreNetworkSettings { .. }
+            | Self::UpdateSystemProxySettings { .. }
             | Self::UpdateMihomo
             | Self::InstallHelper
             | Self::UpdateApplication
@@ -1020,6 +1061,8 @@ mod tests {
     fn system_proxy_write_variants_are_privileged() {
         let endpoint = ProxyEndpoint::new("127.0.0.1", 7890).unwrap();
         for command in [
+            SystemProxyCommand::SetEnabled { enabled: true },
+            SystemProxyCommand::SetEnabled { enabled: false },
             SystemProxyCommand::SetSocks {
                 enabled: true,
                 endpoint,

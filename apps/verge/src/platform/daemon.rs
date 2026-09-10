@@ -101,6 +101,24 @@ pub fn run_accessory_appkit_loop() {
     std::process::exit(1);
 }
 
+/// Restore hidden/minimized GUI windows before GPUI activates the application.
+/// Called only by the GUI process on the AppKit main thread.
+pub fn restore_gui_windows() {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::NSApplication;
+        let marker = MainThreadMarker::new().expect("GUI activation requires the main thread");
+        let app = NSApplication::sharedApplication(marker);
+        app.unhide(None);
+        for window in app.windows() {
+            if window.isMiniaturized() {
+                window.deminiaturize(None);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

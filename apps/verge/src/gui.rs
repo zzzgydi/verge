@@ -126,248 +126,280 @@ pub fn run() {
     let request_tx = client.request_sender();
     let mut events = client.into_events();
 
-    gpui_platform::application()
-        // GUI 进程关掉最后一个窗口即退出；守护进程与托盘不受影响。
+    let application = gpui_platform::application()
         .with_quit_mode(QuitMode::LastWindowClosed)
-        .with_assets(Assets)
-        .run(|cx| {
-            gpui_component::init(cx);
-            set_app_menus(Lang::En, cx);
-            cx.bind_keys([
-                KeyBinding::new("cmd-q", QuitVerge, None),
-                KeyBinding::new("cmd-w", CloseWindow, None),
-                KeyBinding::new("cmd-h", HideVerge, None),
-                KeyBinding::new("cmd-alt-h", HideOtherApps, None),
-                KeyBinding::new("cmd-m", MinimizeWindow, None),
-                KeyBinding::new("ctrl-cmd-f", ToggleFullScreen, None),
-            ]);
-            cx.on_action(|_: &HideVerge, cx| cx.hide());
-            cx.on_action(|_: &HideOtherApps, cx| cx.hide_other_apps());
-            cx.on_action(|_: &ShowAllApps, cx| cx.unhide_other_apps());
-            cx.on_action(|_: &OpenProjectPage, cx| {
-                cx.open_url("https://github.com/zzzgydi/verge")
-            });
-            cx.on_action(|_: &AboutVerge, cx| {
-                if let Some(handle) = cx.active_window() {
-                    let _ = handle.update(cx, |_, window, cx| {
-                        let answer = window.prompt(
-                            PromptLevel::Info,
-                            "Verge",
-                            Some(concat!("Version ", env!("CARGO_PKG_VERSION"))),
-                            &[PromptButton::ok("OK")],
-                            cx,
-                        );
-                        cx.spawn(async move |_| {
-                            let _ = answer.await;
-                        })
-                        .detach();
-                    });
-                }
-            });
-            cx.on_action(|_: &CloseWindow, cx| {
-                if let Some(handle) = cx.active_window() {
-                    let _ = handle.update(cx, |_, window, _| window.remove_window());
-                }
-            });
-            cx.on_action(|_: &MinimizeWindow, cx| {
-                if let Some(handle) = cx.active_window() {
-                    let _ = handle.update(cx, |_, window, _| window.minimize_window());
-                }
-            });
-            cx.on_action(|_: &ZoomWindow, cx| {
-                if let Some(handle) = cx.active_window() {
-                    let _ = handle.update(cx, |_, window, _| window.zoom_window());
-                }
-            });
-            cx.on_action(|_: &ToggleFullScreen, cx| {
-                if let Some(handle) = cx.active_window() {
-                    let _ = handle.update(cx, |_, window, _| window.toggle_fullscreen());
-                }
-            });
-            let quit_requests = request_tx.clone();
-            cx.on_action(move |_: &QuitVerge, cx| {
-                if quit_requests.send(quit_request()).is_err() {
-                    cx.quit();
-                }
-            });
-            // 窗口级快捷键：cmd+1…7 切页面、cmd+r 刷新当前页（“Verge” key context）。
-            let modifier = if cfg!(target_os = "macos") {
-                "cmd"
-            } else {
-                "ctrl"
-            };
-            cx.bind_keys([
-                KeyBinding::new(&format!("{modifier}-1"), GoToHome, Some("Verge")),
-                KeyBinding::new(&format!("{modifier}-2"), GoToProxies, Some("Verge")),
-                KeyBinding::new(&format!("{modifier}-3"), GoToRules, Some("Verge")),
-                KeyBinding::new(&format!("{modifier}-4"), GoToConnections, Some("Verge")),
-                KeyBinding::new(&format!("{modifier}-5"), GoToProfiles, Some("Verge")),
-                KeyBinding::new(&format!("{modifier}-6"), GoToLogs, Some("Verge")),
-                KeyBinding::new(&format!("{modifier}-7"), GoToSettings, Some("Verge")),
-                KeyBinding::new(&format!("{modifier}-r"), RefreshPage, Some("Verge")),
-            ]);
-            let mut notifier = MacNotifier::new(ProcessRunner);
-            let window_options = WindowOptions {
-                window_bounds: Some(WindowBounds::centered(size(px(1100.), px(720.)), cx)),
-                window_min_size: Some(size(px(960.), px(640.))),
-                ..TitleBar::window_options()
-            };
-            cx.open_window(window_options, |window, cx| {
-                    window.activate_window();
-                    window.set_window_title("Verge");
-                    let view = cx.new(|cx| MainView::new(request_tx, window, cx));
-                    view.update(cx, |view, cx| {
-                        // 启动时先按系统外观设置一次主题。
-                        view.sync_theme(window, cx);
-                    });
-                    let weak_view = view.downgrade();
-                    // IPC 事件驱动消费：Welcome / Response / RealtimeBatch / 窗口控制。
-                    // 窗口句柄通过 weak_view.update_in 获取，协程不持有 WindowHandle。
-                    cx.spawn(async move |cx| {
-                        while let Some(event) = events.next().await {
-                            match event {
-                                ClientEvent::Welcome {
-                                    protocol_version,
-                                    initial,
-                                } => {
-                                    let _ = weak_view.update_in(cx, |view, window, cx| {
-                                        // 初始快照直接填充领域态，首帧即有内容。
-                                        view.state.profiles = initial.profiles;
-                                        view.state.selected_profile = initial.selected_profile;
-                                        view.state.application_settings =
-                                            Some(initial.application_settings);
-                                        view.state.runtime_settings = initial.runtime_settings;
-                                        set_app_menus(view.lang(), cx);
-                                        view.sync_theme(window, cx);
-                                        view.sync_form_inputs(window, cx);
-                                        view.sync_connections(cx);
-                                        view.sync_proxies(cx);
-                                        // 增量补齐：RefreshHome 同时建立实时订阅，
-                                        // 后续变更全部走 Response / RealtimeBatch。
-                                        view.dispatch(UiAction::RefreshHome, cx);
-                                        view.dispatch(UiAction::RefreshProfiles, cx);
-                                        view.dispatch(UiAction::RefreshSettings, cx);
-                                    });
-                                    let _ = protocol_version;
-                                }
-                                ClientEvent::Response(envelope) => {
-                                    let (yaml_load_error, merge_load_error, merged_load_error) =
-                                        match &envelope.response {
-                                            UiResponse::Profile {
-                                                request: AppCommand::GetProfileYaml { .. },
-                                                result: Err(error),
-                                            } => (Some(error.clone()), None, None),
-                                            UiResponse::Profile {
-                                                request: AppCommand::GetMergeConfig,
-                                                result: Err(error),
-                                            } => (None, Some(error.clone()), None),
-                                            UiResponse::Profile {
-                                                request: AppCommand::GetMergedProfileYaml { .. },
-                                                result: Err(error),
-                                            } => (None, None, Some(error.clone())),
-                                            _ => (None, None, None),
-                                        };
-                                    let import_preview_failed = matches!(
-                                        &envelope.response,
-                                        UiResponse::Profile {
-                                            request:
-                                                AppCommand::PreviewApplicationSettingsImport {
-                                                    ..
-                                                },
-                                            result: Err(_),
-                                        }
-                                    );
-                                    // toast / OS 通知文案按当前设置语言生成，语言从视图状态取，
-                                    // 因此移进 update_in 闭包内计算。
-                                    let mut os_notification = None;
-                                    {
-                                        let os_notification_slot = &mut os_notification;
-                                        let _ = weak_view.update_in(cx, move |view, window, cx| {
-                                            let lang = view.lang();
-                                            *os_notification_slot = notification_for(lang, &envelope.response);
-                                            let toast = toast_for(lang, &envelope.response);
-                                            view.state.apply_response_envelope(envelope);
-                                            set_app_menus(view.lang(), cx);
-                                            if let Some(error) = &yaml_load_error {
-                                                view.fail_yaml_sheet(error, window, cx);
-                                            }
-                                            if let Some(error) = &merge_load_error {
-                                                view.fail_merge_sheet(error, window, cx);
-                                            }
-                                            if let Some(error) = &merged_load_error {
-                                                view.fail_merged_sheet(error, window, cx);
-                                            }
-                                            if import_preview_failed {
-                                                view.fail_import_preview();
-                                            }
-                                            // 设置响应可能改了主题偏好，顺势同步一次。
-                                            view.sync_theme(window, cx);
-                                            // 设置首次到达后同步一次表单初值。
-                                            view.sync_form_inputs(window, cx);
-                                            view.sync_connections(cx);
-                                            view.sync_proxies(cx);
-                                            // “查看 YAML”在加载完成后打开 Sheet。
-                                            view.maybe_open_yaml_sheet(window, cx);
-                                            // Merge 配置与合并结果 Sheet 同样在加载完成后填充。
-                                            view.maybe_open_merge_sheet(window, cx);
-                                            view.maybe_open_merged_sheet(window, cx);
-                                            // 设置导入预览到达后打开差异确认弹窗。
-                                            view.maybe_open_import_preview_dialog(window, cx);
-                                            if let Some(toast) = toast {
-                                                window.push_notification(toast, cx);
-                                            }
-                                            cx.notify();
-                                        });
-                                    }
-                                    if let Some((title, body)) = os_notification {
-                                        let _ = notifier.notify(title, body);
-                                    }
-                                }
-                                ClientEvent::RealtimeBatch(events) => {
-                                    let _ = weak_view.update_in(cx, |view, _, cx| {
-                                        view.telemetry.update(cx, |telemetry, cx| telemetry.apply(&events, cx));
-                                        let mut redraw = false;
-                                        let old_count = view.state.connections.as_ref().map(|s| s.connection_count);
-                                        for event in events {
-                                            redraw |= match &event {
-                                                crate::domain::RealtimeEvent::Log(_) => view.state.page == crate::ui::Page::Logs,
-                                                crate::domain::RealtimeEvent::Reconnecting { .. } => true,
-                                                _ => false,
-                                            };
-                                            view.state.apply_realtime(event);
-                                        }
-                                        view.sync_connections(cx);
-                                        let new_count = view.state.connections.as_ref().map(|s| s.connection_count);
-                                        if redraw || old_count != new_count { cx.notify(); }
-                                    });
-                                }
-                                ClientEvent::ActivateWindow => {
-                                    let _ = weak_view.update_in(
-                                        cx,
-                                        |_, window, _| window.activate_window(),
-                                    );
-                                }
-                                ClientEvent::HideWindow => cx.update(|cx| cx.hide()),
-                                ClientEvent::Duplicate => {
-                                    // 已有主 GUI 实例，本实例退出。
-                                    cx.update(|cx| cx.quit());
-                                    return;
-                                }
-                                ClientEvent::Closed { reason } => {
-                                    eprintln!("Verge daemon closed the connection: {reason}");
-                                    cx.update(|cx| cx.quit());
-                                    return;
-                                }
-                            }
-                        }
-                        // 事件流结束（守护进程退出）：本实例也退出。
-                        cx.update(|cx| cx.quit());
+        .with_assets(Assets);
+    application.on_reopen(|cx| {
+        for handle in cx.windows() {
+            let _ = handle.update(cx, |_, window, cx| foreground_window(window, cx));
+        }
+    });
+    application.run(|cx| {
+        gpui_component::init(cx);
+        set_app_menus(Lang::En, cx);
+        cx.bind_keys([
+            KeyBinding::new("cmd-q", QuitVerge, None),
+            KeyBinding::new("cmd-h", HideVerge, None),
+            KeyBinding::new("cmd-alt-h", HideOtherApps, None),
+        ]);
+        cx.on_action(|_: &HideVerge, cx| cx.hide());
+        cx.on_action(|_: &HideOtherApps, cx| cx.hide_other_apps());
+        cx.on_action(|_: &ShowAllApps, cx| cx.unhide_other_apps());
+        cx.on_action(|_: &OpenProjectPage, cx| cx.open_url("https://github.com/zzzgydi/verge"));
+        cx.on_action(|_: &AboutVerge, cx| {
+            if let Some(handle) = cx.active_window() {
+                let _ = handle.update(cx, |_, window, cx| {
+                    let answer = window.prompt(
+                        PromptLevel::Info,
+                        "Verge",
+                        Some(concat!("Version ", env!("CARGO_PKG_VERSION"))),
+                        &[PromptButton::ok("OK")],
+                        cx,
+                    );
+                    cx.spawn(async move |_| {
+                        let _ = answer.await;
                     })
                     .detach();
-                    cx.new(|cx| Root::new(view, window, cx).bg(cx.theme().background))
-                })
-                .expect("failed to open Verge window");
+                });
+            }
         });
+        bind_window_actions(cx);
+        let quit_requests = request_tx.clone();
+        cx.on_action(move |_: &QuitVerge, cx| {
+            if quit_requests.send(quit_request()).is_err() {
+                cx.quit();
+            }
+        });
+        // 窗口级快捷键：cmd+1…7 切页面、cmd+r 刷新当前页（“Verge” key context）。
+        let modifier = if cfg!(target_os = "macos") {
+            "cmd"
+        } else {
+            "ctrl"
+        };
+        cx.bind_keys([
+            KeyBinding::new(&format!("{modifier}-1"), GoToHome, Some("Verge")),
+            KeyBinding::new(&format!("{modifier}-2"), GoToProxies, Some("Verge")),
+            KeyBinding::new(&format!("{modifier}-3"), GoToRules, Some("Verge")),
+            KeyBinding::new(&format!("{modifier}-4"), GoToConnections, Some("Verge")),
+            KeyBinding::new(&format!("{modifier}-5"), GoToProfiles, Some("Verge")),
+            KeyBinding::new(&format!("{modifier}-6"), GoToLogs, Some("Verge")),
+            KeyBinding::new(&format!("{modifier}-7"), GoToSettings, Some("Verge")),
+            KeyBinding::new(&format!("{modifier}-r"), RefreshPage, Some("Verge")),
+        ]);
+        let mut notifier = MacNotifier::new(ProcessRunner);
+        let window_options = WindowOptions {
+            window_bounds: Some(WindowBounds::centered(size(px(1100.), px(720.)), cx)),
+            window_min_size: Some(size(px(960.), px(640.))),
+            ..TitleBar::window_options()
+        };
+        cx.open_window(window_options, |window, cx| {
+            window.set_window_title("Verge");
+            let view = cx.new(|cx| MainView::new(request_tx, window, cx));
+            view.update(cx, |view, cx| {
+                // 启动时先按系统外观设置一次主题。
+                view.sync_theme(window, cx);
+            });
+            let weak_view = view.downgrade();
+            // IPC 事件驱动消费：Welcome / Response / RealtimeBatch / 窗口控制。
+            // 窗口句柄通过 weak_view.update_in 获取，协程不持有 WindowHandle。
+            cx.spawn(async move |cx| {
+                while let Some(event) = events.next().await {
+                    match event {
+                        ClientEvent::Welcome {
+                            protocol_version,
+                            initial,
+                        } => {
+                            let _ = weak_view.update_in(cx, |view, window, cx| {
+                                // 初始快照直接填充领域态，首帧即有内容。
+                                view.state.daemon_capabilities = initial.capabilities;
+                                view.state.profiles = initial.profiles;
+                                view.state.selected_profile = initial.selected_profile;
+                                view.state.application_settings =
+                                    Some(initial.application_settings);
+                                view.state.runtime_settings = initial.runtime_settings;
+                                set_app_menus(view.lang(), cx);
+                                view.sync_theme(window, cx);
+                                view.sync_form_inputs(window, cx);
+                                view.sync_connections(cx);
+                                view.sync_proxies(cx);
+                                // 增量补齐：RefreshHome 同时建立实时订阅，
+                                // 后续变更全部走 Response / RealtimeBatch。
+                                view.dispatch(UiAction::RefreshHome, cx);
+                                view.dispatch(UiAction::RefreshProfiles, cx);
+                                view.dispatch(UiAction::RefreshSettings, cx);
+                            });
+                            let _ = protocol_version;
+                        }
+                        ClientEvent::Response(envelope) => {
+                            let (yaml_load_error, merge_load_error, merged_load_error) =
+                                match &envelope.response {
+                                    UiResponse::Profile {
+                                        request: AppCommand::GetProfileYaml { .. },
+                                        result: Err(error),
+                                    } => (Some(error.clone()), None, None),
+                                    UiResponse::Profile {
+                                        request: AppCommand::GetMergeConfig,
+                                        result: Err(error),
+                                    } => (None, Some(error.clone()), None),
+                                    UiResponse::Profile {
+                                        request: AppCommand::GetMergedProfileYaml { .. },
+                                        result: Err(error),
+                                    } => (None, None, Some(error.clone())),
+                                    _ => (None, None, None),
+                                };
+                            let import_preview_failed = matches!(
+                                &envelope.response,
+                                UiResponse::Profile {
+                                    request: AppCommand::PreviewApplicationSettingsImport { .. },
+                                    result: Err(_),
+                                }
+                            );
+                            // toast / OS 通知文案按当前设置语言生成，语言从视图状态取，
+                            // 因此移进 update_in 闭包内计算。
+                            let mut os_notification = None;
+                            {
+                                let os_notification_slot = &mut os_notification;
+                                let _ = weak_view.update_in(cx, move |view, window, cx| {
+                                    let lang = view.lang();
+                                    *os_notification_slot =
+                                        notification_for(lang, &envelope.response);
+                                    let toast = toast_for(lang, &envelope.response);
+                                    view.state.apply_response_envelope(envelope);
+                                    set_app_menus(view.lang(), cx);
+                                    if let Some(error) = &yaml_load_error {
+                                        view.fail_yaml_sheet(error, window, cx);
+                                    }
+                                    if let Some(error) = &merge_load_error {
+                                        view.fail_merge_sheet(error, window, cx);
+                                    }
+                                    if let Some(error) = &merged_load_error {
+                                        view.fail_merged_sheet(error, window, cx);
+                                    }
+                                    if import_preview_failed {
+                                        view.fail_import_preview();
+                                    }
+                                    // 设置响应可能改了主题偏好，顺势同步一次。
+                                    view.sync_theme(window, cx);
+                                    // 设置首次到达后同步一次表单初值。
+                                    view.sync_form_inputs(window, cx);
+                                    view.sync_connections(cx);
+                                    view.sync_proxies(cx);
+                                    // “查看 YAML”在加载完成后打开 Sheet。
+                                    view.maybe_open_yaml_sheet(window, cx);
+                                    // Merge 配置与合并结果 Sheet 同样在加载完成后填充。
+                                    view.maybe_open_merge_sheet(window, cx);
+                                    view.maybe_open_merged_sheet(window, cx);
+                                    // 设置导入预览到达后打开差异确认弹窗。
+                                    view.maybe_open_import_preview_dialog(window, cx);
+                                    if let Some(toast) = toast {
+                                        window.push_notification(toast, cx);
+                                    }
+                                    cx.notify();
+                                });
+                            }
+                            if let Some((title, body)) = os_notification {
+                                let _ = notifier.notify(title, body);
+                            }
+                        }
+                        ClientEvent::RealtimeBatch(events) => {
+                            let _ = weak_view.update_in(cx, |view, _, cx| {
+                                view.telemetry
+                                    .update(cx, |telemetry, cx| telemetry.apply(&events, cx));
+                                let mut redraw = false;
+                                let old_count =
+                                    view.state.connections.as_ref().map(|s| s.connection_count);
+                                for event in events {
+                                    redraw |= match &event {
+                                        crate::domain::RealtimeEvent::Log(_) => {
+                                            view.state.page == crate::ui::Page::Logs
+                                        }
+                                        crate::domain::RealtimeEvent::Reconnecting { .. } => true,
+                                        _ => false,
+                                    };
+                                    view.state.apply_realtime(event);
+                                }
+                                view.sync_connections(cx);
+                                let new_count =
+                                    view.state.connections.as_ref().map(|s| s.connection_count);
+                                if redraw || old_count != new_count {
+                                    cx.notify();
+                                }
+                            });
+                        }
+                        ClientEvent::ActivateWindow => {
+                            let _ = weak_view
+                                .update_in(cx, |_, window, cx| foreground_window(window, cx));
+                        }
+                        ClientEvent::HideWindow => cx.update(|cx| cx.hide()),
+                        ClientEvent::Duplicate => {
+                            // 已有主 GUI 实例，本实例退出。
+                            cx.update(|cx| cx.quit());
+                            return;
+                        }
+                        ClientEvent::Closed { reason } => {
+                            eprintln!("Verge daemon closed the connection: {reason}");
+                            cx.update(|cx| cx.quit());
+                            return;
+                        }
+                    }
+                }
+                // 事件流结束（守护进程退出）：本实例也退出。
+                cx.update(|cx| cx.quit());
+            })
+            .detach();
+            cx.new(|cx| Root::new(view, window, cx).bg(cx.theme().background))
+        })
+        .expect("failed to open Verge window");
+        // Activate after AppKit has finished creating and registering the window.
+        cx.defer(|cx| {
+            for handle in cx.windows() {
+                let _ = handle.update(cx, |_, window, cx| foreground_window(window, cx));
+            }
+        });
+    });
+}
+
+pub(crate) fn bind_window_actions(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("cmd-w", CloseWindow, None),
+        KeyBinding::new("cmd-m", MinimizeWindow, None),
+        KeyBinding::new("ctrl-cmd-f", ToggleFullScreen, None),
+    ]);
+    cx.on_action(|_: &CloseWindow, cx| {
+        if let Some(handle) = cx.active_window() {
+            // Keyboard dispatch already leases the window. Update it after dispatch.
+            cx.defer(move |cx| {
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+            });
+        }
+    });
+    cx.on_action(|_: &MinimizeWindow, cx| {
+        if let Some(handle) = cx.active_window() {
+            cx.defer(move |cx| {
+                let _ = handle.update(cx, |_, window, _| window.minimize_window());
+            });
+        }
+    });
+    cx.on_action(|_: &ZoomWindow, cx| {
+        if let Some(handle) = cx.active_window() {
+            cx.defer(move |cx| {
+                let _ = handle.update(cx, |_, window, _| window.zoom_window());
+            });
+        }
+    });
+    cx.on_action(|_: &ToggleFullScreen, cx| {
+        if let Some(handle) = cx.active_window() {
+            cx.defer(move |cx| {
+                let _ = handle.update(cx, |_, window, _| window.toggle_fullscreen());
+            });
+        }
+    });
+}
+
+pub(crate) fn foreground_window(window: &mut Window, cx: &mut App) {
+    crate::platform::restore_gui_windows();
+    cx.activate(true);
+    window.activate_window();
 }
 
 /// 连接守护进程；未运行时拉起并等待就绪。
@@ -509,6 +541,7 @@ fn toast_for(lang: Lang, response: &UiResponse) -> Option<Notification> {
                         || matches!(
                             request,
                             AppCommand::UpdateApplicationSettings { .. }
+                                | AppCommand::UpdateSystemProxySettings { .. }
                                 | AppCommand::PreviewApplicationSettingsImport { .. }
                                 | AppCommand::CheckAppUpdate
                         ) =>

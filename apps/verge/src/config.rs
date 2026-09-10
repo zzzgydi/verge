@@ -787,6 +787,15 @@ impl FileProfileStore {
         Ok(path)
     }
 
+    pub fn system_proxy_mixed_endpoint(&self, id: &ProfileId) -> Result<ProxyEndpoint, AppError> {
+        let value = self.effective_value(id)?;
+        let port = value.get("mixed-port").and_then(serde_yaml::Value::as_u64)
+            .and_then(|port| u16::try_from(port).ok()).filter(|port| *port > 0)
+            .ok_or_else(|| AppError::new(ErrorCode::ValidationFailed,
+                "unified system proxy requires a mixed-port; save a proxy port in Network settings"))?;
+        ProxyEndpoint::new("127.0.0.1", port)
+    }
+
     pub fn system_proxy_endpoint(&self, id: &ProfileId) -> Result<ProxyEndpoint, AppError> {
         let value = self.effective_value(id)?;
         let mapping = value.as_mapping().ok_or_else(|| {
@@ -1432,6 +1441,7 @@ mod tests {
             log_limit: 1_000,
             launch_at_login: true,
             global_hotkey: Some("CmdOrCtrl+Shift+V".into()),
+            ..Default::default()
         };
         store.update(settings.clone()).unwrap();
         assert_eq!(
@@ -1845,6 +1855,36 @@ mod tests {
     }
 
     #[test]
+    fn unified_proxy_requires_effective_mixed_port_not_http_only() {
+        let directory = TestDir::new("unified-proxy-port");
+        let mut store = FileProfileStore::open(&directory.0).unwrap();
+        for (name, yaml, expected) in [
+            ("http", "port: 7890\n", None),
+            ("zero", "mixed-port: 0\nport: 7890\n", None),
+            ("mixed", "mixed-port: 7897\nport: 7890\n", Some(7897)),
+        ] {
+            let id = ProfileId::parse(name).unwrap();
+            store
+                .import(profile(name, UpdatePolicy::Manual), yaml)
+                .unwrap();
+            assert_eq!(
+                store.system_proxy_mixed_endpoint(&id).ok().map(|e| e.port),
+                expected
+            );
+        }
+        store
+            .set_merge_yaml("rules:\n  - key: mixed-port\n    op: override\n    value: 7899\n")
+            .unwrap();
+        assert_eq!(
+            store
+                .system_proxy_mixed_endpoint(&ProfileId::parse("http").unwrap())
+                .unwrap()
+                .port,
+            7899
+        );
+    }
+
+    #[test]
     fn system_proxy_socks_endpoint_prefers_mixed_port_and_is_optional() {
         let directory = TestDir::new("socks-endpoint");
         let mut store = FileProfileStore::open(&directory.0).unwrap();
@@ -2016,7 +2056,7 @@ mod tests {
         assert!(object.contains_key("version"));
         assert_eq!(value["version"], 1);
         let settings_object = value["settings"].as_object().unwrap();
-        assert_eq!(settings_object.len(), 5);
+        assert_eq!(settings_object.len(), 6);
         for key in [
             "global_hotkey",
             "language",

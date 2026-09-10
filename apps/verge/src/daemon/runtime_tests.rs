@@ -161,6 +161,33 @@ fn daemon_queries_use_internal_socket_with_external_controller_disabled() {
     assert!(std::net::TcpStream::connect(backend.config.controller).is_err());
     backend.engine = Some(engine);
     let (server, _) = IpcServer::bind(&dir.0.join("daemon.sock")).unwrap();
+    // Tray commands use the same controller and validated profile lifecycle with no GUI.
+    for mode in [RunMode::Global, RunMode::Direct, RunMode::Rule] {
+        super::tray::execute_inner(&mut backend, &server, TrayCommand::SetMode(mode)).unwrap();
+        let response = backend.execute(UiRequest::Runtime(RuntimeCommand::GetMode));
+        assert!(
+            matches!(response, UiResponse::Runtime { result: Ok(crate::domain::RuntimeCommandResult { output: RuntimeCommandOutput::Mode(actual), .. }), .. } if actual == mode)
+        );
+    }
+    super::tray::execute_inner(
+        &mut backend,
+        &server,
+        TrayCommand::SelectProxy {
+            group: "GLOBAL".into(),
+            proxy: "DIRECT".into(),
+        },
+    )
+    .unwrap();
+    super::tray::execute_inner(&mut backend, &server, TrayCommand::RestartCore).unwrap();
+    assert!(
+        backend
+            .engine
+            .as_ref()
+            .unwrap()
+            .supervisor
+            .health(Duration::from_secs(1))
+            .is_ok()
+    );
     let (tx, rx) = mpsc::channel();
     let mut bus = CommandBus::default();
     let mut jobs = 0;

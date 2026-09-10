@@ -43,8 +43,8 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         || tr(lang, "home.no_profile").to_owned(),
         |p| p.name.clone(),
     );
-    let proxy_settings = view.state.runtime_settings.clone();
-    let proxy_available = proxy_settings.is_some();
+    let proxy_available =
+        view.state.runtime_settings.is_some() || view.state.system_proxy_enabled();
 
     let connection = panel(cx)
         .flex_1()
@@ -108,18 +108,12 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                         .child(
                             Switch::new("system-proxy")
                                 .checked(view.state.system_proxy_enabled())
-                                .disabled(!proxy_available)
+                                .disabled(!proxy_available || view.is_pending(&["system_proxy"]))
                                 .on_click(cx.listener(move |this, checked: &bool, _, cx| {
-                                    if let Some(settings) = &proxy_settings {
-                                        this.dispatch(
-                                            UiAction::SetSystemProxy {
-                                                enabled: *checked,
-                                                services: settings.system_proxy_services.clone(),
-                                                endpoint: settings.system_proxy_endpoint.clone(),
-                                            },
-                                            cx,
-                                        );
-                                    }
+                                    this.dispatch(
+                                        UiAction::SetSystemProxy { enabled: *checked },
+                                        cx,
+                                    );
                                 })),
                         ),
                 )

@@ -611,3 +611,165 @@ fn unknown_error_has_no_misleading_recovery_hint() {
     assert_eq!(super::recovery_hint(Lang::ZhCn, &error), None);
     assert_eq!(error.message, "Try again later");
 }
+
+#[gpui::test]
+fn cmd_w_closes_main_window_with_focused_input(cx: &mut TestAppContext) {
+    let (_, view_holder, visual) = setup(cx);
+    let view = view_holder.borrow().clone().unwrap();
+    visual.update(|window, cx| {
+        super::bind_window_actions(cx);
+        view.update(cx, |view, cx| view.open_import_dialog(window, cx));
+    });
+    visual.run_until_parked();
+    visual.simulate_keystrokes("cmd-w");
+    assert!(
+        cx.windows().is_empty(),
+        "Cmd+W closes the window even with a dialog/input focused"
+    );
+}
+
+#[gpui::test]
+fn cmd_w_closes_window_from_main_view(cx: &mut TestAppContext) {
+    let (_, _, visual) = setup(cx);
+    visual.update(|_, cx| super::bind_window_actions(cx));
+    visual.run_until_parked();
+    visual.simulate_keystrokes("cmd-w");
+    assert!(cx.windows().is_empty());
+}
+
+#[gpui::test]
+fn system_proxy_dialog_keeps_draft_until_success_and_fits_small_window(cx: &mut TestAppContext) {
+    use crate::{domain::*, ui::UiRequest};
+    cx.update(gpui_component::init);
+    let (tx, rx) = mpsc::channel();
+    let holder: ViewHolder = Default::default();
+    let copy = holder.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| MainView::new(tx, window, cx));
+        *copy.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = holder.borrow().clone().unwrap();
+    cx.simulate_resize(gpui::size(gpui::px(960.), gpui::px(640.)));
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state.application_settings = Some(ApplicationSettingsSnapshot {
+                settings: ApplicationSettings::default(),
+                data_directory: "/tmp/test".into(),
+                app_version: None,
+            });
+            view.state.daemon_capabilities =
+                vec![crate::ipc::protocol::UNIFIED_SYSTEM_PROXY.into()];
+            view.open_system_proxy_dialog(window, cx);
+        })
+    });
+    cx.run_until_parked();
+    for _ in 0..25 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(16));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    }
+    let bounds = cx.debug_bounds("system-proxy-dialog-scroll").unwrap();
+    let before = cx.debug_bounds("proxy-bypass-editor").unwrap();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: bounds.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-500.))),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    let after = cx.debug_bounds("proxy-bypass-editor").unwrap();
+    assert!(
+        after.top() < before.top(),
+        "bounds={bounds:?}, before={before:?}, after={after:?}"
+    );
+    assert!(
+        after.bottom() <= bounds.bottom(),
+        "custom bypass editor must be reachable"
+    );
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: bounds.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(500.))),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    let toggle = cx.debug_bounds("proxy-pac-mode").unwrap();
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    let save = cx.debug_bounds("proxy-dialog-save").unwrap();
+    assert!(save.bottom() <= gpui::px(640.));
+    cx.simulate_click(save.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    let UiRequest::Profile(AppCommand::UpdateSystemProxySettings { settings }) =
+        rx.try_recv().unwrap().request
+    else {
+        panic!("wrong request")
+    };
+    assert!(settings.pac_mode);
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            assert!(
+                !view
+                    .state
+                    .application_settings
+                    .as_ref()
+                    .unwrap()
+                    .settings
+                    .system_proxy
+                    .pac_mode
+            );
+            view.state
+                .application_settings
+                .as_mut()
+                .unwrap()
+                .settings
+                .system_proxy = settings;
+            view.sync_form_inputs(window, cx);
+        })
+    });
+    cx.run_until_parked();
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+}
+
+#[gpui::test]
+fn unified_proxy_writes_do_not_reach_an_older_daemon(cx: &mut TestAppContext) {
+    use crate::ui::UiAction;
+    cx.update(gpui_component::init);
+    let (tx, rx) = mpsc::channel();
+    let holder = Rc::new(RefCell::new(None));
+    let slot = holder.clone();
+    let (_window, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| MainView::new(tx, window, cx));
+        *slot.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = holder.borrow().clone().unwrap();
+    cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            for action in [
+                UiAction::SetSystemProxy { enabled: true },
+                UiAction::UpdateSystemProxySettings(Box::default()),
+            ] {
+                view.dispatch(action, cx);
+                assert!(rx.try_recv().is_err());
+                assert_eq!(
+                    view.state.last_error.as_ref().unwrap().code,
+                    crate::domain::ErrorCode::Conflict
+                );
+            }
+            view.state
+                .daemon_capabilities
+                .push(crate::ipc::protocol::UNIFIED_SYSTEM_PROXY.into());
+            view.dispatch(UiAction::SetSystemProxy { enabled: true }, cx);
+            assert!(matches!(
+                rx.try_recv().unwrap().request,
+                crate::ui::UiRequest::SystemProxy(crate::domain::SystemProxyCommand::SetEnabled {
+                    enabled: true
+                })
+            ));
+        })
+    });
+}

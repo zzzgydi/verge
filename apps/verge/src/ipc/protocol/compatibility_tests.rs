@@ -134,3 +134,50 @@ fn known_error_codes_keep_their_wire_names() {
         assert_eq!(serde_json::to_value(code).unwrap(), json!(name));
     }
 }
+
+#[test]
+fn legacy_welcome_has_no_unified_proxy_capability_and_settings_get_defaults() {
+    let old = json!({"Welcome": {
+        "protocol_version": 6,
+        "initial": {
+            "profiles": [], "selected_profile": null, "runtime_settings": null,
+            "application_settings": {"settings": {"theme": "dark", "language": "zh-CN", "log_limit": 2000}, "data_directory": "/tmp/test"}
+        }
+    }});
+    let ClientMessage::Welcome { initial, .. } = serde_json::from_value(old.clone()).unwrap()
+    else {
+        panic!("expected welcome")
+    };
+    assert!(initial.capabilities.is_empty());
+    assert_eq!(
+        *initial.application_settings.settings.system_proxy,
+        crate::domain::SystemProxySettings::default()
+    );
+    let mut future = old;
+    future["Welcome"]["initial"]["capabilities"] =
+        json!(["unified_system_proxy", "future_unknown_capability"]);
+    let ClientMessage::Welcome { initial, .. } = serde_json::from_value(future).unwrap() else {
+        panic!("expected welcome")
+    };
+    assert!(
+        initial
+            .capabilities
+            .iter()
+            .any(|c| c == UNIFIED_SYSTEM_PROXY)
+    );
+    assert_eq!(PROTOCOL_VERSION, 6);
+}
+
+#[test]
+fn unified_proxy_command_does_not_change_legacy_enable_shape() {
+    use crate::domain::SystemProxyCommand;
+    let legacy: SystemProxyCommand = serde_json::from_value(json!({"type": "enable", "services": ["Wi-Fi"], "endpoint": {"host": "127.0.0.1", "port": 7890}})).unwrap();
+    assert!(matches!(legacy, SystemProxyCommand::Enable { .. }));
+    let unified: SystemProxyCommand =
+        serde_json::from_value(json!({"type": "set_enabled", "enabled": true})).unwrap();
+    assert!(matches!(
+        unified,
+        SystemProxyCommand::SetEnabled { enabled: true }
+    ));
+    assert!(serde_json::from_value::<SystemProxyCommand>(json!({"type": "set_enabled"})).is_err());
+}

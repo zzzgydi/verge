@@ -226,6 +226,7 @@ pub enum UiAction {
     RefreshProfiles,
     RefreshSettings,
     UpdateSettings(ApplicationSettings),
+    UpdateSystemProxySettings(Box<crate::domain::SystemProxySettings>),
     UpdateNetworkSettings(NetworkSettings),
     UpdateCoreNetworkSettings(crate::domain::CoreNetworkSettings),
     ExportApplicationSettings {
@@ -292,8 +293,6 @@ pub enum UiAction {
     SetMode(RunMode),
     SetSystemProxy {
         enabled: bool,
-        services: Vec<String>,
-        endpoint: ProxyEndpoint,
     },
     SetSocksProxy {
         enabled: bool,
@@ -359,6 +358,12 @@ impl UiAction {
                 UiRequest::Profile(AppCommand::UpdateCoreNetworkSettings { settings }),
                 UiRequest::Profile(AppCommand::GetRuntimeSettings),
                 UiRequest::Runtime(RuntimeCommand::GetNetworkSettings),
+                UiRequest::SystemProxy(SystemProxyCommand::GetState),
+            ],
+            Self::UpdateSystemProxySettings(settings) => vec![
+                UiRequest::Profile(AppCommand::UpdateSystemProxySettings { settings }),
+                UiRequest::Profile(AppCommand::GetApplicationSettings),
+                UiRequest::Profile(AppCommand::GetRuntimeSettings),
                 UiRequest::SystemProxy(SystemProxyCommand::GetState),
             ],
             Self::UpdateSettings(settings) => vec![
@@ -500,15 +505,11 @@ impl UiAction {
             Self::SetMode(mode) => {
                 vec![UiRequest::Runtime(RuntimeCommand::SetMode { mode })]
             }
-            Self::SetSystemProxy {
-                enabled,
-                services,
-                endpoint,
-            } => vec![UiRequest::SystemProxy(if enabled {
-                SystemProxyCommand::Enable { services, endpoint }
-            } else {
-                SystemProxyCommand::Disable
-            })],
+            Self::SetSystemProxy { enabled } => {
+                vec![UiRequest::SystemProxy(SystemProxyCommand::SetEnabled {
+                    enabled,
+                })]
+            }
             Self::SetSocksProxy { enabled, endpoint } => {
                 vec![UiRequest::SystemProxy(SystemProxyCommand::SetSocks {
                     enabled,
@@ -553,6 +554,7 @@ impl UiAction {
 
 #[derive(Clone, Debug, Default)]
 pub struct UiState {
+    pub daemon_capabilities: Vec<String>,
     pub page: Page,
     pub core_status: CoreStatus,
     pub mode: Option<RunMode>,
@@ -883,14 +885,9 @@ impl UiState {
     }
 
     pub fn system_proxy_enabled(&self) -> bool {
-        self.system_proxy.as_ref().is_some_and(|state| {
-            !state.services.is_empty()
-                && state.services.iter().all(|service| {
-                    service.web.enabled
-                        && service.secure_web.enabled
-                        && service.web.endpoint == service.secure_web.endpoint
-                })
-        })
+        self.system_proxy
+            .as_ref()
+            .is_some_and(SystemProxyState::unified_enabled)
     }
 }
 
@@ -906,7 +903,8 @@ fn response_request(response: &UiResponse) -> Option<UiRequest> {
 fn is_write_request(request: &UiRequest) -> bool {
     match request {
         UiRequest::SystemProxy(
-            SystemProxyCommand::Enable { .. }
+            SystemProxyCommand::SetEnabled { .. }
+            | SystemProxyCommand::Enable { .. }
             | SystemProxyCommand::Disable
             | SystemProxyCommand::SetSocks { .. }
             | SystemProxyCommand::SetAutoProxy { .. }
@@ -934,6 +932,7 @@ fn request_key(request: &UiRequest) -> &'static str {
         }
         UiRequest::Profile(
             AppCommand::UpdateApplicationSettings { .. }
+            | AppCommand::UpdateSystemProxySettings { .. }
             | AppCommand::ExportApplicationSettings { .. }
             | AppCommand::ImportApplicationSettings { .. }
             | AppCommand::ResetApplicationSettingsScope { .. }
@@ -1387,6 +1386,20 @@ mod tests {
                 summary: "loaded".into(),
             },
         );
+        assert!(!state.system_proxy_enabled());
+        let service = &mut state.system_proxy.as_mut().unwrap().services[0];
+        service.socks = service.web.clone();
+        assert!(state.system_proxy_enabled());
+        let service = &mut state.system_proxy.as_mut().unwrap().services[0];
+        service.auto_proxy.enabled = true;
+        assert!(!state.system_proxy_enabled());
+        let service = &mut state.system_proxy.as_mut().unwrap().services[0];
+        service.web.enabled = false;
+        service.secure_web.enabled = false;
+        service.socks.enabled = false;
+        assert!(!state.system_proxy_enabled());
+        let service = &mut state.system_proxy.as_mut().unwrap().services[0];
+        service.auto_proxy.url = Some("http://127.0.0.1/proxy.pac".into());
         assert!(state.system_proxy_enabled());
     }
 

@@ -198,6 +198,16 @@ impl<P: SystemProxyPlatform> PlatformSystemProxy<P> {
         Ok(Self { platform, services })
     }
 
+    pub fn configure(
+        &mut self,
+        target: &crate::domain::SystemProxyTarget,
+    ) -> Result<SystemProxyState, AppError> {
+        self.platform.configure(&self.services, target)
+    }
+    pub fn restore_snapshot(&mut self, state: &SystemProxyState) -> Result<(), AppError> {
+        self.platform.restore_snapshot(state)
+    }
+
     pub fn managed_services(&self) -> &[String] {
         &self.services
     }
@@ -228,7 +238,7 @@ impl<P: SystemProxyPlatform> SystemProxyControl for PlatformSystemProxy<P> {
     }
 
     fn disable(&mut self) -> Result<SystemProxyState, AppError> {
-        self.platform.disable()
+        self.platform.disable(&self.services)
     }
 
     fn recover_pending(&mut self) -> Result<SystemProxyState, AppError> {
@@ -267,6 +277,12 @@ impl<'a, C: SystemProxyControl> SystemProxyCommandHandler<'a, C> {
     ) -> Result<SystemProxyCommandResult, AppError> {
         let (state, summary) = match command {
             SystemProxyCommand::GetState => (self.proxy.state()?, "System proxy state loaded"),
+            SystemProxyCommand::SetEnabled { .. } => {
+                return Err(AppError::new(
+                    ErrorCode::InvalidInput,
+                    "configured system proxy must be applied by the daemon",
+                ));
+            }
             SystemProxyCommand::Enable { services, endpoint } => (
                 self.proxy.enable(&services, &endpoint)?,
                 "System proxy enabled",
@@ -1544,6 +1560,7 @@ impl<'a, C: CoreControl> ProfileCommandHandler<'a, C> {
             | AppCommand::InstallHelper
             | AppCommand::UninstallHelper
             | AppCommand::UpdateApplicationSettings { .. }
+            | AppCommand::UpdateSystemProxySettings { .. }
             | AppCommand::ExportApplicationSettings { .. }
             | AppCommand::PreviewApplicationSettingsImport { .. }
             | AppCommand::ImportApplicationSettings { .. }

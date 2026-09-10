@@ -73,10 +73,7 @@ pub struct MainView {
     pub settings_import_path: Entity<InputState>,
     /// 设置页的日志缓冲条数输入框。
     pub log_limit: Entity<InputState>,
-    /// 设置页的自动代理（PAC）地址输入框。
-    pub pac_url: Entity<InputState>,
-    /// 设置页的代理绕过域名输入框。
-    pub proxy_bypass: Entity<InputState>,
+    pub pending_proxy_settings: Option<crate::domain::SystemProxySettings>,
     /// 设置页的全局快捷键输入框。
     pub global_hotkey: Entity<InputState>,
     /// 导入对话框的 YAML 表单。
@@ -203,12 +200,7 @@ impl MainView {
                     .placeholder(tr(lang, "placeholder.settings_import_path"))
             }),
             log_limit,
-            pac_url: cx.new(|cx| {
-                InputState::new(window, cx).placeholder("http://127.0.0.1:7890/proxy.pac")
-            }),
-            proxy_bypass: cx.new(|cx| {
-                InputState::new(window, cx).placeholder(tr(lang, "placeholder.proxy_bypass"))
-            }),
+            pending_proxy_settings: None,
             global_hotkey: cx.new(|cx| {
                 InputState::new(window, cx).placeholder(tr(lang, "placeholder.global_hotkey"))
             }),
@@ -252,7 +244,7 @@ impl MainView {
         search.update(cx, |input, cx| {
             input.set_placeholder(tr(lang, "proxies.search"), window, cx)
         });
-        let fields: [(Entity<InputState>, &'static str); 8] = [
+        let fields: [(Entity<InputState>, &'static str); 7] = [
             (self.profile_id.clone(), "placeholder.profile_id"),
             (self.profile_name.clone(), "placeholder.profile_name"),
             (
@@ -271,7 +263,6 @@ impl MainView {
                 self.settings_import_path.clone(),
                 "placeholder.settings_import_path",
             ),
-            (self.proxy_bypass.clone(), "placeholder.proxy_bypass"),
             (self.global_hotkey.clone(), "placeholder.global_hotkey"),
         ];
         for (input, key) in fields {
@@ -296,6 +287,10 @@ impl MainView {
         let Some(snapshot) = self.state.application_settings.clone() else {
             return;
         };
+        if self.pending_proxy_settings.as_ref() == Some(snapshot.settings.system_proxy.as_ref()) {
+            self.pending_proxy_settings = None;
+            gpui_component::WindowExt::close_dialog(window, cx);
+        }
         let current = snapshot.settings.log_limit;
         if self.log_limit_applied != Some(current)
             && !self.log_limit.read(cx).focus_handle(cx).is_focused(window)
@@ -356,12 +351,30 @@ impl MainView {
             cx.notify();
             return;
         }
+        if matches!(
+            action,
+            UiAction::SetSystemProxy { .. } | UiAction::UpdateSystemProxySettings(_)
+        ) && !self
+            .state
+            .daemon_capabilities
+            .iter()
+            .any(|capability| capability == crate::ipc::protocol::UNIFIED_SYSTEM_PROXY)
+        {
+            self.pending_proxy_settings = None;
+            self.state.last_error = Some(crate::domain::AppError::new(
+                crate::domain::ErrorCode::Conflict,
+                tr(self.lang(), "proxy.restart_required"),
+            ));
+            cx.notify();
+            return;
+        }
         let empty_refresh = self.state.selected_profile.is_none()
             && matches!(
                 action,
                 UiAction::RefreshHome
                     | UiAction::RefreshSettings
                     | UiAction::UpdateCoreNetworkSettings(_)
+                    | UiAction::UpdateSystemProxySettings(_)
             );
         let requests: Vec<_> = action
             .requests()
@@ -487,7 +500,7 @@ impl MainView {
         self.dispatch(UiAction::UpdateSettings(settings), cx);
     }
 
-    fn title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn title_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let lang = self.lang();
         let preference = self
             .state
@@ -500,20 +513,8 @@ impl MainView {
             ThemePreference::Dark => (IconName::Moon, tr(lang, "titlebar.theme.dark")),
         };
         TitleBar::new()
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        svg()
-                            .path("branding/logo.svg")
-                            .size_4()
-                            .text_color(cx.theme().muted_foreground),
-                    )
-                    .text_sm()
-                    .font_semibold()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Verge"),
-            )
+            .when(window.is_fullscreen(), |bar| bar.pl_0())
+            .child(div().flex_1())
             .child(
                 div().pr_3().child(
                     Button::new("theme-toggle")
@@ -599,6 +600,7 @@ impl Render for MainView {
             .id("verge-root")
             .key_context("Verge")
             .track_focus(&self.focus_handle)
+            .on_action(|_: &crate::gui::CloseWindow, window, _| window.remove_window())
             .on_action(cx.listener(|this, _: &GoToHome, _, cx| this.navigate(Page::Home, cx)))
             .on_action(cx.listener(|this, _: &GoToProxies, _, cx| this.navigate(Page::Proxies, cx)))
             .on_action(
@@ -619,7 +621,7 @@ impl Render for MainView {
             .bg(cx.theme().background)
             .text_size(px(crate::appearance::metrics::BODY))
             .text_color(cx.theme().foreground)
-            .child(self.title_bar(cx))
+            .child(self.title_bar(window, cx))
             .child(
                 h_flex()
                     .flex_1()

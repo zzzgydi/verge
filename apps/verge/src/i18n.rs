@@ -24,6 +24,53 @@ impl Lang {
 
 /// 文案表：`(key, zh-CN, en)`。key 按页面/用途命名。
 const ENTRIES: &[(&str, &str, &str)] = &[
+    (
+        "proxy.restart_required",
+        "当前后台尚不支持统一系统代理设置，请从托盘退出 Verge 后重新启动。",
+        "The running daemon does not support unified system proxy settings. Quit Verge from the tray and restart.",
+    ),
+    ("proxy.master", "系统代理", "System proxy"),
+    ("proxy.title", "系统代理设置", "System proxy settings"),
+    ("proxy.host", "代理主机", "Proxy host"),
+    ("proxy.enabled", "已启用", "Enabled"),
+    ("proxy.disabled", "未启用", "Disabled"),
+    ("proxy.partial", "部分协议已启用", "Partially enabled"),
+    ("proxy.pac_mode", "使用 PAC 模式", "Use PAC mode"),
+    ("proxy.guard", "系统代理守卫", "System proxy guard"),
+    ("proxy.guard_interval", "代理守卫间隔", "Guard interval"),
+    (
+        "proxy.guard.desc",
+        "定期检查并恢复被修改的代理设置",
+        "Periodically restore changed proxy settings",
+    ),
+    ("proxy.seconds", "秒", "s"),
+    (
+        "proxy.default_bypass",
+        "始终使用默认绕过",
+        "Always include default bypass",
+    ),
+    (
+        "proxy.validate_bypass",
+        "验证代理绕过格式",
+        "Validate bypass format",
+    ),
+    ("proxy.bypass", "自定义代理绕过", "Custom proxy bypass"),
+    (
+        "proxy.bypass.help",
+        "每行一项，也可用逗号分隔。支持 IP、CIDR、域名和通配符。",
+        "One entry per line or comma-separated. Supports IP, CIDR, domains and wildcards.",
+    ),
+    ("proxy.pac_script", "PAC 脚本", "PAC script"),
+    (
+        "proxy.pac.help",
+        "使用 %proxy_host% 和 %mixed-port% 引用当前代理地址。",
+        "Use %proxy_host% and %mixed-port% for the current proxy address.",
+    ),
+    (
+        "proxy.interval.invalid",
+        "守卫间隔须为 1–86400 秒",
+        "Guard interval must be 1–86400 seconds",
+    ),
     ("network.saved", "网络设置已保存", "Network settings saved"),
     ("network.lan", "局域网连接", "Allow LAN"),
     (
@@ -793,14 +840,6 @@ pub fn tr(lang: Lang, key: &'static str) -> &'static str {
 /// “标题 · 名称”式的对话框/Sheet 标题（两种语言结构一致）。
 pub fn fmt_titled(lang: Lang, key: &'static str, name: &str) -> String {
     format!("{} · {name}", tr(lang, key))
-}
-
-/// “当前：xxx”式的状态描述。
-pub fn fmt_current(lang: Lang, value: &str) -> String {
-    match lang {
-        Lang::ZhCn => format!("当前：{value}"),
-        Lang::En => format!("Current: {value}"),
-    }
 }
 
 /// 删除配置确认弹窗标题。

@@ -18,6 +18,9 @@ use serde::{Deserialize, Serialize};
 /// See README.md in this module for the evolution rules and compatibility tests.
 pub const PROTOCOL_VERSION: u32 = 6;
 
+/// Unified manual/PAC configuration and the SetEnabled command.
+pub const UNIFIED_SYSTEM_PROXY: &str = "unified_system_proxy";
+
 #[cfg(test)]
 mod compatibility_tests;
 
@@ -63,6 +66,8 @@ pub enum ClientMessage {
 /// 每次拉起允许丢失。核心状态与实时数据仍由后续请求与订阅增量补齐。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InitialSnapshot {
+    #[serde(default)]
+    pub capabilities: Vec<String>,
     pub profiles: Vec<Profile>,
     pub selected_profile: Option<ProfileId>,
     pub application_settings: ApplicationSettingsSnapshot,
@@ -72,6 +77,7 @@ pub struct InitialSnapshot {
 impl Default for InitialSnapshot {
     fn default() -> Self {
         Self {
+            capabilities: Vec::new(),
             profiles: Vec::new(),
             selected_profile: None,
             application_settings: ApplicationSettingsSnapshot {

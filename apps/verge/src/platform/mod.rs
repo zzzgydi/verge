@@ -1,3 +1,5 @@
+mod pac;
+pub use pac::PacServer;
 use std::{
     fs,
     fs::File,
@@ -12,7 +14,7 @@ use fs2::FileExt;
 
 use crate::domain::{
     AppError, AutoProxyState, ErrorCode, HelperStatus, ProxyEndpoint, ProxyProtocolState,
-    SystemProxyServiceState, SystemProxyState,
+    SystemProxyServiceState, SystemProxyState, SystemProxyTarget,
 };
 pub use verge_helper_protocol::TunConfig;
 use verge_helper_protocol::{HelperRequest, HelperResponse, MAX_REQUEST_BYTES, PROTOCOL_VERSION};
@@ -30,7 +32,7 @@ pub use helper_install::{
 #[cfg(target_os = "macos")]
 mod tray;
 #[cfg(target_os = "macos")]
-pub use tray::{TrayCommand, TrayService, TraySnapshot};
+pub use tray::{TrayCommand, TrayDirectory, TrayMenuState, TrayService, TraySnapshot};
 
 #[cfg(target_os = "macos")]
 mod hotkey;
@@ -39,18 +41,18 @@ pub use hotkey::{GlobalHotKeyBackend, HotkeyBackend, HotkeyRegistration, spawn_h
 
 mod daemon;
 pub use daemon::{
-    daemon_socket_path, redirect_stderr, redirect_stderr_to_log, run_accessory_appkit_loop,
-    spawn_daemon,
+    daemon_socket_path, redirect_stderr, redirect_stderr_to_log, restore_gui_windows,
+    run_accessory_appkit_loop, spawn_daemon,
 };
 
 #[cfg(target_os = "macos")]
 mod login_item;
 #[cfg(target_os = "macos")]
-pub use login_item::SmAppLoginItem;
+pub use login_item::AutoLaunchLoginItem;
 
 /// 登录启动（launch at login）能力抽象，实现可注入、可 fake 测试。
 pub trait LoginItemService {
-    /// 当前是否已注册为登录项（待用户在系统设置中批准也视为已注册）。
+    /// 当前是否已启用登录项（等待系统批准不视为启用）。
     fn status(&mut self) -> Result<bool, AppError>;
     /// 注册或注销登录项。
     fn set_enabled(&mut self, enabled: bool) -> Result<(), AppError>;
@@ -60,7 +62,7 @@ pub trait LoginItemService {
 pub fn default_login_item_service() -> Box<dyn LoginItemService + Send> {
     #[cfg(target_os = "macos")]
     {
-        Box::new(SmAppLoginItem::new())
+        Box::new(AutoLaunchLoginItem::new())
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -360,6 +362,12 @@ pub trait CommandRunner {
 /// Application-facing system proxy port. Platform implementations keep their
 /// native command and recovery details behind this interface.
 pub trait SystemProxyPlatform {
+    fn configure(
+        &mut self,
+        services: &[String],
+        target: &SystemProxyTarget,
+    ) -> Result<SystemProxyState, AppError>;
+    fn restore_snapshot(&mut self, state: &SystemProxyState) -> Result<(), AppError>;
     fn state(&mut self, services: &[String]) -> Result<SystemProxyState, AppError>;
     fn recovery_pending(&self) -> bool;
     fn list_network_services(&mut self) -> Result<Vec<String>, AppError>;
@@ -368,7 +376,7 @@ pub trait SystemProxyPlatform {
         services: &[String],
         endpoint: &ProxyEndpoint,
     ) -> Result<SystemProxyState, AppError>;
-    fn disable(&mut self) -> Result<SystemProxyState, AppError>;
+    fn disable(&mut self, services: &[String]) -> Result<SystemProxyState, AppError>;
     fn recover_pending(&mut self) -> Result<SystemProxyState, AppError>;
     fn set_socks(
         &mut self,
@@ -504,8 +512,31 @@ impl<R: CommandRunner> MacSystemProxy<R> {
         Ok(())
     }
 
-    pub fn disable(&mut self) -> Result<SystemProxyState, AppError> {
-        self.recover_pending()
+    pub fn disable(&mut self, services: &[String]) -> Result<SystemProxyState, AppError> {
+        if self.recovery_pending() {
+            return self.recover_pending();
+        }
+        // A proxy may have been enabled outside Verge. Turning it off must also work
+        // without a Verge recovery file. The master switch includes SOCKS and PAC.
+        self.apply_change(services, |proxy, service| {
+            for protocol in ["web", "secureweb", "socksfirewall"] {
+                proxy.runner.run(
+                    NETWORK_SETUP,
+                    &[
+                        format!("-set{protocol}proxystate"),
+                        service.into(),
+                        "off".into(),
+                    ],
+                )?;
+            }
+            proxy.runner.run(
+                NETWORK_SETUP,
+                &["-setautoproxystate".into(), service.into(), "off".into()],
+            )?;
+            Ok(())
+        })?;
+        remove_recovery(&self.recovery_path)?;
+        self.state(services)
     }
 
     pub fn recover_pending(&mut self) -> Result<SystemProxyState, AppError> {
@@ -518,6 +549,67 @@ impl<R: CommandRunner> MacSystemProxy<R> {
                 .iter()
                 .map(|state| state.service.clone())
                 .collect::<Vec<_>>(),
+        )
+    }
+
+    pub fn configure(
+        &mut self,
+        services: &[String],
+        target: &SystemProxyTarget,
+    ) -> Result<SystemProxyState, AppError> {
+        if let SystemProxyTarget::Manual { endpoint, bypass } = target {
+            ProxyEndpoint::new(&endpoint.host, endpoint.port)?;
+            for domain in bypass {
+                validate_argument("proxy bypass domain", domain)?;
+            }
+        }
+        if let SystemProxyTarget::Pac { url } = target {
+            validate_argument("PAC URL", url)?;
+        }
+        self.apply_change_checked(
+            services,
+            |proxy, service| match target {
+                SystemProxyTarget::Manual { endpoint, bypass } => {
+                    proxy.apply_endpoint(service, endpoint)?;
+                    proxy.set_protocol(
+                        "socksfirewall",
+                        service,
+                        &ProxyProtocolState {
+                            enabled: true,
+                            endpoint: endpoint.clone(),
+                        },
+                    )?;
+                    proxy.apply_bypass(service, bypass)
+                }
+                SystemProxyTarget::Pac { url } => {
+                    for protocol in ["web", "secureweb", "socksfirewall"] {
+                        proxy.runner.run(
+                            NETWORK_SETUP,
+                            &[
+                                format!("-set{protocol}proxystate"),
+                                service.into(),
+                                "off".into(),
+                            ],
+                        )?;
+                    }
+                    proxy.apply_auto_proxy(
+                        service,
+                        &AutoProxyState {
+                            enabled: true,
+                            url: Some(url.clone()),
+                        },
+                    )
+                }
+            },
+            |state| {
+                if target.matches(state) {
+                    Ok(())
+                } else {
+                    Err(platform_error(
+                        "system proxy did not match the requested configuration after applying it",
+                    ))
+                }
+            },
         )
     }
 
@@ -576,7 +668,16 @@ impl<R: CommandRunner> MacSystemProxy<R> {
     fn apply_change(
         &mut self,
         services: &[String],
+        apply: impl FnMut(&mut Self, &str) -> Result<(), AppError>,
+    ) -> Result<SystemProxyState, AppError> {
+        self.apply_change_checked(services, apply, |_| Ok(()))
+    }
+
+    fn apply_change_checked(
+        &mut self,
+        services: &[String],
         mut apply: impl FnMut(&mut Self, &str) -> Result<(), AppError>,
+        verify: impl FnOnce(&SystemProxyState) -> Result<(), AppError>,
     ) -> Result<SystemProxyState, AppError> {
         validate_services(services)?;
         let previous = self.state(services)?;
@@ -584,22 +685,28 @@ impl<R: CommandRunner> MacSystemProxy<R> {
         if created_record {
             write_recovery(&self.recovery_path, &previous)?;
         }
-        for service in services {
-            if let Err(cause) = apply(self, service) {
-                return match self.restore_services(&previous.services) {
-                    Ok(()) => {
-                        if created_record {
-                            remove_recovery(&self.recovery_path)?;
-                        }
-                        Err(cause)
-                    }
-                    Err(rollback) => Err(platform_error(format!(
-                        "system proxy apply failed: {cause}; rollback failed: {rollback}"
-                    ))),
-                };
+        let result = (|| {
+            for service in services {
+                apply(self, service)?;
             }
+            let state = self.state(services)?;
+            verify(&state)?;
+            Ok(state)
+        })();
+        match result {
+            Ok(state) => Ok(state),
+            Err(cause) => match self.restore_services(&previous.services) {
+                Ok(()) => {
+                    if created_record {
+                        remove_recovery(&self.recovery_path)?;
+                    }
+                    Err(cause)
+                }
+                Err(rollback) => Err(platform_error(format!(
+                    "system proxy apply failed: {cause}; rollback failed: {rollback}"
+                ))),
+            },
         }
-        self.state(services)
     }
 
     fn snapshot(&mut self, service: &str) -> Result<SystemProxyServiceState, AppError> {
@@ -654,6 +761,12 @@ impl<R: CommandRunner> MacSystemProxy<R> {
             enabled: true,
             endpoint: endpoint.clone(),
         };
+        // PAC takes precedence on macOS; preserve it in the recovery snapshot,
+        // then disable it before enabling explicit HTTP/HTTPS proxy endpoints.
+        self.runner.run(
+            NETWORK_SETUP,
+            &["-setautoproxystate".into(), service.into(), "off".into()],
+        )?;
         self.set_protocol("web", service, &state)?;
         self.set_protocol("secureweb", service, &state)
     }
@@ -755,6 +868,16 @@ impl<R: CommandRunner> MacSystemProxy<R> {
 }
 
 impl<R: CommandRunner> SystemProxyPlatform for MacSystemProxy<R> {
+    fn configure(
+        &mut self,
+        services: &[String],
+        target: &SystemProxyTarget,
+    ) -> Result<SystemProxyState, AppError> {
+        MacSystemProxy::configure(self, services, target)
+    }
+    fn restore_snapshot(&mut self, state: &SystemProxyState) -> Result<(), AppError> {
+        self.restore_services(&state.services)
+    }
     fn state(&mut self, services: &[String]) -> Result<SystemProxyState, AppError> {
         MacSystemProxy::state(self, services)
     }
@@ -775,8 +898,8 @@ impl<R: CommandRunner> SystemProxyPlatform for MacSystemProxy<R> {
         MacSystemProxy::enable(self, services, endpoint)
     }
 
-    fn disable(&mut self) -> Result<SystemProxyState, AppError> {
-        MacSystemProxy::disable(self)
+    fn disable(&mut self, services: &[String]) -> Result<SystemProxyState, AppError> {
+        MacSystemProxy::disable(self, services)
     }
 
     fn recover_pending(&mut self) -> Result<SystemProxyState, AppError> {
@@ -1279,7 +1402,7 @@ mod tests {
         let recovery = directory.0.join("recovery.json");
         let mut runner = FakeRunner::default();
         snapshot_outputs(&mut runner, 1);
-        for _ in 0..4 {
+        for _ in 0..5 {
             runner.outputs.push_back(Ok(String::new()));
         }
         snapshot_outputs(&mut runner, 1);
@@ -1294,6 +1417,11 @@ mod tests {
             .unwrap();
         assert!(enabled.recovery_pending);
         assert!(recovery.is_file());
+        assert_eq!(
+            proxy.runner.calls[5],
+            [NETWORK_SETUP, "-setautoproxystate", "Wi-Fi", "off"]
+        );
+        assert_eq!(proxy.runner.calls[6][1], "-setwebproxy");
         let restored = proxy.recover_pending().unwrap();
         assert!(!restored.recovery_pending);
         assert!(!recovery.exists());
@@ -1327,6 +1455,35 @@ mod tests {
         assert!(error.message.contains("secure proxy failed"));
         assert!(!recovery.exists());
         assert_eq!(proxy.runner.calls.len(), 16);
+    }
+
+    #[test]
+    fn disable_external_proxy_without_recovery_clears_all_protocols() {
+        let directory = TestDir::new();
+        let recovery = directory.0.join("recovery.json");
+        let mut runner = FakeRunner::default();
+        snapshot_outputs(&mut runner, 1);
+        runner.outputs.extend((0..4).map(|_| Ok(String::new())));
+        snapshot_outputs(&mut runner, 1);
+        snapshot_outputs(&mut runner, 1);
+        let mut proxy = MacSystemProxy::new(runner, &recovery);
+        proxy.disable(&["Wi-Fi".into()]).unwrap();
+        assert!(!recovery.exists());
+        let writes = proxy
+            .runner
+            .calls
+            .iter()
+            .filter(|call| call[1].starts_with("-set"))
+            .collect::<Vec<_>>();
+        assert_eq!(writes.len(), 4);
+        assert_eq!(
+            writes[0],
+            &[NETWORK_SETUP, "-setwebproxystate", "Wi-Fi", "off"]
+        );
+        assert_eq!(
+            writes[1],
+            &[NETWORK_SETUP, "-setsecurewebproxystate", "Wi-Fi", "off"]
+        );
     }
 
     #[test]
@@ -1404,6 +1561,143 @@ mod tests {
         assert_eq!(calls[2][1], "-getsocksfirewallproxy");
         assert_eq!(calls[3][1], "-getautoproxyurl");
         assert_eq!(calls[4][1], "-getproxybypassdomains");
+    }
+
+    fn unified_outputs(runner: &mut FakeRunner, pac: bool) {
+        for _ in 0..3 {
+            runner
+                .outputs
+                .push_back(Ok(output(!pac, "127.0.0.1", 7897)));
+        }
+        runner.outputs.push_back(Ok(if pac {
+            "URL: http://127.0.0.1:1234/proxy.pac\nEnabled: Yes\n"
+        } else {
+            "URL: (null)\nEnabled: No\n"
+        }
+        .into()));
+        runner.outputs.push_back(Ok("localhost\n*.local\n".into()));
+    }
+
+    #[test]
+    fn unified_proxy_switches_modes_and_preserves_original_recovery() {
+        let directory = TestDir::new();
+        let recovery = directory.0.join("recovery.json");
+        let mut runner = FakeRunner::default();
+        snapshot_outputs(&mut runner, 1);
+        runner.outputs.extend((0..8).map(|_| Ok(String::new())));
+        unified_outputs(&mut runner, false);
+        let mut proxy = MacSystemProxy::new(runner, &recovery);
+        let services = ["Wi-Fi".into()];
+        let manual = SystemProxyTarget::Manual {
+            endpoint: ProxyEndpoint::new("127.0.0.1", 7897).unwrap(),
+            bypass: vec!["localhost".into(), "*.local".into()],
+        };
+        assert!(manual.matches(&proxy.configure(&services, &manual).unwrap()));
+        let original = fs::read(&recovery).unwrap();
+        let writes: Vec<_> = proxy
+            .runner
+            .calls
+            .iter()
+            .filter(|c| c[1].starts_with("-set"))
+            .collect();
+        assert_eq!(writes.len(), 8);
+        assert_eq!(writes[0][1], "-setautoproxystate");
+        for (index, command) in [
+            (1, "-setwebproxy"),
+            (3, "-setsecurewebproxy"),
+            (5, "-setsocksfirewallproxy"),
+        ] {
+            assert_eq!(writes[index][1], command);
+            assert_eq!(&writes[index][3..], &["127.0.0.1", "7897"]);
+        }
+        unified_outputs(&mut proxy.runner, false);
+        proxy
+            .runner
+            .outputs
+            .extend((0..5).map(|_| Ok(String::new())));
+        unified_outputs(&mut proxy.runner, true);
+        let pac = SystemProxyTarget::Pac {
+            url: "http://127.0.0.1:1234/proxy.pac".into(),
+        };
+        assert!(pac.matches(&proxy.configure(&services, &pac).unwrap()));
+        assert_eq!(fs::read(&recovery).unwrap(), original);
+        let writes: Vec<_> = proxy
+            .runner
+            .calls
+            .iter()
+            .filter(|c| c[1].starts_with("-set"))
+            .collect();
+        assert_eq!(writes[8][1], "-setwebproxystate");
+        assert_eq!(writes[10][1], "-setsocksfirewallproxystate");
+        assert_eq!(writes[12][1], "-setautoproxystate");
+    }
+
+    #[test]
+    fn unified_proxy_rolls_back_when_successful_commands_do_not_change_state() {
+        let directory = TestDir::new();
+        let recovery = directory.0.join("recovery.json");
+        let mut runner = FakeRunner::default();
+        snapshot_outputs(&mut runner, 1);
+        runner.outputs.extend((0..8).map(|_| Ok(String::new())));
+        snapshot_outputs(&mut runner, 1);
+        let mut proxy = MacSystemProxy::new(runner, &recovery);
+        let error = proxy
+            .configure(
+                &["Wi-Fi".into()],
+                &SystemProxyTarget::Manual {
+                    endpoint: ProxyEndpoint::new("127.0.0.1", 7897).unwrap(),
+                    bypass: vec![],
+                },
+            )
+            .unwrap_err();
+        assert!(error.message.contains("did not match"));
+        assert!(!recovery.exists());
+        assert!(
+            proxy.runner.calls.len() > 18,
+            "rollback must restore the snapshot"
+        );
+    }
+
+    #[test]
+    fn unified_failure_on_second_service_restores_every_protocol() {
+        let directory = TestDir::new();
+        let recovery = directory.0.join("recovery.json");
+        let mut runner = FakeRunner::default();
+        snapshot_outputs(&mut runner, 2);
+        runner.outputs.extend((0..8).map(|_| Ok(String::new())));
+        runner
+            .outputs
+            .push_back(Err(platform_error("permission denied")));
+        let mut proxy = MacSystemProxy::new(runner, &recovery);
+        let error = proxy
+            .configure(
+                &["Wi-Fi".into(), "Ethernet".into()],
+                &SystemProxyTarget::Manual {
+                    endpoint: ProxyEndpoint::new("127.0.0.1", 7897).unwrap(),
+                    bypass: vec![],
+                },
+            )
+            .unwrap_err();
+        assert!(error.message.contains("permission denied"));
+        assert!(!recovery.exists());
+        for service in ["Wi-Fi", "Ethernet"] {
+            for command in [
+                "-setwebproxy",
+                "-setsecurewebproxy",
+                "-setsocksfirewallproxy",
+                "-setautoproxystate",
+                "-setproxybypassdomains",
+            ] {
+                assert!(
+                    proxy
+                        .runner
+                        .calls
+                        .iter()
+                        .skip(19)
+                        .any(|call| call[1] == command && call[2] == service)
+                );
+            }
+        }
     }
 
     #[test]
@@ -1567,7 +1861,7 @@ mod tests {
         let recovery = directory.0.join("recovery.json");
         let mut runner = FakeRunner::default();
         snapshot_outputs(&mut runner, 1);
-        for _ in 0..4 {
+        for _ in 0..5 {
             runner.outputs.push_back(Ok(String::new()));
         }
         snapshot_outputs(&mut runner, 1);

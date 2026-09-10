@@ -1,148 +1,350 @@
-use crate::domain::{AppError, ErrorCode};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+
+use crate::domain::{AppError, ErrorCode, ProfileId, ProxyGroup, RunMode};
 use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
-    menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem},
+    menu::{
+        CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu,
+        accelerator::{Accelerator, Code, Modifiers},
+    },
 };
 
 const TRAY_ICON: &[u8] = include_bytes!("../../../../assets/icons/tray-logo.png");
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TrayCommand {
     ShowMainWindow,
-    HideMainWindow,
     ToggleSystemProxy,
+    SetMode(RunMode),
+    SelectProfile(ProfileId),
+    SelectProxy { group: String, proxy: String },
+    UpdateCurrentProfile,
+    OpenDirectory(TrayDirectory),
+    RestartCore,
+    RestartApplication,
     Quit,
 }
 
-impl TrayCommand {
-    fn from_menu_id(id: &str) -> Option<Self> {
-        match id {
-            "show-main-window" => Some(Self::ShowMainWindow),
-            "hide-main-window" => Some(Self::HideMainWindow),
-            "toggle-system-proxy" => Some(Self::ToggleSystemProxy),
-            "quit" => Some(Self::Quit),
-            _ => None,
-        }
-    }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TrayDirectory {
+    Data,
+    Profiles,
+    Logs,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TraySnapshot {
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TrayMenuState {
+    pub language: String,
     pub system_proxy_enabled: bool,
+    pub can_enable_system_proxy: bool,
+    pub mode: Option<RunMode>,
+    pub profiles: Vec<(ProfileId, String)>,
+    pub selected_profile: Option<ProfileId>,
+    pub can_update_profile: bool,
+    pub can_restart_application: bool,
+    pub groups: Vec<ProxyGroup>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TraySnapshot {
+    pub menu: Arc<TrayMenuState>,
     pub upload_bytes_per_second: u64,
     pub download_bytes_per_second: u64,
-    /// 界面语言（"zh-CN" / "en"）；守护进程从应用设置带入，语言变化时菜单文案随之更新。
-    pub language: String,
 }
 
-impl Default for TraySnapshot {
-    fn default() -> Self {
-        Self {
-            system_proxy_enabled: false,
-            upload_bytes_per_second: 0,
-            download_bytes_per_second: 0,
-            // 与 ApplicationSettings 的默认语言一致；未知值也走英文。
-            language: "en".into(),
+/// Native menu description is independent of AppKit and contains only supported actions.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum Entry {
+    Item {
+        label: String,
+        command: Option<TrayCommand>,
+        checked: Option<bool>,
+        enabled: bool,
+    },
+    Submenu(String, Vec<Entry>),
+    Separator,
+}
+
+impl Entry {
+    fn action(label: impl Into<String>, command: TrayCommand, enabled: bool) -> Self {
+        Self::Item {
+            label: label.into(),
+            command: Some(command),
+            checked: None,
+            enabled,
+        }
+    }
+    fn check(label: impl Into<String>, command: TrayCommand, checked: bool, enabled: bool) -> Self {
+        Self::Item {
+            label: label.into(),
+            command: Some(command),
+            checked: Some(checked),
+            enabled,
         }
     }
 }
 
-/// 托盘菜单文案（双语查表，与 GUI 的 i18n 模块同风格，跨 crate 不共享）。
-struct TrayLabels {
-    show: &'static str,
-    hide: &'static str,
-    system_proxy: &'static str,
-    quit: &'static str,
+fn menu_entries(state: &TrayMenuState) -> Vec<Entry> {
+    let tr = |zh: &'static str, en: &'static str| if state.language == "zh-CN" { zh } else { en };
+    let mode_label = |mode| match mode {
+        Some(RunMode::Rule) => tr("规则", "Rule"),
+        Some(RunMode::Global) => tr("全局", "Global"),
+        Some(RunMode::Direct) => tr("直连", "Direct"),
+        None => tr("内核未运行", "Core offline"),
+    };
+    let profiles = state
+        .profiles
+        .iter()
+        .map(|(id, name)| {
+            Entry::check(
+                name,
+                TrayCommand::SelectProfile(id.clone()),
+                state.selected_profile.as_ref() == Some(id),
+                true,
+            )
+        })
+        .collect();
+    let group_items = |group: &ProxyGroup| {
+        group
+            .members
+            .iter()
+            .map(|proxy| {
+                Entry::check(
+                    proxy,
+                    TrayCommand::SelectProxy {
+                        group: group.name.clone(),
+                        proxy: proxy.clone(),
+                    },
+                    group.selected.as_ref() == Some(proxy),
+                    matches!(group.kind.as_str(), "Selector" | "URLTest" | "Fallback"),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let proxies = match state.mode {
+        Some(RunMode::Global) => state
+            .groups
+            .iter()
+            .find(|g| g.name == "GLOBAL")
+            .map(group_items)
+            .unwrap_or_default(),
+        Some(RunMode::Rule) => state
+            .groups
+            .iter()
+            .filter(|g| g.name != "GLOBAL")
+            .map(|group| {
+                let title = group.selected.as_ref().map_or_else(
+                    || group.name.clone(),
+                    |selected| format!("{} · {selected}", group.name),
+                );
+                Entry::Submenu(title, group_items(group))
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    vec![
+        Entry::action(
+            tr("显示 Verge", "Show Verge"),
+            TrayCommand::ShowMainWindow,
+            true,
+        ),
+        Entry::Separator,
+        Entry::Submenu(
+            format!(
+                "{}（{}）",
+                tr("出站模式", "Outbound mode"),
+                mode_label(state.mode)
+            ),
+            [RunMode::Rule, RunMode::Global, RunMode::Direct]
+                .into_iter()
+                .map(|mode| {
+                    Entry::check(
+                        mode_label(Some(mode)),
+                        TrayCommand::SetMode(mode),
+                        state.mode == Some(mode),
+                        state.mode.is_some(),
+                    )
+                })
+                .collect(),
+        ),
+        Entry::Separator,
+        Entry::Submenu(tr("配置", "Profiles").into(), profiles),
+        Entry::Submenu(tr("代理", "Proxies").into(), proxies),
+        Entry::Separator,
+        Entry::check(
+            tr("系统代理", "System Proxy"),
+            TrayCommand::ToggleSystemProxy,
+            state.system_proxy_enabled,
+            state.system_proxy_enabled || state.can_enable_system_proxy,
+        ),
+        Entry::Separator,
+        Entry::Submenu(
+            tr("打开目录", "Open Directory").into(),
+            vec![
+                Entry::action(
+                    tr("数据目录", "Data"),
+                    TrayCommand::OpenDirectory(TrayDirectory::Data),
+                    true,
+                ),
+                Entry::action(
+                    tr("配置目录", "Profiles"),
+                    TrayCommand::OpenDirectory(TrayDirectory::Profiles),
+                    true,
+                ),
+                Entry::action(
+                    tr("日志目录", "Logs"),
+                    TrayCommand::OpenDirectory(TrayDirectory::Logs),
+                    true,
+                ),
+            ],
+        ),
+        Entry::Submenu(
+            tr("更多", "More").into(),
+            vec![
+                Entry::action(
+                    tr("更新当前订阅", "Update Current Subscription"),
+                    TrayCommand::UpdateCurrentProfile,
+                    state.can_update_profile,
+                ),
+                Entry::action(
+                    tr("重启内核", "Restart Core"),
+                    TrayCommand::RestartCore,
+                    state.selected_profile.is_some(),
+                ),
+                Entry::action(
+                    tr("重启 Verge", "Restart Verge"),
+                    TrayCommand::RestartApplication,
+                    state.can_restart_application,
+                ),
+                Entry::Separator,
+                Entry::Item {
+                    label: format!("Verge {}", env!("CARGO_PKG_VERSION")),
+                    command: None,
+                    checked: None,
+                    enabled: false,
+                },
+            ],
+        ),
+        Entry::Separator,
+        Entry::action(tr("退出", "Quit"), TrayCommand::Quit, true),
+    ]
 }
 
-fn tray_labels(language: &str) -> TrayLabels {
-    match language {
-        "zh-CN" => TrayLabels {
-            show: "显示 Verge",
-            hide: "隐藏 Verge",
-            system_proxy: "系统代理",
-            quit: "退出",
-        },
-        _ => TrayLabels {
-            show: "Show Verge",
-            hide: "Hide Verge",
-            system_proxy: "System Proxy",
-            quit: "Quit",
-        },
-    }
+fn native_item(
+    entry: &Entry,
+    commands: &mut HashMap<String, TrayCommand>,
+    checks: &mut Vec<(CheckMenuItem, bool)>,
+) -> Result<Box<dyn IsMenuItem>, AppError> {
+    Ok(match entry {
+        Entry::Separator => Box::new(PredefinedMenuItem::separator()),
+        Entry::Submenu(label, children) => {
+            let menu = Submenu::new(label, !children.is_empty());
+            for entry in children {
+                menu.append(native_item(entry, commands, checks)?.as_ref())
+                    .map_err(tray_error)?;
+            }
+            Box::new(menu)
+        }
+        Entry::Item {
+            label,
+            command,
+            checked,
+            enabled,
+        } => {
+            let accelerator = matches!(command, Some(TrayCommand::Quit))
+                .then(|| Accelerator::new(Some(Modifiers::SUPER), Code::KeyQ));
+            let item: Box<dyn IsMenuItem> = if let Some(checked) = checked {
+                let item = CheckMenuItem::new(label, *enabled, *checked, accelerator);
+                checks.push((item.clone(), *checked));
+                Box::new(item)
+            } else {
+                Box::new(MenuItem::new(label, *enabled, accelerator))
+            };
+            if let Some(command) = command {
+                commands.insert(item.id().as_ref().to_owned(), command.clone());
+            }
+            item
+        }
+    })
 }
 
 pub struct TrayService {
     tray: TrayIcon,
-    show: MenuItem,
-    hide: MenuItem,
-    system_proxy: CheckMenuItem,
-    speed: MenuItem,
-    quit: MenuItem,
-    language: std::sync::Mutex<String>,
+    commands: Arc<Mutex<HashMap<String, TrayCommand>>>,
+    state: RefCell<Option<Arc<TrayMenuState>>>,
+    checks: RefCell<Vec<(CheckMenuItem, bool)>>,
+    clicked: Arc<AtomicBool>,
 }
 
 impl TrayService {
     pub fn new(on_command: impl Fn(TrayCommand) + Send + Sync + 'static) -> Result<Self, AppError> {
-        // 初始用默认语言建菜单；守护进程启动后会立刻推一次带实际语言的快照。
-        let labels = tray_labels("en");
-        let menu = Menu::new();
-        let show = MenuItem::with_id(MenuId::new("show-main-window"), labels.show, true, None);
-        let hide = MenuItem::with_id(MenuId::new("hide-main-window"), labels.hide, true, None);
-        let system_proxy = CheckMenuItem::with_id(
-            MenuId::new("toggle-system-proxy"),
-            labels.system_proxy,
-            true,
-            false,
-            None,
-        );
-        let speed = MenuItem::new("↑ 0 B/s   ↓ 0 B/s", false, None);
-        let quit = MenuItem::with_id(MenuId::new("quit"), labels.quit, true, None);
-        menu.append_items(&[&show, &hide, &system_proxy, &speed, &quit])
-            .map_err(tray_error)?;
+        let commands = Arc::new(Mutex::new(HashMap::<String, TrayCommand>::new()));
+        let event_commands = commands.clone();
+        let clicked = Arc::new(AtomicBool::new(false));
+        let event_clicked = clicked.clone();
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-            if let Some(command) = TrayCommand::from_menu_id(event.id().as_ref()) {
+            let command = event_commands
+                .lock()
+                .expect("tray commands poisoned")
+                .get(event.id().as_ref())
+                .cloned();
+            if let Some(command) = command {
+                event_clicked.store(true, Ordering::Release);
                 on_command(command);
             }
         }));
         let tray = TrayIconBuilder::new()
-            .with_menu(Box::new(menu))
             .with_tooltip("Verge")
             .with_icon(load_icon()?)
+            .with_icon_as_template(true)
             .build()
             .map_err(tray_error)?;
-        Ok(Self {
+        let service = Self {
             tray,
-            show,
-            hide,
-            system_proxy,
-            speed,
-            quit,
-            language: std::sync::Mutex::new("en".into()),
-        })
+            commands,
+            state: RefCell::new(None),
+            checks: RefCell::new(Vec::new()),
+            clicked,
+        };
+        service.update(&TraySnapshot::default())?;
+        Ok(service)
     }
 
     pub fn update(&self, snapshot: &TraySnapshot) -> Result<(), AppError> {
-        self.system_proxy.set_checked(snapshot.system_proxy_enabled);
-        let speed = format!(
-            "↑ {}/s   ↓ {}/s",
-            format_bytes(snapshot.upload_bytes_per_second),
-            format_bytes(snapshot.download_bytes_per_second)
-        );
-        self.speed.set_text(&speed);
-        // 语言变化时重贴菜单文案（菜单项按 id 复用，无需重建菜单）。
-        let mut language = self.language.lock().expect("tray language mutex poisoned");
-        if *language != snapshot.language {
-            *language = snapshot.language.clone();
-            let labels = tray_labels(&snapshot.language);
-            self.show.set_text(labels.show);
-            self.hide.set_text(labels.hide);
-            self.system_proxy.set_text(labels.system_proxy);
-            self.quit.set_text(labels.quit);
+        // Traffic ticks never recreate the menu or its native objects.
+        if self.state.borrow().as_ref() != Some(&snapshot.menu) {
+            let menu = Menu::new();
+            let mut commands = HashMap::new();
+            let mut checks = Vec::new();
+            for entry in menu_entries(&snapshot.menu) {
+                menu.append(native_item(&entry, &mut commands, &mut checks)?.as_ref())
+                    .map_err(tray_error)?;
+            }
+            *self.checks.borrow_mut() = checks;
+            self.tray.set_menu(Some(Box::new(menu)));
+            *self.commands.lock().expect("tray commands poisoned") = commands;
+            *self.state.borrow_mut() = Some(snapshot.menu.clone());
         }
-        drop(language);
+        // Native check items toggle before the backend responds; reassert confirmed state,
+        // including failed writes whose snapshot remains unchanged.
+        if self.clicked.swap(false, Ordering::AcqRel) {
+            for (item, checked) in self.checks.borrow().iter() {
+                item.set_checked(*checked);
+            }
+        }
         self.tray
-            .set_tooltip(Some(format!("Verge · {speed}")))
+            .set_tooltip(Some(format!(
+                "Verge · ↑ {}/s   ↓ {}/s",
+                format_bytes(snapshot.upload_bytes_per_second),
+                format_bytes(snapshot.download_bytes_per_second)
+            )))
             .map_err(tray_error)
     }
 }
@@ -156,17 +358,12 @@ fn load_icon() -> Result<Icon, AppError> {
 }
 
 fn format_bytes(bytes: u64) -> String {
-    const KIB: u64 = 1024;
-    const MIB: u64 = KIB * 1024;
-    if bytes >= MIB {
-        format!("{:.1} MiB", bytes as f64 / MIB as f64)
-    } else if bytes >= KIB {
-        format!("{:.1} KiB", bytes as f64 / KIB as f64)
-    } else {
-        format!("{bytes} B")
+    match bytes {
+        1_048_576.. => format!("{:.1} MiB", bytes as f64 / 1_048_576.),
+        1024.. => format!("{:.1} KiB", bytes as f64 / 1024.),
+        _ => format!("{bytes} B"),
     }
 }
-
 fn tray_error(error: impl std::fmt::Display) -> AppError {
     AppError::new(ErrorCode::PlatformFailed, error.to_string())
 }
@@ -174,29 +371,67 @@ fn tray_error(error: impl std::fmt::Display) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn maps_menu_ids_and_formats_speed_without_gui_state() {
-        assert_eq!(
-            TrayCommand::from_menu_id("toggle-system-proxy"),
-            Some(TrayCommand::ToggleSystemProxy)
-        );
-        assert_eq!(TrayCommand::from_menu_id("unknown"), None);
-        assert_eq!(format_bytes(999), "999 B");
-        assert_eq!(format_bytes(2_048), "2.0 KiB");
-        assert_eq!(format_bytes(2 * 1024 * 1024), "2.0 MiB");
+    fn proxy_entries(state: &TrayMenuState) -> Vec<Entry> {
+        let Entry::Submenu(_, entries) = menu_entries(state).remove(5) else {
+            panic!("proxy submenu")
+        };
+        entries
     }
-
     #[test]
-    fn tray_labels_follow_language() {
-        let zh = tray_labels("zh-CN");
-        assert_eq!(zh.show, "显示 Verge");
-        assert_eq!(zh.system_proxy, "系统代理");
-        assert_eq!(zh.quit, "退出");
-        let en = tray_labels("en");
-        assert_eq!(en.show, "Show Verge");
-        // 未知语言码回退英文。
-        assert_eq!(tray_labels("fr").show, "Show Verge");
-        assert_eq!(TraySnapshot::default().language, "en");
+    fn modes_keep_group_membership_and_selection() {
+        let mut state = TrayMenuState {
+            mode: Some(RunMode::Rule),
+            groups: vec![
+                ProxyGroup {
+                    name: "路线 / 亚洲".into(),
+                    kind: "Selector".into(),
+                    selected: Some("A:/🛰".into()),
+                    members: vec!["A:/🛰".into(), "B".into()],
+                },
+                ProxyGroup {
+                    name: "GLOBAL".into(),
+                    kind: "Selector".into(),
+                    selected: Some("B".into()),
+                    members: vec!["B".into()],
+                },
+            ],
+            ..Default::default()
+        };
+        let entries = proxy_entries(&state);
+        let Entry::Submenu(_, members) = &entries[0] else {
+            panic!("rule group")
+        };
+        assert_eq!(entries.len(), 1);
+        assert!(
+            matches!(&members[0], Entry::Item { checked: Some(true), command: Some(TrayCommand::SelectProxy { group, proxy }), .. } if group == "路线 / 亚洲" && proxy == "A:/🛰")
+        );
+        state.mode = Some(RunMode::Global);
+        assert!(matches!(
+            &proxy_entries(&state)[0],
+            Entry::Item {
+                checked: Some(true),
+                ..
+            }
+        ));
+        state.mode = Some(RunMode::Direct);
+        assert!(proxy_entries(&state).is_empty());
+    }
+    #[test]
+    fn offline_menu_disables_writes_and_preserves_recovery() {
+        let mut state = TrayMenuState::default();
+        assert!(matches!(
+            &menu_entries(&state)[7],
+            Entry::Item { enabled: false, .. }
+        ));
+        state.system_proxy_enabled = true;
+        assert!(matches!(
+            &menu_entries(&state)[7],
+            Entry::Item {
+                enabled: true,
+                checked: Some(true),
+                ..
+            }
+        ));
+        assert_eq!(format_bytes(2048), "2.0 KiB");
     }
 }

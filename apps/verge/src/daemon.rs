@@ -175,6 +175,9 @@ fn current_app_version() -> Option<String> {
     current_app_bundle().and_then(|bundle| bundle_short_version(&bundle).ok())
 }
 
+mod system_proxy;
+mod tray;
+
 struct Engine {
     supervisor: CoreSupervisor,
     runtime: MihomoRuntime<TcpControllerTransport>,
@@ -188,12 +191,13 @@ struct Backend {
     runtime_error: Option<AppError>,
     system_proxy: PlatformSystemProxy<MacSystemProxy<ProcessRunner>>,
     login_item: Box<dyn LoginItemService + Send>,
+    proxy_session: system_proxy::ProxySession,
     update_scheduler: UpdateScheduler,
     profile_fetcher: ReqwestProfileFetcher,
     artifact_fetcher: ReqwestArtifactFetcher,
     /// 应用自身更新专用下载器（host 白名单含 api.github.com，限额更大）。
     app_fetcher: ReqwestArtifactFetcher,
-    /// RestartApplication 已拉起新进程，事件循环收尾后退出本进程。
+    /// RestartApplication 请求重启，事件循环收尾后再拉起新进程。
     restart_requested: bool,
     /// QuitApplication 请求完整退出，事件循环收尾时恢复代理并停止内核。
     quit_requested: bool,
@@ -240,6 +244,7 @@ impl Backend {
             runtime_error: None,
             system_proxy,
             login_item: default_login_item_service(),
+            proxy_session: system_proxy::ProxySession::default(),
             update_scheduler: UpdateScheduler::default(),
             profile_fetcher: ReqwestProfileFetcher::new(Duration::from_secs(20), 8 * 1024 * 1024)?,
             artifact_fetcher: ReqwestArtifactFetcher::new(
@@ -342,6 +347,7 @@ impl Backend {
     }
 
     fn shutdown(&mut self) {
+        self.proxy_session.target = None;
         if let Some(mut engine) = self.engine.take() {
             let mut core = SupervisorControl::new(&mut engine.supervisor, Duration::from_secs(5));
             let _ =
@@ -392,6 +398,12 @@ impl Backend {
             Some(credentials),
         )
         .update_due(unix_timestamp()?, trigger)?;
+        if let Err(error) = self.synchronize_owned_proxy() {
+            self.log_app(
+                "error",
+                format!("订阅更新后同步系统代理失败: {}", error.message),
+            );
+        }
         Ok(())
     }
 
@@ -420,8 +432,19 @@ impl Backend {
                 UiResponse::Runtime { request, result }
             }
             UiRequest::SystemProxy(request) => {
-                let result =
-                    SystemProxyCommandHandler::new(&mut self.system_proxy).execute(request.clone());
+                if matches!(
+                    request,
+                    SystemProxyCommand::SetEnabled { enabled: true }
+                        | SystemProxyCommand::Enable { .. }
+                        | SystemProxyCommand::SetSocks { enabled: true, .. }
+                ) && self.engine.is_none()
+                {
+                    return UiResponse::SystemProxy {
+                        request,
+                        result: Err(self.runtime_unavailable()),
+                    };
+                }
+                let result = self.execute_system_proxy(request.clone());
                 UiResponse::SystemProxy { request, result }
             }
         }
@@ -429,6 +452,13 @@ impl Backend {
 
     fn execute_profile(&mut self, command: AppCommand) -> Result<AppCommandResult, AppError> {
         let now = unix_timestamp()?;
+        let changes_runtime = matches!(
+            &command,
+            AppCommand::SelectProfile { .. }
+                | AppCommand::UpdateProfileYaml { .. }
+                | AppCommand::UpdateMergeConfig { .. }
+                | AppCommand::UpdateRemoteProfile { .. }
+        );
         match &command {
             AppCommand::GetCoreNetworkSettings => {
                 return Ok(AppCommandResult {
@@ -448,18 +478,12 @@ impl Backend {
                 });
             }
             AppCommand::GetRuntimeSettings => {
-                let selected = self
-                    .profiles
-                    .selected()
-                    .ok_or_else(|| AppError::new(ErrorCode::NotFound, "no active profile"))?;
                 return Ok(AppCommandResult {
-                    output: AppCommandOutput::RuntimeSettings(crate::domain::RuntimeSettings {
-                        system_proxy_services: self.system_proxy.managed_services().to_vec(),
-                        system_proxy_endpoint: self.profiles.system_proxy_endpoint(selected)?,
-                        system_proxy_socks_endpoint: self
-                            .profiles
-                            .system_proxy_socks_endpoint(selected)?,
-                    }),
+                    output: AppCommandOutput::RuntimeSettings(
+                        self.runtime_settings_snapshot().ok_or_else(|| {
+                            AppError::new(ErrorCode::NotFound, "no active profile")
+                        })?,
+                    ),
                     summary: "Runtime settings loaded".into(),
                 });
             }
@@ -490,7 +514,15 @@ impl Backend {
                 });
             }
             AppCommand::UpdateApplicationSettings { settings } => {
-                self.persist_settings(settings)?;
+                // Older GUIs omit proxy preferences; general saves must preserve them.
+                let mut settings = settings.clone();
+                settings.system_proxy = self.settings.get().system_proxy.clone();
+                self.persist_settings(&settings)?;
+            }
+            AppCommand::UpdateSystemProxySettings { settings } => {
+                let mut latest = self.settings.get().clone();
+                latest.system_proxy = settings.clone();
+                self.persist_system_settings(&latest)?;
             }
             AppCommand::ExportApplicationSettings { destination } => {
                 let path = self.export_application_settings(destination)?;
@@ -723,6 +755,9 @@ impl Backend {
                     .map_err(|error| error.cause)?;
             }
         }
+        if changes_runtime {
+            self.synchronize_owned_proxy()?;
+        }
         self.refresh_sensitive_values();
         Ok(AppCommandResult {
             output: AppCommandOutput::None,
@@ -743,12 +778,19 @@ impl Backend {
         let current = engine.runtime.network_settings()?;
         self.profiles.preserve_runtime_tun(current.tun_enabled);
         let selected = self.profiles.selected().cloned();
-        let old_http = selected
+        let mut old_http = selected
             .as_ref()
             .and_then(|id| self.profiles.system_proxy_endpoint(id).ok());
-        let old_socks = selected
+        let mut old_socks = selected
             .as_ref()
             .and_then(|id| self.profiles.system_proxy_socks_endpoint(id).ok().flatten());
+        let proxy_host = self.settings.get().system_proxy.host.clone();
+        if let Some(crate::domain::SystemProxyTarget::Manual { endpoint, .. }) =
+            &self.proxy_session.target
+        {
+            old_http = Some(endpoint.clone());
+            old_socks = Some(endpoint.clone());
+        }
         let services = self.system_proxy.managed_services().to_vec();
         let mut proxy = MacSystemProxy::new(ProcessRunner, self.config.recovery_path.clone());
         let mut core = SupervisorControl::new(&mut engine.supervisor, Duration::from_secs(5));
@@ -763,13 +805,20 @@ impl Backend {
         )
         .update_network_settings(settings, |profiles| {
             if let (Some(id), Some(old)) = (&selected, &old_http) {
-                let new = profiles.system_proxy_endpoint(id)?;
+                let mut new = profiles.system_proxy_endpoint(id)?;
+                new.host = proxy_host.clone();
                 if &new != old || old_socks.as_ref().is_some_and(|s| s != &new) {
                     proxy.remap_endpoints(&services, old, old_socks.as_ref(), &new)?;
                 }
             }
             Ok(())
         })?;
+        if let Some(crate::domain::SystemProxyTarget::Manual { endpoint, .. }) =
+            &mut self.proxy_session.target
+        {
+            endpoint.port = self.profiles.network_settings()?.mixed_port;
+        }
+        self.refresh_pac_script();
         self.refresh_sensitive_values();
         Ok(())
     }
@@ -909,17 +958,7 @@ impl Backend {
     /// 设置落盘前先同步系统侧副作用（登录启动）。副作用失败则整体失败、
     /// 设置不落盘，保持持久化设置与系统状态一致。
     fn persist_settings(&mut self, settings: &ApplicationSettings) -> Result<(), AppError> {
-        if settings.launch_at_login != self.settings.get().launch_at_login {
-            self.login_item.set_enabled(settings.launch_at_login)?;
-        }
-        let previous_hotkey = self.settings.get().global_hotkey.clone();
-        self.settings.update(settings.clone())?;
-        // 全局快捷键由守护进程持有：设置变更落盘后请求主线程重新注册。
-        // 注册失败不影响设置生效，由守护侧 OS 通知告知用户（守护没有 toast 能力）。
-        if settings.global_hotkey != previous_hotkey {
-            self.queue_hotkey_sync(settings.global_hotkey.as_deref());
-        }
-        Ok(())
+        self.persist_system_settings(settings)
     }
 
     /// 请求守护主线程同步全局快捷键注册（None = 禁用）。未接线时（测试）静默跳过。
@@ -1096,9 +1135,14 @@ impl Backend {
     }
 
     /// 应用设置快照：附带运行实例版本（非 .app 运行为 None，UI 据此提示）。
-    fn settings_snapshot(&self) -> ApplicationSettingsSnapshot {
+    fn settings_snapshot(&mut self) -> ApplicationSettingsSnapshot {
+        let mut settings = self.settings.get().clone();
+        // Respect changes made in macOS System Settings; reading never registers an item.
+        if let Ok(enabled) = self.login_item.status() {
+            settings.launch_at_login = enabled;
+        }
         ApplicationSettingsSnapshot {
-            settings: self.settings.get().clone(),
+            settings,
             data_directory: self.config.data_dir.display().to_string(),
             app_version: current_app_version(),
         }
@@ -1139,9 +1183,8 @@ impl Backend {
         Ok(outcome.version)
     }
 
-    /// 重启编排（双进程）：先拉起（可能已替换的）bundle 里的 GUI 进程并标记退出；
-    /// 事件循环收尾（停内核、恢复代理、关 IPC）后退出本进程，新进程按既有
-    /// connect-or-spawn 逻辑接管守护角色。
+    /// 校验重启目标并标记退出。事件循环清理内核与 IPC 后再启动 GUI，
+    /// 避免新进程连接旧守护、被判定为重复实例后退出。
     fn request_restart(&mut self) -> Result<(), AppError> {
         let bundle = current_app_bundle().ok_or_else(|| {
             AppError::new(
@@ -1156,13 +1199,7 @@ impl Backend {
                 format!("bundle executable is missing: {}", executable.display()),
             ));
         }
-        std::process::Command::new(&executable)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|error| AppError::new(ErrorCode::PlatformFailed, error.to_string()))?;
-        self.log_app("info", "新实例已拉起，守护进程退出完成重启");
+        self.log_app("info", "准备重启，先清理旧实例再拉起新窗口");
         self.restart_requested = true;
         Ok(())
     }
@@ -1277,6 +1314,7 @@ impl Backend {
     /// 组装 IPC 握手快照：一次拉全可重建的领域态。
     fn initial_snapshot(&self) -> InitialSnapshot {
         InitialSnapshot {
+            capabilities: vec![crate::ipc::protocol::UNIFIED_SYSTEM_PROXY.into()],
             profiles: self.profiles.list().to_vec(),
             selected_profile: self.profiles.selected().cloned(),
             application_settings: ApplicationSettingsSnapshot {
@@ -1291,40 +1329,22 @@ impl Backend {
     /// 当前选中配置对应的运行时设置（无选中配置时为 None）。
     fn runtime_settings_snapshot(&self) -> Option<RuntimeSettings> {
         let selected = self.profiles.selected()?;
+        let endpoint = self
+            .settings
+            .get()
+            .system_proxy
+            .endpoint(
+                self.profiles
+                    .system_proxy_mixed_endpoint(selected)
+                    .ok()?
+                    .port,
+            )
+            .ok()?;
         Some(RuntimeSettings {
             system_proxy_services: self.system_proxy.managed_services().to_vec(),
-            system_proxy_endpoint: self.profiles.system_proxy_endpoint(selected).ok()?,
-            system_proxy_socks_endpoint: self
-                .profiles
-                .system_proxy_socks_endpoint(selected)
-                .ok()?,
+            system_proxy_endpoint: endpoint.clone(),
+            system_proxy_socks_endpoint: Some(endpoint),
         })
-    }
-
-    /// 系统代理当前是否开启（任一受管网络服务的 HTTP 代理开启即视为开启）。
-    fn system_proxy_enabled(&mut self) -> bool {
-        self.system_proxy
-            .state()
-            .is_ok_and(|state| state.services.iter().any(|service| service.web.enabled))
-    }
-
-    /// 托盘"切换系统代理"：当前开则关，关则按选中配置的端点开启。
-    /// 守护进程直接执行，不再经过 GUI 进程。
-    fn toggle_system_proxy(&mut self) -> Result<SystemProxyCommandResult, AppError> {
-        let state = self.system_proxy.state()?;
-        if state.services.iter().any(|service| service.web.enabled) {
-            return SystemProxyCommandHandler::new(&mut self.system_proxy)
-                .execute(SystemProxyCommand::Disable);
-        }
-        let selected = self
-            .profiles
-            .selected()
-            .cloned()
-            .ok_or_else(|| AppError::new(ErrorCode::NotFound, "no active profile"))?;
-        let endpoint = self.profiles.system_proxy_endpoint(&selected)?;
-        let services = self.system_proxy.managed_services().to_vec();
-        SystemProxyCommandHandler::new(&mut self.system_proxy)
-            .execute(SystemProxyCommand::Enable { services, endpoint })
     }
 }
 
@@ -1385,7 +1405,7 @@ pub fn run_daemon() {
             std::process::exit(1);
         }
     };
-    let (tray_updates_tx, tray_updates_rx) = mpsc::channel::<TraySnapshot>();
+    let (tray_updates_tx, tray_updates_rx) = mpsc::sync_channel::<TraySnapshot>(1);
     // 全局快捷键：backend 线程发注册同步请求，主线程消费（GlobalHotKeyManager
     // 必须在主线程创建和调用）；backend 收尾完成后经 shutdown channel 请求
     // 主线程终止 AppKit 循环，守护进程真正退出。
@@ -1431,7 +1451,7 @@ fn run_daemon_backend(
     server: Arc<IpcServer>,
     server_events: Receiver<IpcServerEvent>,
     tray_rx: Receiver<TrayCommand>,
-    tray_updates: Sender<TraySnapshot>,
+    tray_updates: mpsc::SyncSender<TraySnapshot>,
     hotkey_sync: Sender<Option<String>>,
     shutdown: Sender<()>,
 ) {
@@ -1445,13 +1465,9 @@ fn run_daemon_backend(
     backend.hotkey_sync = Some(hotkey_sync);
     // 启动即按已持久化设置同步一次全局快捷键注册。
     backend.queue_hotkey_sync(backend.settings.get().global_hotkey.as_deref());
-    // 启动即推一次托盘快照：菜单文案按已持久化语言贴上。
-    let mut tray_language = backend.settings.get().language.clone();
-    let _ = tray_updates.send(TraySnapshot {
-        language: tray_language.clone(),
-        ..TraySnapshot::default()
-    });
     let (event_tx, event_rx) = mpsc::channel::<DaemonEvent>();
+    let mut tray_state = tray::TrayState::new();
+    tray_state.publish(&backend, &tray_updates);
 
     // 全局快捷键按下事件转发线程（global-hotkey 全局 channel 的消费端）。
     #[cfg(target_os = "macos")]
@@ -1522,6 +1538,9 @@ fn run_daemon_backend(
                 handle_daemon_connected(&server, &backend, conn_id, protocol_version);
             }
             DaemonEvent::Ipc(IpcServerEvent::Request { conn_id, envelope }) => {
+                if tray::changes_menu(&envelope.request) {
+                    tray_state.invalidate();
+                }
                 handle_daemon_request(
                     &mut backend,
                     &server,
@@ -1560,71 +1579,43 @@ fn run_daemon_backend(
             DaemonEvent::Tray(TrayCommand::ShowMainWindow) | DaemonEvent::HotkeyPressed => {
                 show_main_window(&server);
             }
-            DaemonEvent::Tray(TrayCommand::HideMainWindow) => {
-                if let Some(primary) = server.primary() {
-                    let _ = server.send(primary, ClientMessage::HideWindow);
-                }
-            }
-            DaemonEvent::Tray(TrayCommand::ToggleSystemProxy) => {
-                if let Ok(result) = backend.toggle_system_proxy() {
-                    let _ = tray_updates.send(TraySnapshot {
-                        system_proxy_enabled: result
-                            .state
-                            .services
-                            .iter()
-                            .any(|service| service.web.enabled),
-                        upload_bytes_per_second: backend
-                            .last_traffic
-                            .as_ref()
-                            .map_or(0, |traffic| traffic.up),
-                        download_bytes_per_second: backend
-                            .last_traffic
-                            .as_ref()
-                            .map_or(0, |traffic| traffic.down),
-                        language: backend.settings.get().language.clone(),
-                    });
-                }
-            }
             DaemonEvent::Tray(TrayCommand::Quit) => quit = true,
+            DaemonEvent::Tray(command) => {
+                tray_state.invalidate();
+                tray::execute(&mut backend, &server, command);
+            }
+            DaemonEvent::TrayRefreshed(result) => {
+                tray_state.accept(*result, &server);
+            }
             DaemonEvent::RealtimeTick => {
                 let events = backend.drain_realtime_events();
                 if !events.is_empty() {
                     server.broadcast_realtime(&events);
-                    if let Some(traffic) = backend.last_traffic.clone() {
-                        let _ = tray_updates.send(TraySnapshot {
-                            system_proxy_enabled: backend.system_proxy_enabled(),
-                            upload_bytes_per_second: traffic.up,
-                            download_bytes_per_second: traffic.down,
-                            language: backend.settings.get().language.clone(),
-                        });
-                    }
                 }
             }
             DaemonEvent::PollTick => {
                 if let Some(error) = backend.poll().err() {
                     backend.log_app("error", format!("内核轮询失败: {}", error.message));
                     backend.fail_runtime(error);
+                    tray_state.invalidate();
+                }
+                if let Some(result) = backend.guard_system_proxy() {
+                    if let Err(error) = &result {
+                        backend.log_app("error", format!("系统代理守卫: {}", error.message));
+                    }
+                    tray::send_response(
+                        &server,
+                        UiResponse::SystemProxy {
+                            request: SystemProxyCommand::GetState,
+                            result,
+                        },
+                    );
+                    tray_state.invalidate();
                 }
             }
         }
-        // 语言变化（UpdateSettings / 导入 / 恢复备份等任一路径）时推一次托盘快照，
-        // 主线程据此重贴菜单文案；不需要专门的设置事件通道。
-        let language = backend.settings.get().language.clone();
-        if language != tray_language {
-            tray_language = language;
-            let _ = tray_updates.send(TraySnapshot {
-                system_proxy_enabled: backend.system_proxy_enabled(),
-                upload_bytes_per_second: backend
-                    .last_traffic
-                    .as_ref()
-                    .map_or(0, |traffic| traffic.up),
-                download_bytes_per_second: backend
-                    .last_traffic
-                    .as_ref()
-                    .map_or(0, |traffic| traffic.down),
-                language: tray_language.clone(),
-            });
-        }
+        tray_state.refresh(&backend, &event_tx);
+        tray_state.publish(&backend, &tray_updates);
         // 重启或退出请求已受理：随本次事件一起收尾退出。
         if backend.restart_requested || backend.quit_requested {
             quit = true;
@@ -1633,8 +1624,11 @@ fn run_daemon_backend(
     backend.shutdown();
     server.shutdown();
     if backend.restart_requested {
-        // 新 GUI 进程已在 request_restart 时拉起，会在连接失败后自建守护；
-        // 直接结束进程，AppKit 主线程（托盘）随进程终止。
+        // The socket and primary GUI must be gone before starting the replacement.
+        // Otherwise it handshakes with this daemon and exits as a duplicate.
+        if let Err(error) = spawn_gui_process() {
+            eprintln!("failed to restart Verge: {error}");
+        }
         std::process::exit(0);
     }
     // 清理完成：请求主线程终止 AppKit 事件循环，守护进程随 main 返回真正退出。
@@ -1645,9 +1639,15 @@ fn run_daemon_backend(
 /// 否则拉起新的 GUI 进程（它会经 IPC 连接本守护）。
 fn show_main_window(server: &Arc<IpcServer>) {
     if let Some(primary) = server.primary() {
-        let _ = server.send(primary, ClientMessage::ActivateWindow);
-    } else {
-        let _ = spawn_gui_process();
+        if server.send(primary, ClientMessage::ActivateWindow).is_ok() {
+            return;
+        }
+        server.release_primary(primary);
+    }
+    if let Err(error) = spawn_gui_process() {
+        eprintln!("failed to show Verge: {error}");
+        let _ =
+            crate::platform::MacNotifier::new(ProcessRunner).notify("Verge", &error.to_string());
     }
 }
 
@@ -1876,6 +1876,7 @@ enum DaemonEvent {
         response: Box<UiResponse>,
     },
     Tray(TrayCommand),
+    TrayRefreshed(Box<tray::RefreshResult>),
     /// 全局快捷键按下（守护进程持有注册，GUI 不在跑时也能呼出主窗口）。
     HotkeyPressed,
     RealtimeTick,
@@ -2109,7 +2110,7 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
-    fn test_backend(name: &str) -> (Backend, PathBuf) {
+    pub(super) fn test_backend(name: &str) -> (Backend, PathBuf) {
         let data_dir = std::env::temp_dir().join(format!(
             "verge-gpui-{name}-{}-{}",
             std::process::id(),
@@ -2193,6 +2194,46 @@ mod tests {
         assert_eq!(state.lock().unwrap().calls, [true, false, false]);
         assert!(!current_settings(&mut backend).launch_at_login);
         let _ = fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn login_item_validates_before_change_and_rolls_back_disk_failure() {
+        let (mut backend, directory) = test_backend("login-rollback");
+        let state = Arc::new(std::sync::Mutex::new(FakeLoginItemState::default()));
+        backend.login_item = Box::new(FakeLoginItem {
+            state: state.clone(),
+        });
+        let mut settings = ApplicationSettings {
+            launch_at_login: true,
+            ..Default::default()
+        };
+        settings.log_limit = 1;
+        assert!(backend.persist_settings(&settings).is_err());
+        assert!(state.lock().unwrap().calls.is_empty());
+        settings.log_limit = 1000;
+        fs::create_dir(directory.join("settings.json")).unwrap();
+        assert!(backend.persist_settings(&settings).is_err());
+        assert_eq!(state.lock().unwrap().calls, [true, false]);
+        assert!(!state.lock().unwrap().enabled);
+        assert!(!backend.settings.get().launch_at_login);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn settings_read_reflects_login_item_changed_outside_verge() {
+        let (mut backend, directory) = test_backend("login-external");
+        let state = Arc::new(std::sync::Mutex::new(FakeLoginItemState {
+            enabled: true,
+            ..Default::default()
+        }));
+        backend.login_item = Box::new(FakeLoginItem {
+            state: state.clone(),
+        });
+        assert!(current_settings(&mut backend).launch_at_login);
+        state.lock().unwrap().enabled = false;
+        assert!(!current_settings(&mut backend).launch_at_login);
+        assert!(state.lock().unwrap().calls.is_empty());
+        let _ = fs::remove_dir_all(directory);
     }
 
     #[test]

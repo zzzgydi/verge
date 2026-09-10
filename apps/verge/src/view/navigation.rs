@@ -101,11 +101,6 @@ impl MainView {
                     })),
             );
         }
-        let (status, color) = match self.state.core_status {
-            CoreStatus::Running => ("status.core_running", cx.theme().success),
-            CoreStatus::Offline => ("status.core_offline", cx.theme().muted_foreground),
-            CoreStatus::Unknown => ("status.core_unknown", cx.theme().muted_foreground),
-        };
         v_flex()
             .id("verge-sidebar")
             .debug_selector(|| "verge-sidebar".into())
@@ -162,32 +157,6 @@ impl MainView {
             )
             .child(navigation)
             .child(div().flex_1())
-            .child(
-                h_flex()
-                    .h_12()
-                    .w_full()
-                    .px(px(20.))
-                    .flex_shrink_0()
-                    .overflow_hidden()
-                    .child(div().size(px(8.)).flex_shrink_0().rounded_full().bg(color))
-                    .child(reveal(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(tr(lang, status)),
-                        "sidebar-status",
-                        expanded,
-                    ))
-                    .with_spring(
-                        "sidebar-status-gap",
-                        sidebar_motion(8. * expanded),
-                        |row, gap| row.gap(px(gap.max(0.))),
-                    ),
-            )
             .with_spring(
                 "sidebar-width",
                 sidebar_motion(56. + 148. * expanded),

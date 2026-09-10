@@ -1,6 +1,7 @@
 mod actions;
 mod components;
 pub(crate) mod network;
+mod system_proxy;
 use crate::domain::{HelperStatus, SettingsScope, ThemePreference};
 use crate::ui::UiAction;
 use components::{SettingsSection, field, v_form};
@@ -134,6 +135,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                             h_flex().child(
                                 Switch::new("switch-launch-at-login")
                                     .checked(settings.launch_at_login)
+                                    .disabled(view.is_pending(&["application_settings_write"]))
                                     .on_click(cx.listener(move |this, checked: &bool, _, cx| {
                                         let mut updated = current.clone();
                                         updated.launch_at_login = *checked;
@@ -208,171 +210,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
 
     let network_group = network::render(view, cx);
 
-    let proxy_state = view.state.system_proxy.clone();
-    let first_service = proxy_state
-        .as_ref()
-        .and_then(|state| state.services.first().cloned());
-    let socks_enabled = proxy_state.as_ref().is_some_and(|state| {
-        !state.services.is_empty() && state.services.iter().all(|service| service.socks.enabled)
-    });
-    let socks_runtime_endpoint = view
-        .state
-        .runtime_settings
-        .as_ref()
-        .and_then(|settings| settings.system_proxy_socks_endpoint.clone());
-    let socks_current = first_service.as_ref().map(|service| {
-        (
-            service.socks.enabled,
-            format!(
-                "{}:{}",
-                service.socks.endpoint.host, service.socks.endpoint.port
-            ),
-        )
-    });
-    let pac_current = first_service
-        .as_ref()
-        .map(|service| service.auto_proxy.clone());
-    let bypass_current = first_service
-        .as_ref()
-        .map(|service| service.bypass.clone())
-        .unwrap_or_default();
-
-    let proxy_group = SettingsSection::new()
-        .id("settings-system-proxy")
-        .title(tr(lang, "settings.group.proxy"))
-        .child(if proxy_state.is_some() {
-            v_form()
-                .child(
-                    field()
-                        .label(tr(lang, "settings.proxy.socks"))
-                        .description(match &socks_current {
-                            Some((true, endpoint)) => i18n::fmt_current(lang, endpoint),
-                            _ if socks_runtime_endpoint.is_none() => {
-                                tr(lang, "settings.proxy.socks.unavailable").into()
-                            }
-                            _ => tr(lang, "settings.proxy.socks.available").into(),
-                        })
-                        .child(h_flex().child({
-                            let socks_runtime_endpoint = socks_runtime_endpoint.clone();
-                            let current_endpoint = first_service
-                                .as_ref()
-                                .map(|service| service.socks.endpoint.clone());
-                            Switch::new("switch-socks")
-                                .checked(socks_enabled)
-                                .disabled(!socks_enabled && socks_runtime_endpoint.is_none())
-                                .on_click(cx.listener(move |this, checked: &bool, _, cx| {
-                                    let endpoint = if *checked {
-                                        socks_runtime_endpoint.clone()
-                                    } else {
-                                        current_endpoint
-                                            .clone()
-                                            .or_else(|| socks_runtime_endpoint.clone())
-                                    };
-                                    if let Some(endpoint) = endpoint {
-                                        this.dispatch(
-                                            UiAction::SetSocksProxy {
-                                                enabled: *checked,
-                                                endpoint,
-                                            },
-                                            cx,
-                                        );
-                                    }
-                                }))
-                        })),
-                )
-                .child(
-                    field()
-                        .label(tr(lang, "settings.proxy.pac"))
-                        .description(match &pac_current {
-                            Some(state) if state.enabled => i18n::fmt_current(
-                                lang,
-                                state
-                                    .url
-                                    .as_deref()
-                                    .unwrap_or(tr(lang, "settings.proxy.pac.enabled")),
-                            ),
-                            _ => tr(lang, "settings.proxy.not_set").into(),
-                        })
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .child(Input::new(&view.pac_url))
-                                .child(
-                                    Button::new("apply-pac")
-                                        .label(tr(lang, "common.enable"))
-                                        .small()
-                                        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
-                                        .outline()
-                                        .loading(view.is_pending(&["system_proxy"]))
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            let url =
-                                                this.pac_url.read(cx).value().trim().to_string();
-                                            if !url.is_empty() {
-                                                this.dispatch(
-                                                    UiAction::SetAutoProxy { url: Some(url) },
-                                                    cx,
-                                                );
-                                            }
-                                        })),
-                                )
-                                .when(
-                                    pac_current.as_ref().is_some_and(|state| state.enabled),
-                                    |this| {
-                                        this.child(
-                                            Button::new("disable-pac")
-                                                .label(tr(lang, "common.disable"))
-                                                .small()
-                                                .h(px(crate::appearance::metrics::COMPACT_CONTROL))
-                                                .outline()
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.dispatch(
-                                                        UiAction::SetAutoProxy { url: None },
-                                                        cx,
-                                                    );
-                                                })),
-                                        )
-                                    },
-                                ),
-                        ),
-                )
-                .child(
-                    field()
-                        .label(tr(lang, "settings.proxy.bypass"))
-                        .description(if bypass_current.is_empty() {
-                            tr(lang, "settings.proxy.bypass.empty").into()
-                        } else {
-                            i18n::fmt_current(lang, &bypass_current.join(", "))
-                        })
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .child(Input::new(&view.proxy_bypass))
-                                .child(
-                                    Button::new("save-bypass")
-                                        .label(tr(lang, "common.save"))
-                                        .small()
-                                        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
-                                        .outline()
-                                        .loading(view.is_pending(&["system_proxy"]))
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            let domains = this
-                                                .proxy_bypass
-                                                .read(cx)
-                                                .value()
-                                                .split([',', ';', ' ', '\n'])
-                                                .map(str::trim)
-                                                .filter(|domain| !domain.is_empty())
-                                                .map(str::to_owned)
-                                                .collect();
-                                            this.dispatch(UiAction::SetProxyBypass { domains }, cx);
-                                        })),
-                                ),
-                        ),
-                )
-                .into_any_element()
-        } else {
-            muted(tr(lang, "settings.proxy.not_loaded"), cx).into_any_element()
-        });
+    let proxy_group = system_proxy::render(view, cx);
 
     let core_group = SettingsSection::new()
         .id("settings-core")
@@ -706,7 +544,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         }));
     let content = match view.settings_category {
         SettingsCategory::General => v_flex().gap_4().child(general_group),
-        SettingsCategory::Network => v_flex().gap_4().child(network_group).child(proxy_group),
+        SettingsCategory::Network => v_flex().gap_4().child(proxy_group).child(network_group),
         SettingsCategory::Updates => v_flex().gap_4().child(core_group).child(app_update_group),
         SettingsCategory::System => v_flex().gap_4().child(system_group).child(backup_group),
     };

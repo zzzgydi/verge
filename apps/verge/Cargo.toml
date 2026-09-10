@@ -37,14 +37,15 @@ gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", 
 verge-helper-protocol = { path = "../../crates/verge-helper-protocol" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+auto-launch = "0.6"
 dispatch2 = "0.3"
 global-hotkey = "0.8"
 image = { version = "0.25", default-features = false, features = ["png"] }
 objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
-objc2-service-management = "0.3"
 reqwest = { version = "0.11.27", default-features = false, features = ["blocking", "native-tls"] }
+smappservice-rs = "0.1.3"
 tray-icon = "0.21"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
