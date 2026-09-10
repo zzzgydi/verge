@@ -7,14 +7,14 @@ use crate::{
     i18n::{Lang, tr},
     view::MainView,
 };
-use gpui::{prelude::FluentBuilder as _, *};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     switch::Switch,
     v_flex,
 };
+use gpui_kit::{prelude::FluentBuilder as _, *};
 
 pub fn mode_label(lang: Lang, mode: RunMode) -> &'static str {
     tr(

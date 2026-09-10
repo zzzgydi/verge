@@ -66,7 +66,7 @@ impl MainView {
                             .px(px(15.))
                             .rounded_lg()
                             .border_1()
-                            .border_color(gpui::transparent_black())
+                            .border_color(gpui_kit::transparent_black())
                             .accessibility_label(tr(lang, label))
                             .child(
                                 h_flex()

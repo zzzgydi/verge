@@ -1,7 +1,7 @@
 use core::prelude::v1::test;
-use gpui::*;
-use gpui_component::Root;
-use gpui_component::scroll::ScrollbarHandle as _;
+use gpui_kit::component::Root;
+use gpui_kit::component::scroll::ScrollbarHandle as _;
+use gpui_kit::*;
 use std::{cell::RefCell, rc::Rc, sync::mpsc};
 
 use crate::{
@@ -10,9 +10,9 @@ use crate::{
     view::MainView,
 };
 
-#[gpui::test]
+#[gpui_kit::test]
 fn multiline_logs_fit_and_longest_log_scrolls_both_axes(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(gpui_kit::init);
     let (tx, _rx) = mpsc::channel();
     let holder = Rc::new(RefCell::new(None));
     let copy = holder.clone();

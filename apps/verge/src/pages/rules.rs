@@ -1,10 +1,10 @@
 use super::components::PageHeader;
 use crate::{domain::ProviderKind, i18n::tr, ui::UiAction, view::MainView};
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Sizable as _, StyledExt as _, button::Button, h_flex, scroll::Scrollbar,
     v_flex, v_virtual_list,
 };
+use gpui_kit::*;
 use std::rc::Rc;
 
 const ROW_HEIGHT: f32 = 36.;
@@ -39,7 +39,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 super::skeleton_rows(5).into_any_element()
             } else {
                 super::EmptyState::new(
-                    gpui_component::IconName::BookOpen,
+                    gpui_kit::component::IconName::BookOpen,
                     tr(lang, "rules.empty.title"),
                     tr(lang, "rules.empty.desc"),
                 )

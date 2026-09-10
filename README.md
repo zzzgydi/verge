@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md)
 
-Verge is a native macOS proxy client built with Rust, GPUI, and Mihomo. It uses a native UI, a persistent background daemon, typed application commands, and a narrowly scoped privileged helper.
+Verge is a native macOS proxy client built with Rust, GPUI Kit, and Mihomo. It uses a native UI, a persistent background daemon, typed application commands, and a narrowly scoped privileged helper.
 
 > Development status: active rewrite. The GPUI branch is usable for development and testing, but release packaging is currently limited to macOS 13+ on Apple Silicon.
 
@@ -38,7 +38,7 @@ Verge.app
 
 The GUI sends typed requests over a local Unix socket. It never calls Mihomo or macOS system APIs directly. The daemon owns the long-lived state, validates commands, manages the sidecar, and streams batched realtime events back to the GUI.
 
-The workspace keeps only boundaries that correspond to independently built or privileged programs:
+The workspace contains the application, its privileged helper, and their shared protocol:
 
 | Path | Responsibility |
 |---|---|
@@ -54,6 +54,12 @@ daemon, protocol, application, configuration, Mihomo, and platform responsibilit
 without requiring a separate Cargo package for every layer.
 
 The earlier React/Tauri/sing-box implementation and the Phase 0 spike projects have been removed.
+
+UI dependency setup and API conventions: [GPUI Kit integration](docs/gpui-kit.md).
+
+macOS system proxy operations use [sysproxy-rs](https://github.com/zzzgydi/sysproxy-rs)
+from its Git `main` branch, with the resolved commit recorded in `Cargo.lock`.
+Verge owns recovery snapshots, rollback, post-write verification, and the proxy guard.
 
 ## Runtime configuration
 
@@ -75,7 +81,8 @@ or encrypted profile backups. TUN remains a separate helper-managed runtime swit
 
 ## Requirements
 
-- macOS 13 or newer.
+- macOS 15 or newer for development, following GPUI Kit’s current requirements.
+  The bundle minimum is still 13.0; macOS 13/14 have not been revalidated after this upgrade.
 - Apple Silicon for the current `.app` packaging flow.
 - Xcode Command Line Tools.
 - Rust `1.97.1` with `rustfmt` and `clippy`.

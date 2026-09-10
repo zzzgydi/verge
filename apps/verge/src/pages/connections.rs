@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use crate::domain::ConnectionSnapshot;
 use crate::ui::UiAction;
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     menu::{PopupMenu, PopupMenuItem},
@@ -11,6 +10,7 @@ use gpui_component::{
     tooltip::Tooltip,
     v_flex,
 };
+use gpui_kit::*;
 
 use crate::{
     format,

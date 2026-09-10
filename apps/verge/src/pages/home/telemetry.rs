@@ -5,8 +5,8 @@ use crate::{
     format,
     i18n::{Lang, tr},
 };
-use gpui::{prelude::FluentBuilder as _, *};
-use gpui_component::{ActiveTheme as _, IconName, StyledExt as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, IconName, StyledExt as _, h_flex, v_flex};
+use gpui_kit::{prelude::FluentBuilder as _, *};
 use std::collections::VecDeque;
 
 const HISTORY_SAMPLES: usize = 40;
@@ -210,9 +210,9 @@ impl Render for Telemetry {
 mod tests {
     use super::{HISTORY_SAMPLES, Telemetry};
     use crate::domain::{RealtimeEvent, TrafficEvent};
-    use gpui::{AppContext as _, TestAppContext};
+    use gpui_kit::{AppContext as _, TestAppContext};
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn long_running_traffic_keeps_only_recent_samples(cx: &mut TestAppContext) {
         let telemetry = cx.new(|_| Telemetry::new());
         telemetry.update(cx, |telemetry, cx| {

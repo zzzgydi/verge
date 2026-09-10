@@ -4,6 +4,10 @@ All GPUI pages share this density and hierarchy. Use Tailwind's spacing and type
 scales as a reference, with desktop controls and retained GPUI entities. This is a
 native design system; it does not add a web styling dependency.
 
+Use [GPUI Kit](gpui-kit.md) as the application UI entry point. Prefer its styled
+components and Base behavior primitives; follow the locked release's APIs and the
+[official design guide](https://gpui-kit.com/docs/design-guides).
+
 ## Scale
 
 | Role | Logical pixels | Tailwind reference |

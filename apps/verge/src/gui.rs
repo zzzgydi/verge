@@ -1,12 +1,12 @@
 use std::{path::Path, time::Duration};
 
 use futures::StreamExt;
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Root, TitleBar, WindowExt as _,
     input::{Copy, Cut, Paste, Redo, SelectAll, Undo},
     notification::Notification,
 };
+use gpui_kit::*;
 
 use crate::assets::Assets;
 
@@ -126,7 +126,7 @@ pub fn run() {
     let request_tx = client.request_sender();
     let mut events = client.into_events();
 
-    let application = gpui_platform::application()
+    let application = gpui_kit::application()
         .with_quit_mode(QuitMode::LastWindowClosed)
         .with_assets(Assets);
     application.on_reopen(|cx| {
@@ -135,7 +135,7 @@ pub fn run() {
         }
     });
     application.run(|cx| {
-        gpui_component::init(cx);
+        gpui_kit::init(cx);
         set_app_menus(Lang::En, cx);
         cx.bind_keys([
             KeyBinding::new("cmd-q", QuitVerge, None),

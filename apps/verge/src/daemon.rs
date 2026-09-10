@@ -189,7 +189,7 @@ struct Backend {
     settings: FileSettingsStore,
     engine: Option<Engine>,
     runtime_error: Option<AppError>,
-    system_proxy: PlatformSystemProxy<MacSystemProxy<ProcessRunner>>,
+    system_proxy: PlatformSystemProxy<MacSystemProxy<crate::platform::SystemProxyRunner>>,
     login_item: Box<dyn LoginItemService + Send>,
     proxy_session: system_proxy::ProxySession,
     update_scheduler: UpdateScheduler,
@@ -226,7 +226,10 @@ impl Backend {
         }
         profiles.set_internal_socket(config.internal_socket());
         let settings = FileSettingsStore::open(&config.data_dir)?;
-        let mut platform = MacSystemProxy::new(ProcessRunner, config.recovery_path.clone());
+        let mut platform = MacSystemProxy::new(
+            crate::platform::SystemProxyRunner,
+            config.recovery_path.clone(),
+        );
         let services = if config.services.is_empty() {
             platform.list_network_services()?
         } else {
@@ -792,7 +795,10 @@ impl Backend {
             old_socks = Some(endpoint.clone());
         }
         let services = self.system_proxy.managed_services().to_vec();
-        let mut proxy = MacSystemProxy::new(ProcessRunner, self.config.recovery_path.clone());
+        let mut proxy = MacSystemProxy::new(
+            crate::platform::SystemProxyRunner,
+            self.config.recovery_path.clone(),
+        );
         let mut core = SupervisorControl::new(&mut engine.supervisor, Duration::from_secs(5));
         let credentials = RuntimeCredentials {
             controller: self.config.controller,

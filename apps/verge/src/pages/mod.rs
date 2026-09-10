@@ -7,12 +7,12 @@ pub mod proxies;
 pub mod rules;
 pub mod settings;
 
-use gpui::{
+use gpui_kit::component::{
+    ActiveTheme as _, Icon, IconName, StyledExt as _, skeleton::Skeleton, text::TextView,
+};
+use gpui_kit::{
     AnyElement, App, Context, Div, ElementId, IntoElement, ParentElement as _, RenderOnce,
     SharedString, Styled, Window, div, prelude::FluentBuilder as _,
-};
-use gpui_component::{
-    ActiveTheme as _, Icon, IconName, StyledExt as _, skeleton::Skeleton, text::TextView,
 };
 
 use crate::view::MainView;
@@ -32,7 +32,7 @@ pub fn selectable_text(id: impl Into<ElementId>, text: impl Into<SharedString>) 
 
 /// 数据加载中的占位骨架行。
 pub fn skeleton_rows(rows: usize) -> impl IntoElement {
-    gpui_component::v_flex()
+    gpui_kit::component::v_flex()
         .gap_2()
         .children((0..rows).map(|_| Skeleton::new().h_8().w_full()))
 }
@@ -69,7 +69,7 @@ impl EmptyState {
 
 impl RenderOnce for EmptyState {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        gpui_component::v_flex()
+        gpui_kit::component::v_flex()
             .w_full()
             .items_center()
             .justify_center()

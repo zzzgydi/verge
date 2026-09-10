@@ -10,8 +10,7 @@ use crate::{
     ui::{UiAction, UiState},
     view::MainView,
 };
-use gpui::{prelude::FluentBuilder as _, *};
-use gpui_component::{
+use gpui_kit::component::{
     IconName, Sizable as _, VirtualListScrollHandle,
     button::{Button, ButtonVariants as _},
     h_flex,
@@ -19,6 +18,7 @@ use gpui_component::{
     scroll::Scrollbar,
     v_flex, v_virtual_list,
 };
+use gpui_kit::{prelude::FluentBuilder as _, *};
 use model::Row;
 use std::{
     collections::{HashMap, HashSet},
@@ -202,7 +202,7 @@ impl Render for ProxyPage {
                 div().flex_1().min_w_0().child(
                     Input::new(&self.search)
                         .cleanable(true)
-                        .prefix(gpui_component::Icon::new(IconName::Search).size_4()),
+                        .prefix(gpui_kit::component::Icon::new(IconName::Search).size_4()),
                 ),
             )
             .when(!global && !direct, |this| {

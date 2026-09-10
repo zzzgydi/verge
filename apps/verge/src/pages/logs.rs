@@ -5,14 +5,14 @@ mod tests;
 
 use std::rc::Rc;
 
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Sizable as _,
     button::Button,
     menu::{DropdownMenu as _, PopupMenuItem},
     scroll::{Scrollbar, ScrollbarMode},
     v_flex, v_virtual_list,
 };
+use gpui_kit::*;
 
 use crate::{
     i18n::{self, tr},
@@ -128,7 +128,7 @@ pub fn render(view: &mut MainView, window: &mut Window, cx: &mut Context<MainVie
         .collect();
     if rows.is_empty() {
         let empty = super::EmptyState::new(
-            gpui_component::IconName::SquareTerminal,
+            gpui_kit::component::IconName::SquareTerminal,
             tr(lang, "logs.empty.title"),
             if filter.is_some() {
                 tr(lang, "logs.empty.filtered")

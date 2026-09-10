@@ -7,8 +7,8 @@ use crate::{
     domain::{ProxySnapshot, RunMode},
     view::MainView,
 };
-use gpui::{AppContext as _, Focusable as _, Modifiers, TestAppContext, point, px, size};
-use gpui_component::Root;
+use gpui_kit::component::Root;
+use gpui_kit::{AppContext as _, Focusable as _, Modifiers, TestAppContext, point, px, size};
 use std::{cell::RefCell, sync::mpsc};
 use std::{rc::Rc, sync::Arc};
 
@@ -45,9 +45,9 @@ fn snapshot() -> ProxySnapshot {
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn group_filter_locate_selection_and_global_layout(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(gpui_kit::init);
     let (tx, rx) = mpsc::channel();
     let holder = Rc::new(RefCell::new(None));
     let copy = holder.clone();

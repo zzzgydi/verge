@@ -1,7 +1,7 @@
-//! Application palette. Component behavior continues to come from gpui-component.
+//! Application palette. Component behavior continues to come from GPUI Kit.
 pub mod metrics;
-use gpui::{App, Hsla, px, rgb};
-use gpui_component::theme::{Theme, ThemeMode};
+use gpui_kit::component::theme::{Theme, ThemeMode};
+use gpui_kit::{App, Hsla, px, rgb};
 
 pub fn apply(mode: ThemeMode, cx: &mut App) {
     let dark = mode == ThemeMode::Dark;

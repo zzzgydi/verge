@@ -3,12 +3,12 @@ use super::{
     model::{GROUP_HEIGHT, NODES_HEIGHT, Row},
 };
 use crate::{appearance::metrics, i18n::tr, ui::UiAction};
-use gpui::{prelude::FluentBuilder as _, *};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     h_flex, v_flex,
 };
+use gpui_kit::{prelude::FluentBuilder as _, *};
 
 fn badge(text: impl Into<SharedString>, cx: &App) -> impl IntoElement {
     div()
@@ -409,9 +409,9 @@ mod tests {
         }
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn completed_delay_keeps_its_color_under_hover_and_press(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
+        cx.update(gpui_kit::init);
         let color = Rc::new(RefCell::new(None));
         let probe_color = color.clone();
         let (probe, cx) = cx.add_window_view(|_, _| DelayProbe {

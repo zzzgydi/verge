@@ -5,8 +5,7 @@ mod system_proxy;
 use crate::domain::{HelperStatus, SettingsScope, ThemePreference};
 use crate::ui::UiAction;
 use components::{SettingsSection, field, v_form};
-use gpui::{prelude::FluentBuilder as _, *};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
@@ -14,6 +13,7 @@ use gpui_component::{
     switch::Switch,
     v_flex,
 };
+use gpui_kit::{prelude::FluentBuilder as _, *};
 
 use crate::{
     i18n::{self, Lang, tr},

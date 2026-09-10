@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-Verge 是使用 Rust、GPUI 和 Mihomo 开发的 macOS 原生代理客户端，采用原生界面、常驻守护进程、类型明确的应用命令，以及权限范围受限的 helper。
+Verge 是使用 Rust、GPUI Kit 和 Mihomo 开发的 macOS 原生代理客户端，采用原生界面、常驻守护进程、类型明确的应用命令，以及权限范围受限的 helper。
 
 > 开发状态：项目仍在重写阶段。GPUI 分支已经可以开发和测试，但发布构建目前只支持 macOS 13 及以上的 Apple Silicon 设备。
 
@@ -37,7 +37,7 @@ Verge.app
 
 GUI 通过本机 Unix socket 发送 typed request，不直接调用 Mihomo 或 macOS 系统 API。守护进程持有长期状态，校验并执行命令，管理 Mihomo，再把批量实时事件发回 GUI。
 
-workspace 只保留与独立程序或权限边界对应的包：
+workspace 包含主应用、特权 helper 及共用协议：
 
 | 路径 | 职责 |
 |---|---|
@@ -52,9 +52,14 @@ workspace 只保留与独立程序或权限边界对应的包：
 
 早期 React/Tauri/sing-box 实现和 Phase 0 spike 工程已经移除。
 
+UI 依赖和 API 使用约定见 [GPUI Kit 接入说明](docs/gpui-kit.md)。
+
+macOS 系统代理读写使用 [sysproxy-rs](https://github.com/zzzgydi/sysproxy-rs) 的 Git `main` 分支，实际提交记录在 `Cargo.lock` 中。恢复快照、回滚、写后验证和代理守卫仍由 Verge 管理。
+
 ## 环境要求
 
-- macOS 13 或更高版本。
+- 开发环境按 GPUI Kit 当前要求使用 macOS 15 或更高版本。
+  应用包最低版本仍为 13.0；升级后的 macOS 13/14 运行兼容性尚未复核。
 - 当前 `.app` 打包流程要求 Apple Silicon。
 - Xcode Command Line Tools。
 - Rust `1.97.1`，并安装 `rustfmt` 和 `clippy`。

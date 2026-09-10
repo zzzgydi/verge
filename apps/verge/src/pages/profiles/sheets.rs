@@ -4,8 +4,7 @@ use crate::{
     ui::UiAction,
     view::MainView,
 };
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::DialogButtonProps,
@@ -14,6 +13,7 @@ use gpui_component::{
     notification::Notification,
     v_flex,
 };
+use gpui_kit::*;
 
 impl MainView {
     pub fn open_yaml_sheet(&mut self, id: ProfileId, window: &mut Window, cx: &mut Context<Self>) {

@@ -5,8 +5,7 @@ use crate::domain::{
     CommandActor, CommandApproval, CommandContext, CommandRisk, ProfileId, ThemePreference,
 };
 use crate::ui::{CoreStatus, Page, UiAction, UiRequestEnvelope, UiState};
-use gpui::{prelude::FluentBuilder as _, *};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Root, Sizable as _, StyledExt as _, TitleBar,
     VirtualListScrollHandle,
     alert::Alert,
@@ -19,6 +18,7 @@ use gpui_component::{
     theme::{Theme, ThemeMode},
     v_flex,
 };
+use gpui_kit::{prelude::FluentBuilder as _, *};
 
 use crate::{
     i18n::{self, Lang, tr},
@@ -41,7 +41,7 @@ actions!(
 
 /// Sheet 加载状态：独立于 MainView 的实体。
 ///
-/// gpui-component 的 sheet builder 在渲染时执行（`render_sheet_layer` 调用），
+/// GPUI Kit 的 sheet builder 在渲染时执行（`render_sheet_layer` 调用），
 /// 而渲染期间 MainView 实体处于 lease 状态——builder 里直接 `view.read()` 读
 /// MainView 会 double-lease panic。因此这些状态放进独立实体，builder 只读它。
 #[derive(Default)]
@@ -289,7 +289,7 @@ impl MainView {
         };
         if self.pending_proxy_settings.as_ref() == Some(snapshot.settings.system_proxy.as_ref()) {
             self.pending_proxy_settings = None;
-            gpui_component::WindowExt::close_dialog(window, cx);
+            gpui_kit::component::WindowExt::close_dialog(window, cx);
         }
         let current = snapshot.settings.log_limit;
         if self.log_limit_applied != Some(current)
@@ -467,7 +467,7 @@ impl MainView {
         }
     }
 
-    /// 按设置里的主题偏好同步 gpui-component 主题；`System` 跟随当前窗口外观。
+    /// 按设置里的主题偏好同步 GPUI Kit 主题；`System` 跟随当前窗口外观。
     pub fn sync_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let preference = self
             .state
@@ -553,7 +553,7 @@ impl MainView {
 
 impl Render for MainView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // gpui-component 的 Root::render 不挂载 overlay 层；dialog / sheet / 通知
+        // GPUI Kit 的 Root::render 不挂载 overlay 层；dialog / sheet / 通知
         // 必须由应用自己在渲染树里显式挂载，否则窗口状态注册了但屏幕上不显示
         // （表现为"点了没反应"）。
         let sheet_layer = Root::render_sheet_layer(window, cx);

@@ -1,7 +1,7 @@
 //! Value-like visual components; retained behavior belongs to feature entities.
 use crate::appearance::metrics;
-use gpui::*;
-use gpui_component::{ActiveTheme as _, Icon, IconName, StyledExt as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, StyledExt as _, h_flex, v_flex};
+use gpui_kit::*;
 
 #[derive(IntoElement)]
 pub struct Metric {
@@ -31,7 +31,7 @@ impl RenderOnce for Metric {
             .min_w_0()
             .gap_3()
             .child(
-                gpui_component::h_flex()
+                gpui_kit::component::h_flex()
                     .justify_between()
                     .text_color(cx.theme().muted_foreground)
                     .text_xs()
@@ -101,7 +101,7 @@ pub fn mode_selector(
     cx: &mut Context<crate::view::MainView>,
 ) -> impl IntoElement {
     use crate::{domain::RunMode, ui::UiAction};
-    use gpui_component::{
+    use gpui_kit::component::{
         Disableable as _, Selectable as _, Sizable as _,
         button::{Button, ButtonGroup},
     };

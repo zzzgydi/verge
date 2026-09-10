@@ -3,7 +3,7 @@ use super::{
     *,
 };
 use crate::domain::SystemProxySettings;
-use gpui_component::{
+use gpui_kit::component::{
     WindowExt as _,
     input::{InputState, Textarea, TextareaState},
     notification::Notification,

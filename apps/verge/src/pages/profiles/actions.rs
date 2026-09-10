@@ -4,8 +4,7 @@ use crate::{
     ui::UiAction,
     view::MainView,
 };
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::DialogButtonProps,
@@ -14,6 +13,7 @@ use gpui_component::{
     input::{Input, Textarea},
     notification::Notification,
 };
+use gpui_kit::*;
 
 impl MainView {
     pub fn import_profile(&mut self, cx: &mut Context<Self>) -> Result<(), AppError> {
@@ -271,7 +271,7 @@ impl MainView {
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(tr(lang, "common.delete"))
-                        .ok_variant(gpui_component::button::ButtonVariant::Danger)
+                        .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
                         .cancel_text(tr(lang, "common.cancel"))
                         .show_cancel(true),
                 )

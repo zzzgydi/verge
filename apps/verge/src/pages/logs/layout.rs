@@ -1,8 +1,8 @@
 //! Cache dimensions only: unchanged messages are not shaped again on every frame.
 use std::collections::VecDeque;
 
-use gpui::*;
-use gpui_component::ActiveTheme as _;
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::*;
 
 use super::{LOG_FONT_SIZE, LOG_INSET, LOG_ROW_HEIGHT, display_text};
 use crate::ui::UiState;

@@ -90,7 +90,7 @@ impl TrayState {
                 .sort_by_key(|g| indices.get(g.name.as_str()).copied().unwrap_or(usize::MAX));
             let system_proxy = read_system
                 .then(|| {
-                    MacSystemProxy::new(ProcessRunner, recovery)
+                    MacSystemProxy::new(crate::platform::SystemProxyRunner, recovery)
                         .state(&services)
                         .ok()
                 })

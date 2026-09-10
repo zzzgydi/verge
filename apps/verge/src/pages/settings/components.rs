@@ -1,5 +1,5 @@
-use gpui::*;
-use gpui_component::{ActiveTheme as _, StyledExt as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, StyledExt as _, h_flex, v_flex};
+use gpui_kit::*;
 
 /// A settings row owns presentation only; input state stays in retained entities.
 #[derive(IntoElement, Default)]

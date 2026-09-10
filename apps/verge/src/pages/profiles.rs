@@ -8,14 +8,14 @@ use crate::{
     ui::UiAction,
     view::MainView,
 };
-use gpui::{prelude::FluentBuilder as _, *};
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     menu::{DropdownMenu as _, PopupMenuItem},
     v_flex,
 };
+use gpui_kit::{prelude::FluentBuilder as _, *};
 
 fn policy_summary(lang: Lang, profile: &Profile) -> String {
     match &profile.update_policy {

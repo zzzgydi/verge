@@ -4,13 +4,13 @@ use crate::{
     ui::UiAction,
     view::MainView,
 };
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     WindowExt as _,
     dialog::DialogButtonProps,
     form::{field, v_form},
     v_flex,
 };
+use gpui_kit::*;
 
 impl MainView {
     pub fn confirm_restore_backup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -25,7 +25,7 @@ impl MainView {
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(tr(lang, "dialog.restore_backup.ok"))
-                        .ok_variant(gpui_component::button::ButtonVariant::Danger)
+                        .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
                         .cancel_text(tr(lang, "common.cancel"))
                         .show_cancel(true),
                 )
@@ -57,7 +57,7 @@ impl MainView {
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(tr(lang, "settings.system.helper.uninstall"))
-                        .ok_variant(gpui_component::button::ButtonVariant::Danger)
+                        .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
                         .cancel_text(tr(lang, "common.cancel"))
                         .show_cancel(true),
                 )

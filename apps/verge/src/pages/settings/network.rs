@@ -1,8 +1,7 @@
 mod dialogs;
 use super::components::{SettingsSection, field, v_form};
 use crate::{domain::CoreNetworkSettings, i18n::tr, ui::UiAction, view::MainView};
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     Disableable as _, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
@@ -11,6 +10,7 @@ use gpui_component::{
     notification::Notification,
     switch::Switch,
 };
+use gpui_kit::*;
 
 pub(crate) struct NetworkForm {
     port: Entity<InputState>,

@@ -1,6 +1,6 @@
 //! Root / Dialog / Sheet 机制的 UI 测试。
 //!
-//! 用 gpui 的 `add_window_view`（与 gpui-component 官方测试一致的环境）验证：
+//! 用 gpui 的 `add_window_view`（与 GPUI Kit 官方测试一致的环境）验证：
 //! 1. dialog/sheet 打开后 `Root::render_*_layer` 必须存在（MainView 已挂载
 //!    overlay 层——此前未挂载导致"点了没反应"）；
 //! 2. sheet builder 渲染时不能读 MainView 实体（已用 SheetState 解耦）。
@@ -9,17 +9,17 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc;
 
-use gpui::{AppContext as _, Styled as _, TestAppContext, VisualTestContext};
-use gpui_component::{ActiveTheme as _, Root, WindowExt as _};
+use gpui_kit::component::{ActiveTheme as _, Root, WindowExt as _};
+use gpui_kit::{AppContext as _, Styled as _, TestAppContext, VisualTestContext};
 
 use crate::i18n::Lang;
 use crate::view::MainView;
 
-type ViewHolder = Rc<RefCell<Option<gpui::Entity<MainView>>>>;
+type ViewHolder = Rc<RefCell<Option<gpui_kit::Entity<MainView>>>>;
 
 /// 创建窗口：MainView + Root（与真实 main() 同构）。
-fn setup(cx: &mut TestAppContext) -> (gpui::Entity<Root>, ViewHolder, &mut VisualTestContext) {
-    cx.update(gpui_component::init);
+fn setup(cx: &mut TestAppContext) -> (gpui_kit::Entity<Root>, ViewHolder, &mut VisualTestContext) {
+    cx.update(gpui_kit::init);
     let (request_tx, _request_rx) = mpsc::channel();
     let view_holder: ViewHolder = Default::default();
     let holder = view_holder.clone();
@@ -31,7 +31,7 @@ fn setup(cx: &mut TestAppContext) -> (gpui::Entity<Root>, ViewHolder, &mut Visua
     (root, view_holder, cx)
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn import_dialog_opens_and_renders(cx: &mut TestAppContext) {
     let (_, view_holder, cx) = setup(cx);
     let view = view_holder
@@ -59,7 +59,7 @@ fn import_dialog_opens_and_renders(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn yaml_sheet_opens_and_renders(cx: &mut TestAppContext) {
     let (_, view_holder, cx) = setup(cx);
     let view = view_holder
@@ -86,7 +86,7 @@ fn yaml_sheet_opens_and_renders(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn merge_sheet_opens_and_renders_without_reading_main_view(cx: &mut TestAppContext) {
     let (_, view_holder, cx) = setup(cx);
     let view = view_holder
@@ -110,7 +110,7 @@ fn merge_sheet_opens_and_renders_without_reading_main_view(cx: &mut TestAppConte
     assert!(has_sheet && layer, "merge sheet 应打开且渲染层存在");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn merged_sheet_opens_and_renders(cx: &mut TestAppContext) {
     let (_, view_holder, cx) = setup(cx);
     let view = view_holder
@@ -135,7 +135,7 @@ fn merged_sheet_opens_and_renders(cx: &mut TestAppContext) {
 
 /// 语言切换：设置写入后 MainView::lang 立即反映新语言，sync_form_inputs
 /// 同步重设输入框占位（状态驱动，无需重启；占位内容正确性由 i18n 查表测试覆盖）。
-#[gpui::test]
+#[gpui_kit::test]
 fn language_switch_updates_view_language(cx: &mut TestAppContext) {
     use crate::domain::{ApplicationSettings, ApplicationSettingsSnapshot};
 
@@ -178,7 +178,7 @@ fn language_switch_updates_view_language(cx: &mut TestAppContext) {
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn connection_table_shares_snapshot_and_updates_before_render(cx: &mut TestAppContext) {
     use crate::domain::{Connection, ConnectionSnapshot, RealtimeEvent};
     let (_, holder, cx) = setup(cx);
@@ -210,11 +210,11 @@ fn connection_table_shares_snapshot_and_updates_before_render(cx: &mut TestAppCo
     });
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn all_pages_render_at_minimum_window_size(cx: &mut TestAppContext) {
     let (_, holder, cx) = setup(cx);
     let view = holder.borrow().clone().unwrap();
-    cx.simulate_resize(gpui::size(gpui::px(960.), gpui::px(640.)));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(960.), gpui_kit::px(640.)));
     for page in [
         crate::ui::Page::Home,
         crate::ui::Page::Proxies,
@@ -229,15 +229,15 @@ fn all_pages_render_at_minimum_window_size(cx: &mut TestAppContext) {
         let header = cx
             .debug_bounds("page-header")
             .expect("every page has one shared header");
-        assert_eq!(header.size.height, gpui::px(32.), "{page:?}");
-        assert!(header.right() <= gpui::px(960.), "{page:?}");
+        assert_eq!(header.size.height, gpui_kit::px(32.), "{page:?}");
+        assert!(header.right() <= gpui_kit::px(960.), "{page:?}");
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn connection_close_button_dispatches_immediately(cx: &mut TestAppContext) {
     use crate::domain::{Connection, ConnectionSnapshot, RealtimeEvent, RuntimeCommand};
-    cx.update(gpui_component::init);
+    cx.update(gpui_kit::init);
     let (tx, rx) = mpsc::channel();
     let holder: ViewHolder = Default::default();
     let copy = holder.clone();
@@ -246,7 +246,7 @@ fn connection_close_button_dispatches_immediately(cx: &mut TestAppContext) {
         *copy.borrow_mut() = Some(view.clone());
         Root::new(view, window, cx)
     });
-    cx.simulate_resize(gpui::size(gpui::px(960.), gpui::px(640.)));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(960.), gpui_kit::px(640.)));
     let view = holder.borrow().clone().unwrap();
     cx.update(|_, cx| {
         view.update(cx, |view, cx| {
@@ -269,17 +269,17 @@ fn connection_close_button_dispatches_immediately(cx: &mut TestAppContext) {
         .debug_bounds("close-connection-0")
         .expect("close button must be visible");
     assert!(
-        bounds.right() <= gpui::px(936.),
+        bounds.right() <= gpui_kit::px(936.),
         "close action must fit at minimum width"
     );
-    cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+    cx.simulate_click(bounds.center(), gpui_kit::Modifiers::default());
     assert!(matches!(rx.try_recv().unwrap().request,
         crate::ui::UiRequest::Runtime(RuntimeCommand::CloseConnection { id }) if id == "close-now"));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn first_profile_activation_keeps_follow_up_reads_and_subscription(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
+    cx.update(gpui_kit::init);
     let (tx, rx) = mpsc::channel();
     let (view, cx) = cx.add_window_view(|window, cx| MainView::new(tx, window, cx));
     cx.update(|_, cx| {
@@ -304,7 +304,7 @@ fn first_profile_activation_keeps_follow_up_reads_and_subscription(cx: &mut Test
     assert!(requests.iter().all(|r| r.operation_len == requests.len()));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn populated_proxy_and_rule_lists_scroll_inside_viewport(cx: &mut TestAppContext) {
     use crate::{
         domain::{ProviderKind, ProviderSummary, ProxyGroup, RuleEntry},
@@ -312,7 +312,7 @@ fn populated_proxy_and_rule_lists_scroll_inside_viewport(cx: &mut TestAppContext
     };
     let (_, holder, cx) = setup(cx);
     let view = holder.borrow().clone().unwrap();
-    cx.simulate_resize(gpui::size(gpui::px(960.), gpui::px(640.)));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(960.), gpui_kit::px(640.)));
     cx.update(|_, cx| {
         view.update(cx, |view, _| {
             view.state.proxies = std::sync::Arc::new(crate::domain::ProxySnapshot {
@@ -355,14 +355,17 @@ fn populated_proxy_and_rule_lists_scroll_inside_viewport(cx: &mut TestAppContext
             assert!(refresh.bottom() <= header.bottom());
         }
         assert!(
-            bounds.size.height > gpui::px(100.) && bounds.size.height < gpui::px(550.),
+            bounds.size.height > gpui_kit::px(100.) && bounds.size.height < gpui_kit::px(550.),
             "{id}: {bounds:?}"
         );
-        cx.simulate_event(gpui::ScrollWheelEvent {
+        cx.simulate_event(gpui_kit::ScrollWheelEvent {
             position: bounds.center(),
-            delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-350.))),
+            delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                gpui_kit::px(0.),
+                gpui_kit::px(-350.),
+            )),
             modifiers: Default::default(),
-            touch_phase: gpui::TouchPhase::Moved,
+            touch_phase: gpui_kit::TouchPhase::Moved,
         });
         cx.run_until_parked();
         cx.update(|_, cx| {
@@ -373,7 +376,7 @@ fn populated_proxy_and_rule_lists_scroll_inside_viewport(cx: &mut TestAppContext
                 &view.rule_scroll
             };
             assert!(
-                scroll.offset().y < gpui::px(-100.),
+                scroll.offset().y < gpui_kit::px(-100.),
                 "{id} must move on wheel input: {:?}",
                 scroll.offset()
             );
@@ -381,13 +384,13 @@ fn populated_proxy_and_rule_lists_scroll_inside_viewport(cx: &mut TestAppContext
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn proxy_mode_buttons_dispatch_all_three_modes(cx: &mut TestAppContext) {
     use crate::{
         domain::{RunMode, RuntimeCommand},
         ui::{Page, UiRequest},
     };
-    cx.update(gpui_component::init);
+    cx.update(gpui_kit::init);
     let (tx, rx) = mpsc::channel();
     let holder: ViewHolder = Default::default();
     let copy = holder.clone();
@@ -419,23 +422,23 @@ fn proxy_mode_buttons_dispatch_all_three_modes(cx: &mut TestAppContext) {
                 RunMode::Direct => "mode-Direct",
             })
             .expect("mode control visible even with no groups");
-        cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+        cx.simulate_click(bounds.center(), gpui_kit::Modifiers::default());
         assert!(rx.try_iter().any(|request| matches!(request.request, UiRequest::Runtime(RuntimeCommand::SetMode { mode: value }) if value == mode)));
     }
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn sidebar_navigation_and_collapsed_alignment(cx: &mut TestAppContext) {
     let (_, holder, cx) = setup(cx);
     let view = holder.borrow().clone().unwrap();
-    cx.simulate_resize(gpui::size(gpui::px(960.), gpui::px(640.)));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(960.), gpui_kit::px(640.)));
     cx.run_until_parked();
     let profiles = cx.debug_bounds("nav-Profiles").unwrap();
-    cx.simulate_click(profiles.center(), gpui::Modifiers::default());
+    cx.simulate_click(profiles.center(), gpui_kit::Modifiers::default());
     cx.run_until_parked();
     cx.update(|_, cx| assert_eq!(view.read(cx).state.page, crate::ui::Page::Profiles));
     let toggle = cx.debug_bounds("sidebar-toggle").unwrap();
-    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    cx.simulate_click(toggle.center(), gpui_kit::Modifiers::default());
     cx.run_until_parked();
     for _ in 0..90 {
         cx.executor()
@@ -447,19 +450,19 @@ fn sidebar_navigation_and_collapsed_alignment(cx: &mut TestAppContext) {
     let profiles = cx.debug_bounds("nav-Profiles").unwrap();
     let home = cx.debug_bounds("nav-Home").unwrap();
     assert!(
-        (toggle.center().x - profiles.center().x).abs() < gpui::px(1.),
+        (toggle.center().x - profiles.center().x).abs() < gpui_kit::px(1.),
         "toggle {toggle:?}, menu {profiles:?}"
     );
     assert_eq!(home.origin.x, profiles.origin.x);
     assert_eq!(home.size, profiles.size);
-    cx.simulate_click(home.center(), gpui::Modifiers::default());
+    cx.simulate_click(home.center(), gpui_kit::Modifiers::default());
     cx.run_until_parked();
     cx.update(|_, cx| assert_eq!(view.read(cx).state.page, crate::ui::Page::Home));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn sidebar_animation_reverses_without_jumping(cx: &mut TestAppContext) {
-    use gpui::{Modifiers, px};
+    use gpui_kit::{Modifiers, px};
     use std::time::Duration;
     let (_, holder, cx) = setup(cx);
     let view = holder.borrow().clone().unwrap();
@@ -502,13 +505,13 @@ fn sidebar_animation_reverses_without_jumping(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn network_dialogs_render_and_save_only_after_backend_success(cx: &mut TestAppContext) {
     use crate::{
         domain::{AppCommand, AppCommandOutput, AppCommandResult, CoreNetworkSettings},
         ui::UiRequest,
     };
-    cx.update(gpui_component::init);
+    cx.update(gpui_kit::init);
     let (tx, rx) = mpsc::channel();
     let holder: ViewHolder = Default::default();
     let copy = holder.clone();
@@ -518,7 +521,7 @@ fn network_dialogs_render_and_save_only_after_backend_success(cx: &mut TestAppCo
         Root::new(view, window, cx)
     });
     let view = holder.borrow().clone().unwrap();
-    cx.simulate_resize(gpui::size(gpui::px(1080.), gpui::px(800.)));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1080.), gpui_kit::px(800.)));
     cx.run_until_parked();
     for dns in [false, true] {
         cx.update(|window, cx| {
@@ -537,14 +540,14 @@ fn network_dialogs_render_and_save_only_after_backend_success(cx: &mut TestAppCo
         }
         if dns {
             let toggle = cx.debug_bounds("dialog-dns-enabled").unwrap();
-            cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+            cx.simulate_click(toggle.center(), gpui_kit::Modifiers::default());
             cx.run_until_parked();
         }
         let bounds = cx
             .debug_bounds("network-dialog-save")
             .expect("network save button");
-        cx.simulate_mouse_move(bounds.center(), None, gpui::Modifiers::default());
-        cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+        cx.simulate_mouse_move(bounds.center(), None, gpui_kit::Modifiers::default());
+        cx.simulate_click(bounds.center(), gpui_kit::Modifiers::default());
         cx.run_until_parked();
         let request = rx.try_recv().expect("save sends a request").request;
         let UiRequest::Profile(command @ AppCommand::UpdateCoreNetworkSettings { .. }) = request
@@ -612,7 +615,7 @@ fn unknown_error_has_no_misleading_recovery_hint() {
     assert_eq!(error.message, "Try again later");
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn cmd_w_closes_main_window_with_focused_input(cx: &mut TestAppContext) {
     let (_, view_holder, visual) = setup(cx);
     let view = view_holder.borrow().clone().unwrap();
@@ -628,7 +631,7 @@ fn cmd_w_closes_main_window_with_focused_input(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn cmd_w_closes_window_from_main_view(cx: &mut TestAppContext) {
     let (_, _, visual) = setup(cx);
     visual.update(|_, cx| super::bind_window_actions(cx));
@@ -637,10 +640,10 @@ fn cmd_w_closes_window_from_main_view(cx: &mut TestAppContext) {
     assert!(cx.windows().is_empty());
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn system_proxy_dialog_keeps_draft_until_success_and_fits_small_window(cx: &mut TestAppContext) {
     use crate::{domain::*, ui::UiRequest};
-    cx.update(gpui_component::init);
+    cx.update(gpui_kit::init);
     let (tx, rx) = mpsc::channel();
     let holder: ViewHolder = Default::default();
     let copy = holder.clone();
@@ -650,7 +653,7 @@ fn system_proxy_dialog_keeps_draft_until_success_and_fits_small_window(cx: &mut 
         Root::new(view, window, cx)
     });
     let view = holder.borrow().clone().unwrap();
-    cx.simulate_resize(gpui::size(gpui::px(960.), gpui::px(640.)));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(960.), gpui_kit::px(640.)));
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
             view.state.application_settings = Some(ApplicationSettingsSnapshot {
@@ -672,11 +675,14 @@ fn system_proxy_dialog_keeps_draft_until_success_and_fits_small_window(cx: &mut 
     }
     let bounds = cx.debug_bounds("system-proxy-dialog-scroll").unwrap();
     let before = cx.debug_bounds("proxy-bypass-editor").unwrap();
-    cx.simulate_event(gpui::ScrollWheelEvent {
+    cx.simulate_event(gpui_kit::ScrollWheelEvent {
         position: bounds.center(),
-        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-500.))),
+        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+            gpui_kit::px(0.),
+            gpui_kit::px(-500.),
+        )),
         modifiers: Default::default(),
-        touch_phase: gpui::TouchPhase::Moved,
+        touch_phase: gpui_kit::TouchPhase::Moved,
     });
     cx.run_until_parked();
     let after = cx.debug_bounds("proxy-bypass-editor").unwrap();
@@ -688,19 +694,19 @@ fn system_proxy_dialog_keeps_draft_until_success_and_fits_small_window(cx: &mut 
         after.bottom() <= bounds.bottom(),
         "custom bypass editor must be reachable"
     );
-    cx.simulate_event(gpui::ScrollWheelEvent {
+    cx.simulate_event(gpui_kit::ScrollWheelEvent {
         position: bounds.center(),
-        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(500.))),
+        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(500.))),
         modifiers: Default::default(),
-        touch_phase: gpui::TouchPhase::Moved,
+        touch_phase: gpui_kit::TouchPhase::Moved,
     });
     cx.run_until_parked();
     let toggle = cx.debug_bounds("proxy-pac-mode").unwrap();
-    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    cx.simulate_click(toggle.center(), gpui_kit::Modifiers::default());
     cx.run_until_parked();
     let save = cx.debug_bounds("proxy-dialog-save").unwrap();
-    assert!(save.bottom() <= gpui::px(640.));
-    cx.simulate_click(save.center(), gpui::Modifiers::default());
+    assert!(save.bottom() <= gpui_kit::px(640.));
+    cx.simulate_click(save.center(), gpui_kit::Modifiers::default());
     cx.run_until_parked();
     let UiRequest::Profile(AppCommand::UpdateSystemProxySettings { settings }) =
         rx.try_recv().unwrap().request
@@ -734,10 +740,10 @@ fn system_proxy_dialog_keeps_draft_until_success_and_fits_small_window(cx: &mut 
     assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
 }
 
-#[gpui::test]
+#[gpui_kit::test]
 fn unified_proxy_writes_do_not_reach_an_older_daemon(cx: &mut TestAppContext) {
     use crate::ui::UiAction;
-    cx.update(gpui_component::init);
+    cx.update(gpui_kit::init);
     let (tx, rx) = mpsc::channel();
     let holder = Rc::new(RefCell::new(None));
     let slot = holder.clone();

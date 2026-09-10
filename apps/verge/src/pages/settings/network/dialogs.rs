@@ -1,5 +1,5 @@
 use super::*;
-use gpui_component::input::{Textarea, TextareaState};
+use gpui_kit::component::input::{Textarea, TextareaState};
 
 struct NetworkDialog {
     settings: CoreNetworkSettings,
