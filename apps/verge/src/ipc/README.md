@@ -44,3 +44,11 @@ The GUI preserves its window and drafts after an unexpected EOF, retries the sam
 Each socket session owns its reader, writer, subscriptions and command failure state. GUI requests are bounded to 32 queued/pending items and use nonblocking sends. On disconnect, pending UI operations are cleared and old responses are fenced out; fresh reads and subscriptions replace state. Unconfirmed writes are never replayed. Reopening a loading editor is required after a failed load; an already loaded draft remains editable.
 
 Disk logs use a bounded local socket and writer thread. All GUI/daemon writers lock a shared file before opening and appending to the active log, so rotation cannot strand another writer on an old inode. Current log plus three archives are capped at 2 MiB each. Abrupt process exit may lose the final buffered log bytes.
+
+AI uses the `ai_chat_v1` capability on generation 6. Commands cover configuration,
+provider testing, starting/cancelling a turn, clearing history and querying state.
+Responses identify the operation without echoing the request or its key. Only
+connections that request AI receive AI snapshots; snapshots are coalesced at the
+100 ms daemon tick, revisions suppress stale results, and final state remains
+queryable after reconnection. Disconnect cancels the active turn; the GUI never
+automatically repeats inference. Provider IO and Keychain work run on a worker.

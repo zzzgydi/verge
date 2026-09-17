@@ -36,6 +36,7 @@ impl MainView {
             (
                 "nav.group.system",
                 vec![
+                    (Page::Ai, "ai.title", IconName::Bot),
                     (Page::Profiles, "profiles.title", IconName::File),
                     (Page::Logs, "logs.title", IconName::SquareTerminal),
                     (Page::Settings, "settings.title", IconName::Settings),

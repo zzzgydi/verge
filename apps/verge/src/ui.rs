@@ -24,6 +24,7 @@ pub enum Page {
     Rules,
     Logs,
     Settings,
+    Ai,
 }
 
 #[cfg(test)]
@@ -169,6 +170,7 @@ pub enum CoreStatus {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum UiRequest {
+    Ai(crate::ai::AiCommand),
     Profile(AppCommand),
     Runtime(RuntimeCommand),
     SystemProxy(SystemProxyCommand),
@@ -177,6 +179,8 @@ pub enum UiRequest {
 impl UiRequest {
     pub fn risk(&self) -> CommandRisk {
         match self {
+            Self::Ai(crate::ai::AiCommand::GetState) => CommandRisk::ReadOnly,
+            Self::Ai(_) => CommandRisk::LowRiskWrite,
             Self::Profile(command) => command.risk(),
             Self::Runtime(command) => command.risk(),
             Self::SystemProxy(command) => command.risk(),
@@ -196,6 +200,10 @@ pub struct UiRequestEnvelope {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum UiResponse {
+    Ai {
+        operation: crate::ai::AiOperation,
+        result: Result<crate::ai::AiSnapshot, AppError>,
+    },
     Profile {
         request: AppCommand,
         result: Result<AppCommandResult, AppError>,
@@ -238,6 +246,7 @@ impl UiResponseEnvelope {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum UiAction {
+    Ai(crate::ai::AiCommand),
     Navigate(Page),
     RefreshHome,
     RefreshProxies,
@@ -346,6 +355,7 @@ pub enum UiAction {
 impl UiAction {
     pub fn requests(self) -> Vec<UiRequest> {
         match self {
+            Self::Ai(command) => vec![UiRequest::Ai(command)],
             Self::Navigate(_) => Vec::new(),
             Self::RefreshHome => vec![
                 UiRequest::Profile(AppCommand::GetRuntimeSettings),
@@ -582,6 +592,7 @@ impl UiAction {
 
 #[derive(Clone, Debug, Default)]
 pub struct UiState {
+    pub ai: crate::ai::AiSnapshot,
     pub daemon_capabilities: Vec<String>,
     /// Present while the daemon connection is unavailable; independent of command errors.
     pub connection_notice: Option<String>,
@@ -879,6 +890,14 @@ impl UiState {
 
     pub fn apply_response(&mut self, response: UiResponse) {
         match response {
+            UiResponse::Ai { result, .. } => match result {
+                Ok(snapshot) => {
+                    if snapshot.revision >= self.ai.revision {
+                        self.ai = snapshot;
+                    }
+                }
+                Err(error) => self.set_error(error),
+            },
             UiResponse::Profile { request, result } => match result {
                 Ok(result) => self.apply_profile(&request, result),
                 Err(error) => self.fail(&UiRequest::Profile(request), error),
@@ -943,6 +962,20 @@ impl UiState {
 
 fn response_request(response: &UiResponse) -> Option<UiRequest> {
     match response {
+        UiResponse::Ai { operation, .. } => Some(UiRequest::Ai(match operation {
+            crate::ai::AiOperation::State => crate::ai::AiCommand::GetState,
+            crate::ai::AiOperation::Save => crate::ai::AiCommand::SaveConfig {
+                config: Default::default(),
+                api_key: Default::default(),
+                clear_key: false,
+            },
+            crate::ai::AiOperation::Test => crate::ai::AiCommand::TestProvider,
+            crate::ai::AiOperation::Start => crate::ai::AiCommand::Start {
+                prompt: String::new(),
+            },
+            crate::ai::AiOperation::Cancel => crate::ai::AiCommand::Cancel,
+            crate::ai::AiOperation::Clear => crate::ai::AiCommand::Clear,
+        })),
         UiResponse::Profile { request, .. } => Some(UiRequest::Profile(request.clone())),
         UiResponse::Runtime { request, .. } => Some(UiRequest::Runtime(request.clone())),
         UiResponse::SystemProxy { request, .. } => Some(UiRequest::SystemProxy(request.clone())),
@@ -967,6 +1000,8 @@ fn is_write_request(request: &UiRequest) -> bool {
 
 fn request_key(request: &UiRequest) -> &'static str {
     match request {
+        UiRequest::Ai(crate::ai::AiCommand::GetState) => "ai_state",
+        UiRequest::Ai(_) => "ai_write",
         UiRequest::Profile(AppCommand::GetRuntimeSettings) => "runtime_settings",
         UiRequest::Profile(AppCommand::GetCoreNetworkSettings) => "core_network",
         UiRequest::Profile(AppCommand::UpdateCoreNetworkSettings { .. }) => "core_network_write",

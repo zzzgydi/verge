@@ -1,3 +1,4 @@
+pub mod ai;
 mod appearance;
 pub mod application;
 mod assets;

@@ -218,6 +218,8 @@ pub fn run() {
                                     window.push_notification(Notification::info(tr(view.lang(), "connection.recovered")).autohide(false), cx);
                                 }
                                 view.state.daemon_capabilities = initial.capabilities;
+                                view.state.ai.revision = 0;
+                                view.ai_form.reset_sync();
                                 view.state.profiles = initial.profiles;
                                 view.state.selected_profile = initial.selected_profile;
                                 view.state.application_settings =
@@ -234,6 +236,7 @@ pub fn run() {
                                 view.dispatch(UiAction::RefreshProfiles, cx);
                                 view.dispatch(UiAction::RefreshSettings, cx);
                                 view.refresh_current_page(cx);
+                                if view.state.page != crate::ui::Page::Ai && view.state.daemon_capabilities.iter().any(|c| c == crate::ai::CAPABILITY) { view.dispatch(UiAction::Ai(crate::ai::AiCommand::GetState), cx); }
                                 cx.notify();
                             });
                             let _ = protocol_version;
@@ -638,5 +641,6 @@ fn toast_for(lang: Lang, response: &UiResponse) -> Option<Notification> {
             Err(_) => None,
         },
         UiResponse::Realtime(_) => None,
+        UiResponse::Ai { result, .. } => result.as_ref().err().map(fail),
     }
 }

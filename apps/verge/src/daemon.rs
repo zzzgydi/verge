@@ -182,6 +182,10 @@ struct Engine {
 
 struct Backend {
     geo_job_running: bool,
+    ai: crate::ai::AiService,
+    ai_connections: std::collections::HashMap<u64, u64>,
+    ai_connections_sample: Option<crate::domain::ConnectionSnapshot>,
+    ai_recent_errors: std::collections::VecDeque<LogEvent>,
     config: BackendConfig,
     profiles: FileProfileStore,
     settings: FileSettingsStore,
@@ -211,7 +215,7 @@ struct Backend {
 }
 
 impl Backend {
-    fn new(config: BackendConfig) -> Result<Self, AppError> {
+    fn new(mut config: BackendConfig) -> Result<Self, AppError> {
         let mut profiles = FileProfileStore::open_with_keychain(config.data_dir.join("profiles"))?;
         let control_dir = config.data_dir.join("control");
         fs::create_dir_all(&control_dir)
@@ -233,12 +237,17 @@ impl Backend {
         } else {
             config.services.clone()
         };
+        config.services = services.clone();
         let mut system_proxy = PlatformSystemProxy::new(platform, services)?;
         if system_proxy.recovery_pending() {
             system_proxy.recover_pending()?;
         }
         let mut backend = Self {
             geo_job_running: false,
+            ai: crate::ai::AiService::new(config.data_dir.clone()),
+            ai_connections: Default::default(),
+            ai_connections_sample: None,
+            ai_recent_errors: Default::default(),
             config,
             profiles,
             settings,
@@ -349,6 +358,7 @@ impl Backend {
     }
 
     fn shutdown(&mut self) {
+        self.ai.cancel();
         self.proxy_session.target = None;
         if let Some(mut engine) = self.engine.take() {
             let mut core = SupervisorControl::new(&mut engine.supervisor, Duration::from_secs(5));
@@ -411,6 +421,25 @@ impl Backend {
 
     fn execute(&mut self, request: UiRequest) -> UiResponse {
         match request {
+            UiRequest::Ai(command) => {
+                let operation = command.operation();
+                let context = matches!(command, crate::ai::AiCommand::Start { .. }).then(|| {
+                    crate::ai::tools::ToolContext {
+                        socket: self.config.internal_socket(),
+                        services: self.config.services.clone(),
+                        recovery_path: self.config.recovery_path.clone(),
+                        config_selected: self.profiles.selected().is_some(),
+                        config_merge_valid: self
+                            .profiles
+                            .selected()
+                            .is_some_and(|id| self.profiles.merged_yaml(id).is_ok()),
+                        connections: self.ai_connections_sample.clone(),
+                        errors: self.ai_recent_errors.clone(),
+                    }
+                });
+                let result = self.ai.handle(command, context);
+                UiResponse::Ai { operation, result }
+            }
             UiRequest::Profile(request) => {
                 let result = self.execute_profile(request.clone());
                 UiResponse::Profile { request, result }
@@ -1412,6 +1441,7 @@ impl Backend {
                 crate::ipc::protocol::GEO_DATA_UPDATE.into(),
                 crate::ipc::protocol::PROFILE_ORDER.into(),
                 crate::ipc::protocol::MERGE_PREVIEW.into(),
+                crate::ai::CAPABILITY.into(),
             ],
             profiles: self.profiles.list().to_vec(),
             selected_profile: self.profiles.selected().cloned(),
@@ -1652,6 +1682,9 @@ fn run_daemon_backend(
             DaemonEvent::Ipc(IpcServerEvent::Disconnected { conn_id }) => {
                 server.close(conn_id);
                 command_buses.remove(&conn_id);
+                if backend.ai_connections.remove(&conn_id).is_some() {
+                    backend.ai.cancel();
+                }
             }
             DaemonEvent::GeoDownloaded {
                 conn_id,
@@ -1726,7 +1759,46 @@ fn run_daemon_backend(
                 tray_state.accept(*result, &server);
             }
             DaemonEvent::RealtimeTick => {
+                let ai_revision = backend.ai.revision();
+                for (&conn, revision) in &mut backend.ai_connections {
+                    if *revision != ai_revision {
+                        let snapshot = backend.ai.snapshot();
+                        if server
+                            .send(
+                                conn,
+                                ClientMessage::Response(UiResponseEnvelope::realtime(
+                                    UiResponse::Ai {
+                                        operation: crate::ai::AiOperation::State,
+                                        result: Ok(snapshot.clone()),
+                                    },
+                                )),
+                            )
+                            .is_ok()
+                        {
+                            *revision = snapshot.revision;
+                        }
+                    }
+                }
                 let events = backend.drain_realtime_events();
+                for event in &events {
+                    match event {
+                        RealtimeEvent::Connections(sample) => {
+                            let mut sample = sample.clone();
+                            sample.connections.clear();
+                            backend.ai_connections_sample = Some(sample);
+                        }
+                        RealtimeEvent::Log(log) if log.level == "error" || log.level == "warn" => {
+                            backend.ai_recent_errors.push_back(LogEvent {
+                                level: log.level.clone(),
+                                payload: String::new(),
+                            });
+                            while backend.ai_recent_errors.len() > 100 {
+                                backend.ai_recent_errors.pop_front();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 if !events.is_empty() {
                     server.broadcast_realtime(&events);
                 }
@@ -1837,6 +1909,9 @@ fn handle_daemon_request(
     isolated_jobs: &mut usize,
 ) {
     let request = envelope.request.clone();
+    if matches!(request, UiRequest::Ai(_)) {
+        backend.ai_connections.entry(conn_id).or_insert(u64::MAX);
+    }
     let risk = request.risk();
     let last_in_operation = envelope.operation_index + 1 == envelope.operation_len;
     if let UiRequest::Profile(AppCommand::UpdateGeoData { kind }) = &request {
@@ -2126,6 +2201,7 @@ fn response_succeeded(response: &UiResponse) -> bool {
         UiResponse::Runtime { result, .. } => result.is_ok(),
         UiResponse::SystemProxy { result, .. } => result.is_ok(),
         UiResponse::Realtime(_) => true,
+        UiResponse::Ai { result, .. } => result.is_ok(),
     }
 }
 
@@ -2167,6 +2243,10 @@ fn unix_timestamp() -> Result<i64, AppError> {
 
 fn failed_response(request: UiRequest, error: AppError) -> UiResponse {
     match request {
+        UiRequest::Ai(command) => UiResponse::Ai {
+            operation: command.operation(),
+            result: Err(error),
+        },
         UiRequest::Profile(request) => UiResponse::Profile {
             request,
             result: Err(error),

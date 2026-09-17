@@ -24,6 +24,39 @@ impl Lang {
 
 /// 文案表：`(key, zh-CN, en)`。key 按页面/用途命名。
 const ENTRIES: &[(&str, &str, &str)] = &[
+    ("ai.title", "AI 助手", "AI Assistant"),
+    ("ai.settings", "模型设置", "Provider"),
+    ("ai.clear", "新对话", "New conversation"),
+    ("ai.model", "模型", "Model"),
+    (
+        "ai.key_saved",
+        "API key（已保存，留空保留）",
+        "API key (saved; blank keeps it)",
+    ),
+    ("ai.timeout", "单轮超时（秒）", "Turn timeout (seconds)"),
+    ("ai.steps", "工具轮数上限", "Maximum tool rounds"),
+    ("ai.save", "保存设置", "Save settings"),
+    ("ai.test", "测试已保存的连接", "Test saved provider"),
+    ("ai.clear_key", "清除密钥", "Clear key"),
+    (
+        "ai.scope",
+        "发送问题后，模型可读取运行状态、代理组与选中节点、规则类型和出站、连接数量及错误数量。不发送完整配置、连接目标、日志正文或订阅地址；本轮只能诊断，不能修改设置。",
+        "Sending shares runtime status, groups and selected nodes, rule types and outbounds, connection counts and error counts. Full configs, destinations, log text and subscription URLs are omitted. Read-only diagnostics.",
+    ),
+    (
+        "ai.empty",
+        "配置模型后，可以问：为什么现在无法联网？",
+        "Configure a provider, then ask: Why is my network not working?",
+    ),
+    ("ai.you", "你", "You"),
+    ("ai.retry", "重试上个问题", "Retry last question"),
+    (
+        "ai.evidence",
+        "查看本轮诊断依据",
+        "View diagnostic evidence",
+    ),
+    ("ai.send", "发送", "Send"),
+    ("ai.stop", "停止", "Stop"),
     (
         "connection.recovered",
         "已重新连接。断线前未收到结果的操作没有重试，请核对当前状态。",

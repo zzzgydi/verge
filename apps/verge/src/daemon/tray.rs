@@ -311,6 +311,7 @@ pub(super) fn execute_inner(
 
 pub(super) fn changes_menu(request: &UiRequest) -> bool {
     match request {
+        UiRequest::Ai(_) => false,
         UiRequest::SystemProxy(command) => !matches!(command, SystemProxyCommand::GetState),
         UiRequest::Runtime(command) => matches!(
             command,

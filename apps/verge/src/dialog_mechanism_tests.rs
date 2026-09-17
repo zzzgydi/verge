@@ -17,6 +17,142 @@ use crate::view::MainView;
 
 type ViewHolder = Rc<RefCell<Option<gpui_kit::Entity<MainView>>>>;
 
+#[gpui_kit::test]
+fn ai_requests_are_gated_and_reconnect_does_not_restart_a_turn(cx: &mut TestAppContext) {
+    use crate::{
+        ai::{AiCommand, AiOperation, AiSnapshot, ChatMessage},
+        ui::{Page, UiAction, UiRequest, UiResponse},
+    };
+    cx.update(gpui_kit::init);
+    let (tx, rx) = mpsc::sync_channel(32);
+    let holder: ViewHolder = Default::default();
+    let slot = holder.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| MainView::new(tx, window, cx));
+        *slot.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = holder.borrow().clone().unwrap();
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.navigate(Page::Ai, cx);
+            assert!(rx.try_recv().is_err());
+            view.state
+                .daemon_capabilities
+                .push(crate::ai::CAPABILITY.into());
+            view.navigate(Page::Ai, cx);
+            assert!(matches!(
+                rx.try_recv().unwrap().request,
+                UiRequest::Ai(AiCommand::GetState)
+            ));
+            view.ai_form.prompt.update(cx, |input, cx| {
+                input.set_value("draft question", window, cx)
+            });
+            let snapshot = AiSnapshot {
+                revision: 10,
+                busy: true,
+                messages: vec![ChatMessage {
+                    role: "assistant".into(),
+                    text: "partial".into(),
+                }],
+                ..Default::default()
+            };
+            view.state.apply_response(UiResponse::Ai {
+                operation: AiOperation::State,
+                result: Ok(snapshot),
+            });
+            view.state.apply_response(UiResponse::Ai {
+                operation: AiOperation::State,
+                result: Ok(AiSnapshot {
+                    revision: 9,
+                    ..Default::default()
+                }),
+            });
+            assert_eq!(view.state.ai.messages[0].text, "partial");
+            view.daemon_disconnected(window, cx);
+            view.dispatch(
+                UiAction::Ai(AiCommand::Start {
+                    prompt: "ignored while offline".into(),
+                }),
+                cx,
+            );
+            assert!(rx.try_recv().is_err());
+            view.state.connection_notice = None;
+            view.refresh_current_page(cx);
+            assert!(matches!(
+                rx.try_recv().unwrap().request,
+                UiRequest::Ai(AiCommand::GetState)
+            ));
+            assert!(rx.try_recv().is_err());
+            assert_eq!(
+                view.ai_form.prompt.read(cx).value().as_str(),
+                "draft question"
+            );
+        })
+    });
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn ai_send_and_stop_remain_visible_and_dispatch_from_buttons(cx: &mut TestAppContext) {
+    use crate::{
+        ai::{AiCommand, ProviderConfig},
+        ui::{Page, UiRequest},
+    };
+    cx.update(gpui_kit::init);
+    let (tx, rx) = mpsc::sync_channel(32);
+    let holder: ViewHolder = Default::default();
+    let slot = holder.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| MainView::new(tx, window, cx));
+        *slot.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = holder.borrow().clone().unwrap();
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(960.), gpui_kit::px(640.)));
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state.page = Page::Ai;
+            view.state
+                .daemon_capabilities
+                .push(crate::ai::CAPABILITY.into());
+            view.state.ai.config = ProviderConfig {
+                base_url: "https://example.test/v1".into(),
+                model: "fake".into(),
+                ..Default::default()
+            };
+            view.ai_form.settings_open = true;
+            view.ai_form.prompt.update(cx, |input, cx| {
+                input.set_value("为什么无法联网？", window, cx)
+            });
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    let send = cx.debug_bounds("ai-send").unwrap();
+    let stop = cx.debug_bounds("ai-stop").unwrap();
+    assert!(send.bottom() < gpui_kit::px(640.));
+    assert!(stop.bottom() < gpui_kit::px(640.));
+    cx.simulate_click(send.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+        matches!(rx.try_recv().unwrap().request,UiRequest::Ai(AiCommand::Start {prompt}) if prompt=="为什么无法联网？")
+    );
+    cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.state.ai.busy = true;
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    cx.simulate_click(stop.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(matches!(
+        rx.try_recv().unwrap().request,
+        UiRequest::Ai(AiCommand::Cancel)
+    ));
+}
+
 /// 创建窗口：MainView + Root（与真实 main() 同构）。
 fn setup(cx: &mut TestAppContext) -> (gpui_kit::Entity<Root>, ViewHolder, &mut VisualTestContext) {
     cx.update(gpui_kit::init);
@@ -223,6 +359,7 @@ fn all_pages_render_at_minimum_window_size(cx: &mut TestAppContext) {
         crate::ui::Page::Profiles,
         crate::ui::Page::Logs,
         crate::ui::Page::Settings,
+        crate::ui::Page::Ai,
     ] {
         cx.update(|_, cx| view.update(cx, |view, cx| view.navigate(page, cx)));
         cx.run_until_parked();

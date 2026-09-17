@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod components;
 pub mod connections;
 pub mod home;

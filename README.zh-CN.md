@@ -207,9 +207,15 @@ MIHOMO_BIN=/absolute/path/to/mihomo \
 
 应用数据默认保存在 `~/Library/Application Support/Verge`。日志位于该目录下的 `logs/verge.log`，另保留 3 份轮转文件，每份最多 2 MiB。GUI 与 daemon 通过文件锁协调轮转。诊断导出会遮盖 controller secret、订阅 URL、认证头和用户主目录。
 
+## AI 助手
+
+在侧栏 **AI 助手 → 模型设置** 填写 Base URL（包含接口前缀，例如 `/v1`）、模型和 API key，保存后测试连接。密钥通过 macOS Keychain 保存，`ai.json` 只保存普通配置和密钥引用；更换服务地址需要重新填写密钥或清除旧密钥。本地 loopback 服务可以使用 HTTP。
+
+发送问题会采集有上限的运行状态、代理组、规则类型、连接数量和错误数量，回答可以引用本轮依据。完整配置、连接目标和日志正文不自动发送。推理在独立后台任务中执行，可停止；关闭窗口或 IPC 断线会取消，已生成内容保留在 daemon 内存中，完整退出后清除。目前尚未使用真实 Provider 验收。
+
 ## 平台状态
 
-领域层和应用层已经通过 adapter 隔离平台 API，但当前可发布实现仍以 macOS 为先。Windows、Linux 和 Intel macOS 暂无安装包。重写方案中的 AI Agent 也尚未写入当前代码。
+领域层和应用层已经通过 adapter 隔离平台 API，但当前可发布实现仍以 macOS 为先。Windows、Linux 和 Intel macOS 暂无安装包。AI 助手已接通兼容 OpenAI Chat Completions 的流式只读诊断；节点建议、配置预览和经确认的写操作仍待实现。
 
 ## 许可证
 

@@ -57,6 +57,7 @@ pub struct SheetState {
 
 pub struct MainView {
     pub state: UiState,
+    pub ai_form: pages::ai::AiForm,
     pub telemetry: Entity<pages::home::telemetry::Telemetry>,
     pub requests: mpsc::SyncSender<UiRequestEnvelope>,
     pub sheet_state: Entity<SheetState>,
@@ -128,6 +129,27 @@ impl MainView {
             view.sync_theme(window, cx);
         })
         .detach();
+        cx.on_release(|view, _| {
+            if view
+                .state
+                .daemon_capabilities
+                .iter()
+                .any(|c| c == crate::ai::CAPABILITY)
+            {
+                let _ = view.requests.try_send(UiRequestEnvelope {
+                    request_id: view.next_request_id,
+                    operation_id: view.next_operation_id,
+                    operation_index: 0,
+                    operation_len: 1,
+                    context: CommandContext {
+                        actor: CommandActor::UserInterface,
+                        approval: None,
+                    },
+                    request: crate::ui::UiRequest::Ai(crate::ai::AiCommand::Cancel),
+                });
+            }
+        })
+        .detach();
         let actions = cx.entity().downgrade();
         let proxy_page = cx.new(|cx| pages::proxies::ProxyPage::new(actions.clone(), window, cx));
         let connections_table = cx.new(|cx| {
@@ -170,6 +192,7 @@ impl MainView {
         let lang = Lang::En;
         Self {
             state: UiState::default(),
+            ai_form: pages::ai::AiForm::new(window, cx),
             telemetry: cx.new(|_| pages::home::telemetry::Telemetry::new()),
             requests,
             network_form: pages::settings::network::NetworkForm::new(window, cx),
@@ -269,6 +292,7 @@ impl MainView {
         self.telemetry
             .update(cx, |telemetry, cx| telemetry.set_language(lang, cx));
         self.sync_placeholders(window, cx);
+        self.ai_form.sync(&self.state.ai, window, cx);
         self.network_form.sync(
             self.state.core_network_settings.as_ref(),
             self.state.core_network_revision,
@@ -343,6 +367,20 @@ impl MainView {
             return;
         }
         if self.state.connection_notice.is_some() {
+            cx.notify();
+            return;
+        }
+        if matches!(action, UiAction::Ai(_))
+            && !self
+                .state
+                .daemon_capabilities
+                .iter()
+                .any(|capability| capability == crate::ai::CAPABILITY)
+        {
+            self.state.set_error(crate::domain::AppError::new(
+                crate::domain::ErrorCode::Conflict,
+                tr(self.lang(), "connection.incompatible"),
+            ));
             cx.notify();
             return;
         }
@@ -542,6 +580,7 @@ impl MainView {
             Page::Rules => self.dispatch(UiAction::RefreshRules, cx),
             Page::Proxies => self.dispatch(UiAction::RefreshProxies, cx),
             Page::Settings => self.dispatch(UiAction::RefreshSettings, cx),
+            Page::Ai => self.dispatch(UiAction::Ai(crate::ai::AiCommand::GetState), cx),
             _ => {}
         }
     }
@@ -554,6 +593,7 @@ impl MainView {
             Page::Profiles => self.dispatch(UiAction::RefreshProfiles, cx),
             Page::Rules => self.dispatch(UiAction::RefreshRules, cx),
             Page::Settings => self.dispatch(UiAction::RefreshSettings, cx),
+            Page::Ai => self.dispatch(UiAction::Ai(crate::ai::AiCommand::GetState), cx),
             Page::Connections | Page::Logs => {}
         }
     }
@@ -660,12 +700,13 @@ impl Render for MainView {
             Page::Rules => pages::rules::render(self, cx),
             Page::Logs => pages::logs::render(self, window, cx),
             Page::Settings => pages::settings::render(self, cx),
+            Page::Ai => pages::ai::render(self, cx),
         };
 
         // 长数据页内部是虚拟化组件，自己滚动（带可见滚动条），不再包滚动容器。
         let content_area: AnyElement = if matches!(
             page,
-            Page::Connections | Page::Logs | Page::Proxies | Page::Rules
+            Page::Connections | Page::Logs | Page::Proxies | Page::Rules | Page::Ai
         ) {
             v_flex()
                 .id("page-content")

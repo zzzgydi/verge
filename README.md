@@ -235,9 +235,24 @@ Installing or removing the privileged helper, enabling TUN, and replacing the ap
 
 Application data is stored in `~/Library/Application Support/Verge` by default. Logs are written to `logs/verge.log` under that directory, with three rotated archives and a 2 MiB limit per file. GUI and daemon coordinate rotation through a shared file lock. Diagnostic exports redact controller secrets, subscription URLs, authentication headers, and the user home path.
 
+## AI assistant
+
+Open **AI Assistant → Provider**, enter a Base URL including its API prefix (for
+example `/v1`), model ID and API key, save, then test the saved connection. Keys
+are stored with native macOS Keychain APIs; `ai.json` stores a random credential
+reference. Changing providers requires re-entering or clearing the key. Loopback
+HTTP endpoints can be used for local models.
+
+A question shares bounded runtime and group summaries, rule types/outbounds,
+connection counts and error counts. Full configurations, connection destinations
+and log text are omitted. Inference runs on a background worker; Stop, closing
+the window, or disconnecting cancels it. Conversation text stays in daemon memory
+until a full quit. The implementation has been tested with local mock providers;
+real-provider validation is pending. Only read-only tools are available.
+
 ## Platform status
 
-The domain and application layers keep platform APIs behind adapters, but the shipping implementation is currently macOS-first. Windows, Linux, and Intel macOS packages are not available yet. The AI agent described in the rewrite specification is also not implemented in the current codebase.
+The domain and application layers keep platform APIs behind adapters, but the shipping implementation is currently macOS-first. Windows, Linux, and Intel macOS packages are not available yet. The AI assistant supports streaming read-only diagnostics through an OpenAI-compatible Chat Completions endpoint. Recommendations, configuration previews, and approved write tools remain planned.
 
 ## License
 
