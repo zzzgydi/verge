@@ -68,7 +68,6 @@ pub struct MainView {
     pub profile_interval: Entity<InputState>,
     /// 订阅请求的自定义 User-Agent（可选）。
     pub profile_user_agent: Entity<InputState>,
-    pub backup_passphrase: Entity<InputState>,
     /// 设置页的设置导入路径输入框。
     pub settings_import_path: Entity<InputState>,
     /// 设置页的日志缓冲条数输入框。
@@ -97,7 +96,7 @@ pub struct MainView {
     focus_handle: FocusHandle,
     sidebar_collapsed: bool,
     applied_theme: Option<ThemeMode>,
-    /// 已同步进日志缓冲输入框的值；外部变更（如恢复备份）与输入框不一致时回填。
+    /// 已同步进日志缓冲输入框的值；外部变更（如导入设置）与输入框不一致时回填。
     log_limit_applied: Option<u16>,
     /// 已同步进全局快捷键输入框的值，语义同 `log_limit_applied`。
     global_hotkey_applied: Option<Option<String>>,
@@ -190,11 +189,6 @@ impl MainView {
             profile_user_agent: cx.new(|cx| {
                 InputState::new(window, cx).placeholder(tr(lang, "placeholder.profile_user_agent"))
             }),
-            backup_passphrase: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder(tr(lang, "placeholder.backup_passphrase"))
-                    .masked(true)
-            }),
             settings_import_path: cx.new(|cx| {
                 InputState::new(window, cx)
                     .placeholder(tr(lang, "placeholder.settings_import_path"))
@@ -244,7 +238,7 @@ impl MainView {
         search.update(cx, |input, cx| {
             input.set_placeholder(tr(lang, "proxies.search"), window, cx)
         });
-        let fields: [(Entity<InputState>, &'static str); 7] = [
+        let fields: [(Entity<InputState>, &'static str); 6] = [
             (self.profile_id.clone(), "placeholder.profile_id"),
             (self.profile_name.clone(), "placeholder.profile_name"),
             (
@@ -254,10 +248,6 @@ impl MainView {
             (
                 self.profile_user_agent.clone(),
                 "placeholder.profile_user_agent",
-            ),
-            (
-                self.backup_passphrase.clone(),
-                "placeholder.backup_passphrase",
             ),
             (
                 self.settings_import_path.clone(),

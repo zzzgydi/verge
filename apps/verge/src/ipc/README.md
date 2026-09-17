@@ -31,3 +31,8 @@ The `unified_system_proxy` capability gates the new `SetEnabled` and `UpdateSyst
 before dispatching either write. Legacy per-protocol commands keep their meanings. General application setting
 writes preserve proxy preferences, so an older GUI cannot reset them by omitting
 the new field.
+
+Encrypted backup export and restore have been retired. Generation-6 request
+variants remain decodable and return `NotFound` without accessing backup data.
+The new GUI has no backup actions; the old export result remains decode-only so
+mixed builds do not disconnect solely because of this retired message.

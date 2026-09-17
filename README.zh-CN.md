@@ -16,7 +16,7 @@ Verge 是使用 Rust、GPUI Kit 和 Mihomo 开发的 macOS 原生代理客户端
 - 实时查看流量、内存、连接、规则、provider 和日志。
 - 管理 macOS HTTP、HTTPS、SOCKS、PAC 和 bypass，并保存恢复记录。
 - 通过版本化特权 helper 管理 TUN 生命周期。
-- 支持开机启动、全局快捷键、系统通知、诊断导出、设置导入导出和加密备份。
+- 支持开机启动、全局快捷键、系统通知、诊断导出、设置导入导出。
 - 校验并更新 Mihomo，也可校验签名后更新应用本身。
 
 ## 架构
@@ -201,9 +201,9 @@ MIHOMO_BIN=/absolute/path/to/mihomo \
 3. 启用配置。Verge 会先校验并生成私有运行配置，再启动或重载 Mihomo。
 4. 在“概览”或菜单栏打开系统代理，并选择 Rule、Global 或 Direct 模式。
 5. 在“代理”“规则”“连接”和“日志”中查看实时状态。
-6. 在“设置”中管理 TUN、DNS、IPv6、SOCKS/PAC/bypass、开机启动、快捷键、更新、备份和诊断。
+6. 在“设置”中管理 TUN、DNS、IPv6、SOCKS/PAC/bypass、开机启动、快捷键、更新和诊断。
 
-安装或卸载特权 helper、开启 TUN、恢复备份和替换应用都会修改系统状态。Verge 会先请求确认，macOS 也可能要求管理员授权。
+安装或卸载特权 helper、开启 TUN 和替换应用都会修改系统状态。Verge 会先请求确认，macOS 也可能要求管理员授权。
 
 应用数据默认保存在 `~/Library/Application Support/Verge`。日志位于该目录下的 `logs/verge.log`。诊断导出会遮盖 controller secret、订阅 URL、认证头和用户主目录。
 

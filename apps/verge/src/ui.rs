@@ -242,12 +242,6 @@ pub enum UiAction {
     ExportDiagnostics {
         destination: String,
     },
-    ExportEncryptedBackup {
-        passphrase: String,
-    },
-    RestoreEncryptedBackup {
-        passphrase: String,
-    },
     UpdateMihomo,
     /// 检查应用自身更新（只读，返回当前/最新版本与是否有更新）。
     CheckAppUpdate,
@@ -401,16 +395,6 @@ impl UiAction {
                     AppCommand::ResetApplicationSettingsScope { scope },
                 )]
             }
-            Self::ExportEncryptedBackup { passphrase } => {
-                vec![UiRequest::Profile(AppCommand::ExportEncryptedBackup {
-                    passphrase,
-                })]
-            }
-            Self::RestoreEncryptedBackup { passphrase } => vec![
-                UiRequest::Profile(AppCommand::RestoreEncryptedBackup { passphrase }),
-                UiRequest::Profile(AppCommand::ListProfiles),
-                UiRequest::Profile(AppCommand::GetApplicationSettings),
-            ],
             Self::UpdateMihomo => vec![UiRequest::Profile(AppCommand::UpdateMihomo)],
             Self::CheckAppUpdate => vec![UiRequest::Profile(AppCommand::CheckAppUpdate)],
             // 更新与重启是单命令事务；失败时错误 toast 已足够，不做跟随刷新。
@@ -744,9 +728,8 @@ impl UiState {
             AppCommandOutput::ApplicationSettingsImportPreview(preview) => {
                 self.settings_import_preview = Some(preview);
             }
-            AppCommandOutput::EncryptedBackupExported { path } => {
-                self.last_diagnostic_path = Some(path);
-            }
+            // A generation-6 daemon may still encode this retired response.
+            AppCommandOutput::EncryptedBackupExported { .. } => {}
             AppCommandOutput::MihomoUpdated { version } => {
                 self.mihomo_version = Some(version);
             }

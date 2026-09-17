@@ -523,10 +523,6 @@ fn toast_for(lang: Lang, response: &UiResponse) -> Option<Notification> {
                 AppCommand::ResetApplicationSettingsScope { .. } => {
                     Some(tr(lang, "toast.settings_reset"))
                 }
-                AppCommand::ExportEncryptedBackup { .. } => Some(tr(lang, "toast.backup_exported")),
-                AppCommand::RestoreEncryptedBackup { .. } => {
-                    Some(tr(lang, "toast.backup_restored"))
-                }
                 AppCommand::UpdateMihomo => Some(tr(lang, "toast.mihomo_updated")),
                 AppCommand::UpdateApplication => Some(tr(lang, "toast.app_updated")),
                 AppCommand::RestartApplication => Some(tr(lang, "toast.app_restarting")),

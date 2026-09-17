@@ -107,9 +107,11 @@ pub enum AppCommand {
     ExportDiagnostics {
         destination: String,
     },
+    /// Retired generation-6 request; the daemon returns NotFound without side effects.
     ExportEncryptedBackup {
         passphrase: String,
     },
+    /// Retired generation-6 request; the daemon returns NotFound without side effects.
     RestoreEncryptedBackup {
         passphrase: String,
     },
@@ -266,6 +268,7 @@ pub enum AppCommandOutput {
     DiagnosticsExported {
         path: String,
     },
+    /// Decode-only compatibility with older generation-6 daemons.
     EncryptedBackupExported {
         path: String,
     },
@@ -357,7 +360,7 @@ impl ApplicationSettings {
     }
 
     /// 只把指定作用域的字段恢复为默认值,其它字段保持不变;
-    /// Profile、备份等不在应用设置内的数据不受影响。
+    /// Profile 等不在应用设置内的数据不受影响。
     pub fn reset_scope(&mut self, scope: SettingsScope) {
         let defaults = Self::default();
         match scope {

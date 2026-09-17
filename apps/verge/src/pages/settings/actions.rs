@@ -13,37 +13,6 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 impl MainView {
-    pub fn confirm_restore_backup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let lang = self.lang();
-        let view = cx.entity();
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let view = view.clone();
-            alert
-                .confirm()
-                .title(tr(lang, "dialog.restore_backup.title"))
-                .description(tr(lang, "dialog.restore_backup.desc"))
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text(tr(lang, "dialog.restore_backup.ok"))
-                        .ok_variant(gpui_kit::component::button::ButtonVariant::Danger)
-                        .cancel_text(tr(lang, "common.cancel"))
-                        .show_cancel(true),
-                )
-                .on_ok(move |_, window, cx| {
-                    view.update(cx, |this, cx| {
-                        let passphrase = this.backup_passphrase.read(cx).value().to_string();
-                        this.dispatch_confirmed(
-                            UiAction::RestoreEncryptedBackup { passphrase },
-                            cx,
-                        );
-                        this.backup_passphrase
-                            .update(cx, |input, cx| input.set_value("", window, cx));
-                    });
-                    true
-                })
-        });
-    }
-
     /// 卸载特权 Helper 的确认弹窗（移除系统级 LaunchDaemon 与二进制，TUN 将不可用）。
     pub fn confirm_uninstall_helper(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let lang = self.lang();
@@ -126,7 +95,7 @@ impl MainView {
         });
     }
 
-    /// 恢复默认值的确认弹窗：只重置指定作用域，不动配置、备份和其它设置。
+    /// 恢复默认值的确认弹窗：只重置指定作用域，不动配置和其它设置。
     pub fn confirm_reset_scope(
         &mut self,
         scope: SettingsScope,

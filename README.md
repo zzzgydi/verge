@@ -17,7 +17,7 @@ Verge is a native macOS proxy client built with Rust, GPUI Kit, and Mihomo. It u
 - Live traffic, memory, connections, rules, providers, and logs.
 - macOS HTTP, HTTPS, SOCKS, PAC, and bypass settings with recovery records.
 - TUN lifecycle through a versioned privileged helper.
-- Launch at login, global shortcut, notifications, diagnostics, settings import/export, and encrypted backups.
+- Launch at login, global shortcut, notifications, diagnostics, and settings import/export.
 - Verified Mihomo updates and signed application self-updates.
 
 ## Architecture
@@ -76,8 +76,7 @@ only. The internal controller uses `<data_dir>/control/mihomo.sock` in a private
 so disabling the external TCP controller does not disconnect Verge. Changed ports retarget
 only enabled system proxy endpoints that still point to Verge; existing recovery records
 are preserved. Applying network settings restarts the core and can interrupt active connections.
-Network overrides currently stay local and are not included in application settings exports
-or encrypted profile backups. TUN remains a separate helper-managed runtime switch.
+Network overrides currently stay local and are not included in application settings exports. TUN remains a separate helper-managed runtime switch.
 
 ## Requirements
 
@@ -230,9 +229,9 @@ The binary must match the pinned executable checksum in `assets/mihomo/manifest.
 3. Activate the profile. Verge validates and materializes a private Mihomo runtime configuration before starting or reloading the core.
 4. Use **Overview** or the menu bar to enable the system proxy and choose Rule, Global, or Direct mode.
 5. Use **Proxies**, **Rules**, **Connections**, and **Logs** to inspect live state.
-6. Use **Settings** for TUN, DNS, IPv6, SOCKS/PAC/bypass, launch at login, shortcuts, updates, backups, and diagnostics.
+6. Use **Settings** for TUN, DNS, IPv6, SOCKS/PAC/bypass, launch at login, shortcuts, updates, and diagnostics.
 
-Installing or removing the privileged helper, enabling TUN, restoring a backup, and replacing the application can change system state. Verge asks for confirmation and macOS may request administrator authorization.
+Installing or removing the privileged helper, enabling TUN, and replacing the application can change system state. Verge asks for confirmation and macOS may request administrator authorization.
 
 Application data is stored in `~/Library/Application Support/Verge` by default. Logs are written to `logs/verge.log` under that directory. Diagnostic exports redact controller secrets, subscription URLs, authentication headers, and the user home path.
 

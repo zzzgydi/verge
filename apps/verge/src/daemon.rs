@@ -18,10 +18,7 @@ use crate::application::{
     RuntimeCommandHandler, RuntimeCredentials, SupervisorControl, SystemProxyCommandHandler,
     SystemProxyControl, download_mihomo_candidate,
 };
-use crate::config::{
-    FileProfileStore, FileSettingsStore, UpdateScheduler, UpdateTrigger, decrypt_backup,
-    write_encrypted_backup,
-};
+use crate::config::{FileProfileStore, FileSettingsStore, UpdateScheduler, UpdateTrigger};
 use crate::domain::{
     AppCommand, AppCommandOutput, AppCommandResult, AppError, ApplicationSettings,
     ApplicationSettingsSnapshot, ErrorCode, LogEvent, Profile, RealtimeEvent, RuntimeCommand,
@@ -564,19 +561,14 @@ impl Backend {
                     summary: "Redacted diagnostics exported".into(),
                 });
             }
-            AppCommand::ExportEncryptedBackup { passphrase } => {
-                let path = self.config.data_dir.join("backups/verge-backup.vgbak");
-                let bundle = self.profiles.backup_bundle(self.settings.get().clone())?;
-                write_encrypted_backup(&path, &bundle, passphrase)?;
-                return Ok(AppCommandResult {
-                    output: AppCommandOutput::EncryptedBackupExported {
-                        path: path.display().to_string(),
-                    },
-                    summary: "Encrypted local backup exported".into(),
-                });
-            }
-            AppCommand::RestoreEncryptedBackup { passphrase } => {
-                self.restore_encrypted_backup(passphrase)?;
+            // Keep generation-6 requests decodable for a GUI from an older build.
+            // Removed operations must fail explicitly without reading or writing data.
+            AppCommand::ExportEncryptedBackup { .. }
+            | AppCommand::RestoreEncryptedBackup { .. } => {
+                return Err(AppError::new(
+                    ErrorCode::NotFound,
+                    "Encrypted backups are no longer supported",
+                ));
             }
             AppCommand::UpdateMihomo => {
                 let version = self.update_mihomo()?;
@@ -1050,54 +1042,6 @@ impl Backend {
         fs::write(&destination, bytes)
             .map_err(|error| AppError::new(ErrorCode::StorageFailed, error.to_string()))?;
         Ok(destination.display().to_string())
-    }
-
-    fn restore_encrypted_backup(&mut self, passphrase: &str) -> Result<(), AppError> {
-        let previous_hotkey = self.settings.get().global_hotkey.clone();
-        let path = self.config.data_dir.join("backups/verge-backup.vgbak");
-        let bytes = fs::read(&path)
-            .map_err(|error| AppError::new(ErrorCode::StorageFailed, error.to_string()))?;
-        let restored = decrypt_backup(&bytes, passphrase)?;
-        let previous = self.profiles.backup_bundle(self.settings.get().clone())?;
-        self.shutdown();
-        let restored_settings = match self.profiles.restore_backup(restored) {
-            Ok(settings) => settings,
-            Err(error) => {
-                let _ = self.start_selected();
-                return Err(error);
-            }
-        };
-        if let Err(error) = self.settings.update(restored_settings) {
-            let previous_settings = self.profiles.restore_backup(previous)?;
-            let _ = self.settings.update(previous_settings);
-            let _ = self.start_selected();
-            return Err(error);
-        }
-        if self.profiles.selected().is_some()
-            && let Err(error) = self.start_selected()
-        {
-            self.shutdown();
-            let previous_settings = self.profiles.restore_backup(previous)?;
-            self.settings.update(previous_settings)?;
-            let recovery = self.start_selected().err();
-            return Err(match recovery {
-                Some(recovery) => AppError::new(
-                    ErrorCode::CoreUnavailable,
-                    format!(
-                        "restored backup failed to start: {}; previous state recovery failed: {}",
-                        error.message, recovery.message
-                    ),
-                ),
-                None => error,
-            });
-        }
-        self.refresh_sensitive_values();
-        // 备份恢复绕过了 persist_settings，全局快捷键变更在这里补齐同步。
-        let restored_hotkey = self.settings.get().global_hotkey.clone();
-        if restored_hotkey != previous_hotkey {
-            self.queue_hotkey_sync(restored_hotkey.as_deref());
-        }
-        Ok(())
     }
 
     fn update_mihomo(&mut self) -> Result<String, AppError> {
@@ -2271,7 +2215,7 @@ mod tests {
         let _ = fs::remove_dir_all(data_dir);
     }
 
-    /// 设置变更（含 scope 重置、备份恢复路径）时守护侧发出热键注册同步请求；
+    /// 设置变更（含 scope 重置）时守护侧发出热键注册同步请求；
     /// 值未变化不发请求，避免主线程无谓往返。
     #[test]
     fn global_hotkey_change_queues_daemon_registration_sync() {
@@ -2329,6 +2273,48 @@ mod tests {
     }
 
     #[test]
+    fn retired_backup_requests_preserve_existing_data_and_allow_followup_commands() {
+        let (mut backend, data_dir) = test_backend("retired-backup");
+        let backup_path = data_dir.join("backups/verge-backup.vgbak");
+        fs::create_dir_all(backup_path.parent().unwrap()).unwrap();
+        fs::write(&backup_path, b"existing backup must remain untouched").unwrap();
+        let id = ProfileId::parse("retained").unwrap();
+        backend
+            .profiles
+            .import(
+                Profile::new(
+                    id.clone(),
+                    "Retained",
+                    ProfileSource::Local,
+                    UpdatePolicy::Manual,
+                    0,
+                    None,
+                )
+                .unwrap(),
+                "mode: rule\n",
+            )
+            .unwrap();
+        let previous_settings = backend.settings.get().clone();
+        for request in ["export_encrypted_backup", "restore_encrypted_backup"] {
+            let command = serde_json::from_value(serde_json::json!({
+                "type": request,
+                "passphrase": "legacy client passphrase"
+            }))
+            .unwrap();
+            let error = backend.execute_profile(command).unwrap_err();
+            assert_eq!(error.code, ErrorCode::NotFound);
+            assert_eq!(
+                fs::read(&backup_path).unwrap(),
+                b"existing backup must remain untouched"
+            );
+            assert_eq!(backend.profiles.yaml(&id).unwrap(), "mode: rule\n");
+            assert_eq!(backend.settings.get(), &previous_settings);
+            assert!(backend.execute_profile(AppCommand::ListProfiles).is_ok());
+        }
+        let _ = fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
     fn diagnostic_export_omits_subscription_urls_secrets_and_yaml() {
         let data_dir = std::env::temp_dir().join(format!(
             "verge-gpui-diagnostics-{}-{}",
@@ -2372,17 +2358,6 @@ mod tests {
         assert!(!exported.contains("subscription"));
         assert!(!exported.contains("controller-secret-must-not-leak"));
         assert!(!exported.contains("yaml-secret-must-not-leak"));
-        let backup = backend
-            .execute_profile(AppCommand::ExportEncryptedBackup {
-                passphrase: "correct horse battery staple".into(),
-            })
-            .unwrap();
-        let AppCommandOutput::EncryptedBackupExported { path } = backup.output else {
-            panic!("expected encrypted backup path");
-        };
-        let encrypted = fs::read_to_string(path).unwrap();
-        assert!(!encrypted.contains("subscription"));
-        assert!(!encrypted.contains("yaml-secret-must-not-leak"));
         let _ = fs::remove_dir_all(data_dir);
     }
 

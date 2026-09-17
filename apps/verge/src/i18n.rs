@@ -352,7 +352,6 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("settings.group.core", "Mihomo 内核", "Mihomo Core"),
     ("settings.group.app_update", "应用更新", "App Update"),
     ("settings.group.system", "系统", "System"),
-    ("settings.group.backup", "加密备份", "Encrypted Backup"),
     ("settings.theme", "主题", "Theme"),
     ("settings.theme.system", "跟随系统", "System"),
     ("settings.theme.light", "浅色", "Light"),
@@ -379,8 +378,8 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("settings.reset_default", "恢复默认", "Reset to Defaults"),
     (
         "settings.reset_default.desc",
-        "按作用域恢复默认值，不影响配置和备份",
-        "Reset one scope to defaults; profiles and backups are not affected",
+        "按作用域恢复默认值，不影响配置",
+        "Reset one scope to defaults; profiles are not affected",
     ),
     ("settings.scope.appearance", "外观", "Appearance"),
     ("settings.scope.network", "网络", "Network"),
@@ -492,23 +491,6 @@ const ENTRIES: &[(&str, &str, &str)] = &[
         "预览差异并导入",
         "Preview & Import",
     ),
-    (
-        "settings.backup.passphrase",
-        "备份口令",
-        "Backup Passphrase",
-    ),
-    (
-        "settings.backup.passphrase.desc",
-        "导出和恢复使用同一个口令，至少 12 个字符",
-        "The same passphrase is used for export and restore; at least 12 characters",
-    ),
-    ("settings.backup.actions", "备份操作", "Backup Actions"),
-    (
-        "settings.backup.export",
-        "导出加密备份",
-        "Export Encrypted Backup",
-    ),
-    ("settings.backup.restore", "恢复备份", "Restore Backup"),
     // ---- 输入框占位 ----
     (
         "placeholder.profile_id",
@@ -525,11 +507,6 @@ const ENTRIES: &[(&str, &str, &str)] = &[
         "placeholder.profile_user_agent",
         "可选，如 ClashX/1.0（留空用默认）",
         "Optional, e.g. ClashX/1.0 (empty for default)",
-    ),
-    (
-        "placeholder.backup_passphrase",
-        "备份口令（至少 12 个字符）",
-        "Backup passphrase (at least 12 characters)",
     ),
     (
         "placeholder.settings_import_path",
@@ -589,17 +566,6 @@ const ENTRIES: &[(&str, &str, &str)] = &[
         "The local files of this profile will be removed. This cannot be undone.",
     ),
     (
-        "dialog.restore_backup.title",
-        "恢复加密备份？",
-        "Restore Encrypted Backup?",
-    ),
-    (
-        "dialog.restore_backup.desc",
-        "现有配置将被备份内容覆盖，此操作不可恢复。",
-        "Existing profiles will be overwritten by the backup. This cannot be undone.",
-    ),
-    ("dialog.restore_backup.ok", "恢复", "Restore"),
-    (
         "dialog.uninstall_helper.title",
         "卸载特权 Helper？",
         "Uninstall Privileged Helper?",
@@ -623,8 +589,8 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("dialog.restart.ok", "重启", "Restart"),
     (
         "dialog.reset_scope.desc",
-        "只重置该作用域的设置字段，配置、备份和其它设置不受影响。",
-        "Only settings in this scope are reset; profiles, backups, and other settings are not affected.",
+        "只重置该作用域的设置字段，配置和其它设置不受影响。",
+        "Only settings in this scope are reset; profiles and other settings are not affected.",
     ),
     ("dialog.reset_scope.ok", "恢复默认", "Reset"),
     (
@@ -797,12 +763,6 @@ const ENTRIES: &[(&str, &str, &str)] = &[
         "已恢复默认设置",
         "Settings reset to defaults",
     ),
-    (
-        "toast.backup_exported",
-        "加密备份已导出",
-        "Encrypted backup exported",
-    ),
-    ("toast.backup_restored", "备份已恢复", "Backup restored"),
     (
         "toast.mihomo_updated",
         "Mihomo 内核已更新",

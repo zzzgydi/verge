@@ -445,57 +445,6 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 ),
         );
 
-    let backup_group = SettingsSection::new()
-        .id("settings-backup")
-        .title(tr(lang, "settings.group.backup"))
-        .child(
-            v_form()
-                .child(
-                    field()
-                        .label(tr(lang, "settings.backup.passphrase"))
-                        .description(tr(lang, "settings.backup.passphrase.desc"))
-                        .child(Input::new(&view.backup_passphrase).mask_toggle()),
-                )
-                .child(
-                    field().label(tr(lang, "settings.backup.actions")).child(
-                        h_flex()
-                            .gap_2()
-                            .child(
-                                Button::new("export-encrypted-backup")
-                                    .label(tr(lang, "settings.backup.export"))
-                                    .small()
-                                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
-                                    .outline()
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        let passphrase =
-                                            this.backup_passphrase.read(cx).value().to_string();
-                                        this.dispatch(
-                                            UiAction::ExportEncryptedBackup { passphrase },
-                                            cx,
-                                        );
-                                        this.backup_passphrase.update(cx, |input, cx| {
-                                            input.set_value("", window, cx)
-                                        });
-                                    })),
-                            )
-                            .child(
-                                Button::new("restore-encrypted-backup")
-                                    .label(tr(lang, "settings.backup.restore"))
-                                    .small()
-                                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
-                                    .outline()
-                                    .danger()
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.confirm_restore_backup(window, cx);
-                                    })),
-                            ),
-                    ),
-                ),
-        )
-        .when_some(view.state.last_diagnostic_path.clone(), |group, path| {
-            group.child(muted(i18n::fmt_exported(lang, &path), cx))
-        });
-
     let categories = [
         (
             SettingsCategory::General,
@@ -546,7 +495,12 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         SettingsCategory::General => v_flex().gap_4().child(general_group),
         SettingsCategory::Network => v_flex().gap_4().child(proxy_group).child(network_group),
         SettingsCategory::Updates => v_flex().gap_4().child(core_group).child(app_update_group),
-        SettingsCategory::System => v_flex().gap_4().child(system_group).child(backup_group),
+        SettingsCategory::System => v_flex()
+            .gap_4()
+            .child(system_group)
+            .when_some(view.state.last_diagnostic_path.clone(), |group, path| {
+                group.child(muted(i18n::fmt_exported(lang, &path), cx))
+            }),
     };
     v_flex()
         .gap_4()
