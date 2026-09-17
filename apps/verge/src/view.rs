@@ -262,6 +262,9 @@ impl MainView {
         search.update(cx, |input, cx| {
             input.set_placeholder(tr(lang, "proxies.search"), window, cx)
         });
+        self.ai_form.prompt.update(cx, |input, cx| {
+            input.set_placeholder(tr(lang, "ai.prompt"), window, cx)
+        });
         let fields: [(Entity<InputState>, &'static str); 10] = [
             (self.profile_id.clone(), "placeholder.profile_id"),
             (self.profile_name.clone(), "placeholder.profile_name"),
@@ -346,6 +349,21 @@ impl MainView {
         );
     }
 
+    pub(crate) fn try_dispatch_ai(
+        &mut self,
+        command: crate::ai::AiCommand,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.dispatch_with_context(
+            UiAction::Ai(command),
+            CommandContext {
+                actor: CommandActor::UserInterface,
+                approval: None,
+            },
+            cx,
+        )
+    }
+
     pub fn dispatch_confirmed(&mut self, action: UiAction, cx: &mut Context<Self>) {
         self.dispatch_with_context(
             action,
@@ -364,15 +382,15 @@ impl MainView {
         action: UiAction,
         context: CommandContext,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         if let UiAction::Navigate(page) = action {
             self.state.navigate(page);
             cx.notify();
-            return;
+            return false;
         }
         if self.state.connection_notice.is_some() {
             cx.notify();
-            return;
+            return false;
         }
         if matches!(action, UiAction::Ai(_))
             && !self
@@ -386,7 +404,21 @@ impl MainView {
                 tr(self.lang(), "connection.incompatible"),
             ));
             cx.notify();
-            return;
+            return false;
+        }
+        if matches!(action, UiAction::Ai(crate::ai::AiCommand::Retry))
+            && !self
+                .state
+                .daemon_capabilities
+                .iter()
+                .any(|c| c == crate::ai::UX_CAPABILITY)
+        {
+            self.state.set_error(crate::domain::AppError::new(
+                crate::domain::ErrorCode::Conflict,
+                tr(self.lang(), "connection.incompatible"),
+            ));
+            cx.notify();
+            return false;
         }
         if matches!(
             action,
@@ -403,7 +435,7 @@ impl MainView {
                 tr(self.lang(), "proxy.restart_required"),
             ));
             cx.notify();
-            return;
+            return false;
         }
         if matches!(action, UiAction::CloseAllConnections)
             && !self
@@ -417,7 +449,7 @@ impl MainView {
                 tr(self.lang(), "connection.incompatible"),
             ));
             cx.notify();
-            return;
+            return false;
         }
         if matches!(action, UiAction::UpdateGeoData(_))
             && !self
@@ -431,7 +463,7 @@ impl MainView {
                 tr(self.lang(), "connection.incompatible"),
             ));
             cx.notify();
-            return;
+            return false;
         }
         if matches!(action, UiAction::MoveProfile { .. })
             && !self
@@ -445,7 +477,7 @@ impl MainView {
                 tr(self.lang(), "connection.incompatible"),
             ));
             cx.notify();
-            return;
+            return false;
         }
         if matches!(action, UiAction::PreviewMergeConfig { .. })
             && !self
@@ -459,7 +491,7 @@ impl MainView {
                 tr(self.lang(), "connection.incompatible"),
             ));
             cx.notify();
-            return;
+            return false;
         }
         let empty_refresh = self.state.selected_profile.is_none()
             && matches!(
@@ -495,11 +527,12 @@ impl MainView {
                 tr(self.lang(), "connection.busy"),
             ));
             cx.notify();
-            return;
+            return false;
         }
         let operation_id = self.next_operation_id;
         self.next_operation_id = self.next_operation_id.wrapping_add(1).max(1);
         let operation_len = requests.len();
+        let mut accepted = false;
         for (operation_index, request) in requests.into_iter().enumerate() {
             let envelope = UiRequestEnvelope {
                 request_id: self.next_request_id,
@@ -511,7 +544,10 @@ impl MainView {
             };
             self.next_request_id = self.next_request_id.wrapping_add(1).max(1);
             match self.requests.try_send(envelope.clone()) {
-                Ok(()) => self.state.begin_envelope(&envelope),
+                Ok(()) => {
+                    self.state.begin_envelope(&envelope);
+                    accepted = true;
+                }
                 Err(mpsc::TrySendError::Full(_)) => {
                     self.state.set_error(crate::domain::AppError::new(
                         crate::domain::ErrorCode::Conflict,
@@ -528,9 +564,11 @@ impl MainView {
         }
         self.sync_proxies(cx);
         cx.notify();
+        accepted
     }
 
     pub(crate) fn daemon_disconnected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.ai_form.disconnected();
         self.state
             .disconnect(tr(self.lang(), "connection.reconnecting").into());
         let sheet = self.sheet_state.read(cx);

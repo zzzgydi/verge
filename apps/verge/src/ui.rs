@@ -969,6 +969,7 @@ fn response_request(response: &UiResponse) -> Option<UiRequest> {
                 api_key: Default::default(),
                 clear_key: false,
             },
+            crate::ai::AiOperation::Retry => crate::ai::AiCommand::Retry,
             crate::ai::AiOperation::Test => crate::ai::AiCommand::TestProvider,
             crate::ai::AiOperation::Start => crate::ai::AiCommand::Start {
                 prompt: String::new(),

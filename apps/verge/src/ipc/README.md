@@ -52,3 +52,9 @@ connections that request AI receive AI snapshots; snapshots are coalesced at the
 100 ms daemon tick, revisions suppress stale results, and final state remains
 queryable after reconnection. Disconnect cancels the active turn; the GUI never
 automatically repeats inference. Provider IO and Keychain work run on a worker.
+
+`ai_chat_ux_v2` adds `Retry`, which regenerates the last turn without appending
+a second user question. New GUIs gate this command. `AiSnapshot.operation` and
+per-message evidence are additive, defaulted fields; old snapshots remain readable.
+Provider tests retain chat evidence. Drafts are consumed only after an accepted
+command response; saving and testing are sequenced after successful persistence.

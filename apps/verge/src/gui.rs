@@ -276,7 +276,9 @@ pub fn run() {
                                         notification_for(lang, &envelope.response);
                                     let toast = toast_for(lang, &envelope.response);
                                     let refresh_settings = matches!(&envelope.response, UiResponse::Profile { request: AppCommand::ImportApplicationSettings { .. } | AppCommand::ResetApplicationSettingsScope { .. }, result: Ok(_) });
+                                    view.ai_response(&envelope.response, window, cx);
                                     view.state.apply_response_envelope(envelope);
+                                    view.finish_ai_save(window, cx);
                                     if refresh_settings { view.dispatch(UiAction::RefreshSettings, cx); }
                                     set_app_menus(view.lang(), cx);
                                     if let Some(error) = &yaml_load_error {
@@ -641,6 +643,6 @@ fn toast_for(lang: Lang, response: &UiResponse) -> Option<Notification> {
             Err(_) => None,
         },
         UiResponse::Realtime(_) => None,
-        UiResponse::Ai { result, .. } => result.as_ref().err().map(fail),
+        UiResponse::Ai { .. } => None,
     }
 }

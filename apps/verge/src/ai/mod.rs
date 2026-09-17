@@ -10,6 +10,7 @@ use crate::domain::{AppError, ErrorCode};
 use serde::{Deserialize, Serialize};
 
 pub const CAPABILITY: &str = "ai_chat_v1";
+pub const UX_CAPABILITY: &str = "ai_chat_ux_v2";
 pub const TEXT_LIMIT: usize = 32 * 1024;
 
 #[derive(Clone, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -31,6 +32,7 @@ pub enum AiCommand {
         clear_key: bool,
     },
     TestProvider,
+    Retry,
     Start {
         prompt: String,
     },
@@ -43,6 +45,7 @@ pub enum AiOperation {
     State,
     Save,
     Test,
+    Retry,
     Start,
     Cancel,
     Clear,
@@ -54,6 +57,7 @@ impl AiCommand {
             Self::GetState => AiOperation::State,
             Self::SaveConfig { .. } => AiOperation::Save,
             Self::TestProvider => AiOperation::Test,
+            Self::Retry => AiOperation::Retry,
             Self::Start { .. } => AiOperation::Start,
             Self::Cancel => AiOperation::Cancel,
             Self::Clear => AiOperation::Clear,
@@ -65,6 +69,8 @@ impl AiCommand {
 pub struct ChatMessage {
     pub role: String,
     pub text: String,
+    #[serde(default)]
+    pub evidence: Vec<tools::Evidence>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -74,6 +80,8 @@ pub struct AiSnapshot {
     pub config: ProviderConfig,
     pub has_key: bool,
     pub busy: bool,
+    #[serde(default)]
+    pub operation: Option<AiOperation>,
     pub messages: Vec<ChatMessage>,
     pub activity: String,
     pub error: Option<String>,
@@ -90,4 +98,16 @@ pub(crate) fn bounded(text: &str, max: usize) -> String {
         end -= 1;
     }
     text[..end].to_owned()
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+    #[test]
+    fn snapshots_before_ux_fields_remain_readable() {
+        let value = serde_json::json!({"revision":1,"run_id":1,"config":ProviderConfig::default(),"has_key":false,"busy":false,"messages":[{"role":"user","text":"question"}],"activity":"Completed","error":null,"evidence":[]});
+        let state: AiSnapshot = serde_json::from_value(value).unwrap();
+        assert_eq!(state.operation, None);
+        assert!(state.messages[0].evidence.is_empty());
+    }
 }

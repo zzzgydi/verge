@@ -52,6 +52,7 @@ fn ai_requests_are_gated_and_reconnect_does_not_restart_a_turn(cx: &mut TestAppC
                 revision: 10,
                 busy: true,
                 messages: vec![ChatMessage {
+                    evidence: Vec::new(),
                     role: "assistant".into(),
                     text: "partial".into(),
                 }],
@@ -121,7 +122,7 @@ fn ai_send_and_stop_remain_visible_and_dispatch_from_buttons(cx: &mut TestAppCon
                 model: "fake".into(),
                 ..Default::default()
             };
-            view.ai_form.settings_open = true;
+            view.ai_form.settings_open = false;
             view.ai_form.prompt.update(cx, |input, cx| {
                 input.set_value("为什么无法联网？", window, cx)
             });
@@ -130,9 +131,7 @@ fn ai_send_and_stop_remain_visible_and_dispatch_from_buttons(cx: &mut TestAppCon
     });
     cx.run_until_parked();
     let send = cx.debug_bounds("ai-send").unwrap();
-    let stop = cx.debug_bounds("ai-stop").unwrap();
     assert!(send.bottom() < gpui_kit::px(640.));
-    assert!(stop.bottom() < gpui_kit::px(640.));
     cx.simulate_click(send.center(), gpui_kit::Modifiers::default());
     cx.run_until_parked();
     assert!(
@@ -145,6 +144,8 @@ fn ai_send_and_stop_remain_visible_and_dispatch_from_buttons(cx: &mut TestAppCon
         })
     });
     cx.run_until_parked();
+    let stop = cx.debug_bounds("ai-stop").unwrap();
+    assert!(stop.bottom() < gpui_kit::px(640.));
     cx.simulate_click(stop.center(), gpui_kit::Modifiers::default());
     cx.run_until_parked();
     assert!(matches!(

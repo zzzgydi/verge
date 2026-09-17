@@ -423,19 +423,21 @@ impl Backend {
         match request {
             UiRequest::Ai(command) => {
                 let operation = command.operation();
-                let context = matches!(command, crate::ai::AiCommand::Start { .. }).then(|| {
-                    crate::ai::tools::ToolContext {
-                        socket: self.config.internal_socket(),
-                        services: self.config.services.clone(),
-                        recovery_path: self.config.recovery_path.clone(),
-                        config_selected: self.profiles.selected().is_some(),
-                        config_merge_valid: self
-                            .profiles
-                            .selected()
-                            .is_some_and(|id| self.profiles.merged_yaml(id).is_ok()),
-                        connections: self.ai_connections_sample.clone(),
-                        errors: self.ai_recent_errors.clone(),
-                    }
+                let context = matches!(
+                    command,
+                    crate::ai::AiCommand::Start { .. } | crate::ai::AiCommand::Retry
+                )
+                .then(|| crate::ai::tools::ToolContext {
+                    socket: self.config.internal_socket(),
+                    services: self.config.services.clone(),
+                    recovery_path: self.config.recovery_path.clone(),
+                    config_selected: self.profiles.selected().is_some(),
+                    config_merge_valid: self
+                        .profiles
+                        .selected()
+                        .is_some_and(|id| self.profiles.merged_yaml(id).is_ok()),
+                    connections: self.ai_connections_sample.clone(),
+                    errors: self.ai_recent_errors.clone(),
                 });
                 let result = self.ai.handle(command, context);
                 UiResponse::Ai { operation, result }
@@ -1442,6 +1444,7 @@ impl Backend {
                 crate::ipc::protocol::PROFILE_ORDER.into(),
                 crate::ipc::protocol::MERGE_PREVIEW.into(),
                 crate::ai::CAPABILITY.into(),
+                crate::ai::UX_CAPABILITY.into(),
             ],
             profiles: self.profiles.list().to_vec(),
             selected_profile: self.profiles.selected().cloned(),

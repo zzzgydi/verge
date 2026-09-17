@@ -63,6 +63,9 @@ impl AiService {
                 state.revision += 1;
                 return Ok(state.clone());
             }
+            if matches!(command, AiCommand::Retry) {
+                retry_turn(&mut state)?;
+            }
             if let AiCommand::Start { prompt } = &command {
                 if prompt.trim().is_empty() || prompt.len() > 8192 {
                     return Err(error("Enter a question of at most 8 KiB"));
@@ -77,8 +80,13 @@ impl AiService {
                 state.messages.push(ChatMessage {
                     role: "user".into(),
                     text: prompt.trim().into(),
+                    evidence: Vec::new(),
                 });
             }
+            if matches!(command, AiCommand::Start { .. } | AiCommand::Retry) {
+                state.evidence.clear();
+            }
+            state.operation = Some(command.operation());
             state.busy = true;
             state.error = None;
             state.activity = "Preparing".into();
@@ -144,7 +152,9 @@ impl AiService {
                         for item in &mut evidence {
                             item.id = format!("R{}-{}", state.run_id, item.id);
                         }
-                        state.evidence = evidence.clone();
+                        if !test {
+                            state.evidence = evidence.clone();
+                        }
                         let history = state
                             .messages
                             .iter()
@@ -155,6 +165,7 @@ impl AiService {
                             state.messages.push(ChatMessage {
                                 role: "assistant".into(),
                                 text: String::new(),
+                                evidence: evidence.clone(),
                             });
                         }
                         state.revision += 1;
@@ -217,5 +228,43 @@ impl AiService {
 impl Drop for AiService {
     fn drop(&mut self) {
         self.cancel();
+    }
+}
+
+/// Regenerate the current turn without duplicating the question or consuming a turn.
+fn retry_turn(state: &mut AiSnapshot) -> Result<(), AppError> {
+    let index = state
+        .messages
+        .iter()
+        .rposition(|m| m.role == "user")
+        .ok_or_else(|| error("No question to retry"))?;
+    state.messages.truncate(index + 1);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn retry_preserves_prior_turns_and_one_current_question() {
+        let mut state = AiSnapshot::default();
+        for (role, text) in [
+            ("user", "first"),
+            ("assistant", "answer"),
+            ("user", "second"),
+            ("assistant", "partial"),
+        ] {
+            state.messages.push(ChatMessage {
+                role: role.into(),
+                text: text.into(),
+                evidence: vec![],
+            });
+        }
+        retry_turn(&mut state).unwrap();
+        retry_turn(&mut state).unwrap();
+        assert_eq!(state.messages.len(), 3);
+        assert_eq!(state.messages[1].text, "answer");
+        assert_eq!(state.messages[2].text, "second");
+        assert!(retry_turn(&mut AiSnapshot::default()).is_err());
     }
 }
