@@ -4,7 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use verge_helper::{MacTun, prepare_socket_path, restrict_socket, serve_connection, shared_tun_backend};
+use verge_helper::{
+    MacTun, prepare_socket_path, restrict_socket, serve_connection, shared_tun_backend,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = env::args().skip(1);

@@ -249,7 +249,10 @@ impl TunBackend for MacTun {
         if self.devices.contains_key(&created.name) {
             return Err(HelperFailure::new(
                 "tun_conflict",
-                format!("device '{}' is already managed by this helper", created.name),
+                format!(
+                    "device '{}' is already managed by this helper",
+                    created.name
+                ),
             ));
         }
         if let Err(failure) = configure_utun(&created.name, config) {
@@ -693,7 +696,11 @@ mod tests {
             }
         );
         assert_eq!(
-            exchange(&HelperRequest::DisableTun { device: None }, uid, &fixture.tun),
+            exchange(
+                &HelperRequest::DisableTun { device: None },
+                uid,
+                &fixture.tun
+            ),
             HelperResponse::TunDisabled
         );
         assert_eq!(

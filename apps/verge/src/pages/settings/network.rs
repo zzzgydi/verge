@@ -25,6 +25,10 @@ impl NetworkForm {
             pending_dialog: None,
         }
     }
+    pub fn cancel_pending(&mut self) {
+        self.pending_dialog = None;
+    }
+
     pub fn sync(
         &mut self,
         settings: Option<&CoreNetworkSettings>,
@@ -34,9 +38,14 @@ impl NetworkForm {
     ) {
         if let Some(settings) = settings {
             if self.applied_port != Some(settings.mixed_port) {
-                self.port.update(cx, |input, cx| {
-                    input.set_value(settings.mixed_port.to_string(), window, cx)
-                });
+                let clean = self
+                    .applied_port
+                    .is_none_or(|port| self.port.read(cx).value().as_str() == port.to_string());
+                if clean {
+                    self.port.update(cx, |input, cx| {
+                        input.set_value(settings.mixed_port.to_string(), window, cx)
+                    });
+                }
                 self.applied_port = Some(settings.mixed_port);
             }
             if self

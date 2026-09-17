@@ -20,7 +20,7 @@ type ViewHolder = Rc<RefCell<Option<gpui_kit::Entity<MainView>>>>;
 /// 创建窗口：MainView + Root（与真实 main() 同构）。
 fn setup(cx: &mut TestAppContext) -> (gpui_kit::Entity<Root>, ViewHolder, &mut VisualTestContext) {
     cx.update(gpui_kit::init);
-    let (request_tx, _request_rx) = mpsc::channel();
+    let (request_tx, _request_rx) = mpsc::sync_channel(32);
     let view_holder: ViewHolder = Default::default();
     let holder = view_holder.clone();
     let (root, cx) = cx.add_window_view(|window, cx| {
@@ -238,7 +238,7 @@ fn all_pages_render_at_minimum_window_size(cx: &mut TestAppContext) {
 fn connection_close_button_dispatches_immediately(cx: &mut TestAppContext) {
     use crate::domain::{Connection, ConnectionSnapshot, RealtimeEvent, RuntimeCommand};
     cx.update(gpui_kit::init);
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(32);
     let holder: ViewHolder = Default::default();
     let copy = holder.clone();
     let (_, cx) = cx.add_window_view(|window, cx| {
@@ -280,7 +280,7 @@ fn connection_close_button_dispatches_immediately(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn first_profile_activation_keeps_follow_up_reads_and_subscription(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(32);
     let (view, cx) = cx.add_window_view(|window, cx| MainView::new(tx, window, cx));
     cx.update(|_, cx| {
         view.update(cx, |view, cx| {
@@ -391,7 +391,7 @@ fn proxy_mode_buttons_dispatch_all_three_modes(cx: &mut TestAppContext) {
         ui::{Page, UiRequest},
     };
     cx.update(gpui_kit::init);
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(32);
     let holder: ViewHolder = Default::default();
     let copy = holder.clone();
     let (_, cx) = cx.add_window_view(|window, cx| {
@@ -512,7 +512,7 @@ fn network_dialogs_render_and_save_only_after_backend_success(cx: &mut TestAppCo
         ui::UiRequest,
     };
     cx.update(gpui_kit::init);
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(32);
     let holder: ViewHolder = Default::default();
     let copy = holder.clone();
     let (_, cx) = cx.add_window_view(|window, cx| {
@@ -644,7 +644,7 @@ fn cmd_w_closes_window_from_main_view(cx: &mut TestAppContext) {
 fn system_proxy_dialog_keeps_draft_until_success_and_fits_small_window(cx: &mut TestAppContext) {
     use crate::{domain::*, ui::UiRequest};
     cx.update(gpui_kit::init);
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(32);
     let holder: ViewHolder = Default::default();
     let copy = holder.clone();
     let (_, cx) = cx.add_window_view(|window, cx| {
@@ -744,7 +744,7 @@ fn system_proxy_dialog_keeps_draft_until_success_and_fits_small_window(cx: &mut 
 fn unified_proxy_writes_do_not_reach_an_older_daemon(cx: &mut TestAppContext) {
     use crate::ui::UiAction;
     cx.update(gpui_kit::init);
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(32);
     let holder = Rc::new(RefCell::new(None));
     let slot = holder.clone();
     let (_window, cx) = cx.add_window_view(|window, cx| {
@@ -776,6 +776,73 @@ fn unified_proxy_writes_do_not_reach_an_older_daemon(cx: &mut TestAppContext) {
                     enabled: true
                 })
             ));
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn daemon_recovery_preserves_drafts_and_never_replays_writes(cx: &mut TestAppContext) {
+    use crate::{
+        domain::RunMode,
+        ui::{Page, UiAction},
+    };
+    cx.update(gpui_kit::init);
+    let (tx, rx) = mpsc::sync_channel(32);
+    let holder = Rc::new(RefCell::new(None));
+    let slot = holder.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| MainView::new(tx, window, cx));
+        *slot.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = holder.borrow().clone().unwrap();
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.yaml_editor.update(cx, |input, cx| {
+                input.set_value("draft: retained", window, cx)
+            });
+            view.dispatch(UiAction::SetMode(RunMode::Global), cx);
+            let original = rx.try_recv().unwrap();
+            assert!(!view.state.pending.is_empty());
+            view.daemon_disconnected(window, cx);
+            assert!(view.state.pending.is_empty());
+            view.dispatch(UiAction::SetMode(RunMode::Direct), cx);
+            view.navigate(Page::Profiles, cx);
+            assert_eq!(view.state.page, Page::Profiles);
+            assert!(rx.try_recv().is_err());
+            assert_eq!(
+                view.yaml_editor.read(cx).value().as_str(),
+                "draft: retained"
+            );
+            let (new_tx, new_rx) = mpsc::sync_channel(32);
+            view.requests = new_tx;
+            view.state.connection_notice = None;
+            view.dispatch(UiAction::RefreshProfiles, cx);
+            let recovered = new_rx.try_recv().unwrap();
+            assert!(recovered.request_id > original.request_id);
+            assert_eq!(
+                recovered.request.risk(),
+                crate::domain::CommandRisk::ReadOnly
+            );
+            assert!(new_rx.try_recv().is_err());
+        })
+    });
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn daemon_requests_are_bounded_while_responses_are_stalled(cx: &mut TestAppContext) {
+    use crate::ui::UiAction;
+    cx.update(gpui_kit::init);
+    let (tx, rx) = mpsc::sync_channel(32);
+    let (view, cx) = cx.add_window_view(|window, cx| MainView::new(tx, window, cx));
+    cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            for _ in 0..100 {
+                view.dispatch(UiAction::RefreshProfiles, cx);
+            }
+            assert_eq!(rx.try_iter().count(), 32);
+            assert_eq!(view.state.pending_request_count(), 32);
         })
     });
 }

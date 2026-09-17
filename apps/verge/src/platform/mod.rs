@@ -1,4 +1,6 @@
 mod pac;
+#[cfg(unix)]
+mod rotating_log;
 pub use pac::PacServer;
 use std::{
     fs,

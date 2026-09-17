@@ -57,7 +57,7 @@ pub struct SheetState {
 pub struct MainView {
     pub state: UiState,
     pub telemetry: Entity<pages::home::telemetry::Telemetry>,
-    pub requests: mpsc::Sender<UiRequestEnvelope>,
+    pub requests: mpsc::SyncSender<UiRequestEnvelope>,
     pub sheet_state: Entity<SheetState>,
     /// 当前设置分类。
     pub settings_category: pages::settings::SettingsCategory,
@@ -119,7 +119,7 @@ impl MainView {
     }
 
     pub fn new(
-        requests: mpsc::Sender<UiRequestEnvelope>,
+        requests: mpsc::SyncSender<UiRequestEnvelope>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -341,6 +341,10 @@ impl MainView {
             cx.notify();
             return;
         }
+        if self.state.connection_notice.is_some() {
+            cx.notify();
+            return;
+        }
         if matches!(
             action,
             UiAction::SetSystemProxy { .. } | UiAction::UpdateSystemProxySettings(_)
@@ -385,6 +389,15 @@ impl MainView {
                     )
             })
             .collect();
+        // Bound requests retained by the transport and pending UI state together.
+        if self.state.pending_request_count() + requests.len() > 32 {
+            self.state.set_error(crate::domain::AppError::new(
+                crate::domain::ErrorCode::Conflict,
+                tr(self.lang(), "connection.busy"),
+            ));
+            cx.notify();
+            return;
+        }
         let operation_id = self.next_operation_id;
         self.next_operation_id = self.next_operation_id.wrapping_add(1).max(1);
         let operation_len = requests.len();
@@ -398,9 +411,40 @@ impl MainView {
                 request,
             };
             self.next_request_id = self.next_request_id.wrapping_add(1).max(1);
-            self.state.begin_envelope(&envelope);
-            let _ = self.requests.send(envelope);
+            match self.requests.try_send(envelope.clone()) {
+                Ok(()) => self.state.begin_envelope(&envelope),
+                Err(mpsc::TrySendError::Full(_)) => {
+                    self.state.set_error(crate::domain::AppError::new(
+                        crate::domain::ErrorCode::Conflict,
+                        tr(self.lang(), "connection.busy"),
+                    ));
+                    break;
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    self.state
+                        .disconnect(tr(self.lang(), "connection.reconnecting").into());
+                    break;
+                }
+            }
         }
+        self.sync_proxies(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn daemon_disconnected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.state
+            .disconnect(tr(self.lang(), "connection.reconnecting").into());
+        let sheet = self.sheet_state.read(cx);
+        if sheet.pending_yaml.is_some() || sheet.pending_merge || sheet.pending_merged.is_some() {
+            gpui_kit::component::WindowExt::close_sheet(window, cx);
+        }
+        self.sheet_state.update(cx, |state, cx| {
+            *state = SheetState::default();
+            cx.notify();
+        });
+        self.pending_settings_import = None;
+        self.pending_proxy_settings = None;
+        self.network_form.cancel_pending();
         self.sync_proxies(cx);
         cx.notify();
     }
@@ -446,7 +490,7 @@ impl MainView {
     }
 
     /// 刷新当前页；连接和日志走实时推送，没有对应的刷新请求。
-    fn refresh_current_page(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn refresh_current_page(&mut self, cx: &mut Context<Self>) {
         match self.state.page {
             Page::Home => self.dispatch(UiAction::RefreshHome, cx),
             Page::Proxies => self.dispatch(UiAction::RefreshProxies, cx),
@@ -630,6 +674,14 @@ impl Render for MainView {
                             .border_color(cx.theme().border)
                             .rounded(px(16.))
                             .overflow_hidden()
+                            .when_some(self.state.connection_notice.clone(), |this, message| {
+                                this.child(
+                                    div()
+                                        .px_4()
+                                        .pt_4()
+                                        .child(Alert::warning("daemon-connection", message)),
+                                )
+                            })
                             .when_some(error, |this, error| {
                                 this.child(
                                     div().px_4().pt_4().child(

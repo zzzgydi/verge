@@ -233,7 +233,7 @@ The binary must match the pinned executable checksum in `assets/mihomo/manifest.
 
 Installing or removing the privileged helper, enabling TUN, and replacing the application can change system state. Verge asks for confirmation and macOS may request administrator authorization.
 
-Application data is stored in `~/Library/Application Support/Verge` by default. Logs are written to `logs/verge.log` under that directory. Diagnostic exports redact controller secrets, subscription URLs, authentication headers, and the user home path.
+Application data is stored in `~/Library/Application Support/Verge` by default. Logs are written to `logs/verge.log` under that directory, with three rotated archives and a 2 MiB limit per file. GUI and daemon coordinate rotation through a shared file lock. Diagnostic exports redact controller secrets, subscription URLs, authentication headers, and the user home path.
 
 ## Platform status
 

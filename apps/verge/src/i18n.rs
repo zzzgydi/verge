@@ -25,6 +25,26 @@ impl Lang {
 /// 文案表：`(key, zh-CN, en)`。key 按页面/用途命名。
 const ENTRIES: &[(&str, &str, &str)] = &[
     (
+        "connection.recovered",
+        "已重新连接。断线前未收到结果的操作没有重试，请核对当前状态。",
+        "Reconnected. Unconfirmed operations were not retried. Please check the current state.",
+    ),
+    (
+        "connection.reconnecting",
+        "与后台断开，正在重连。编辑内容已保留；未收到结果的操作请在恢复后核对。",
+        "Disconnected from the daemon. Reconnecting; drafts are preserved. Check any unconfirmed operations after recovery.",
+    ),
+    (
+        "connection.incompatible",
+        "后台版本不兼容，请退出并重新打开 Verge。编辑内容仍保留在当前窗口。",
+        "The daemon version is incompatible. Quit and reopen Verge. Drafts remain in this window.",
+    ),
+    (
+        "connection.busy",
+        "后台请求较多，请稍后重试。",
+        "Too many pending requests. Please retry shortly.",
+    ),
+    (
         "proxy.restart_required",
         "当前后台尚不支持统一系统代理设置，请从托盘退出 Verge 后重新启动。",
         "The running daemon does not support unified system proxy settings. Quit Verge from the tray and restart.",

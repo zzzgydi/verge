@@ -36,3 +36,11 @@ Encrypted backup export and restore have been retired. Generation-6 request
 variants remain decodable and return `NotFound` without accessing backup data.
 The new GUI has no backup actions; the old export result remains decode-only so
 mixed builds do not disconnect solely because of this retired message.
+
+## Runtime recovery
+
+The GUI preserves its window and drafts after an unexpected EOF, retries the same socket with a 250 ms to 5 s backoff, and replaces the request sender only after a fresh handshake. It never unlinks the socket or spawns another daemon during recovery. If the daemon crashed, reopen Verge to start it; the retained window reconnects when it becomes available. Normal shutdown sends `Closed { reason: "daemon_shutdown" }`; protocol rejection leaves a visible message instead of silently discarding drafts.
+
+Each socket session owns its reader, writer, subscriptions and command failure state. GUI requests are bounded to 32 queued/pending items and use nonblocking sends. On disconnect, pending UI operations are cleared and old responses are fenced out; fresh reads and subscriptions replace state. Unconfirmed writes are never replayed. Reopening a loading editor is required after a failed load; an already loaded draft remains editable.
+
+Disk logs use a bounded local socket and writer thread. All GUI/daemon writers lock a shared file before opening and appending to the active log, so rotation cannot strand another writer on an old inode. Current log plus three archives are capped at 2 MiB each. Abrupt process exit may lose the final buffered log bytes.

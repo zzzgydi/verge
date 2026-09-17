@@ -67,6 +67,8 @@ pub enum SendError {
 struct ConnectionHandle {
     writer_tx: SyncSender<ClientMessage>,
     socket: UnixStream,
+    writer_done: Receiver<()>,
+    graceful: Arc<AtomicBool>,
 }
 
 /// Keep slow GUI clients from retaining hundreds of full connection snapshots.
@@ -154,21 +156,42 @@ impl IpcServer {
             return;
         };
         let (writer_tx, writer_rx) = mpsc::sync_channel::<ClientMessage>(WRITER_QUEUE_CAPACITY);
+        let (done_tx, writer_done) = mpsc::channel();
+        let graceful = Arc::new(AtomicBool::new(false));
+        let writer_graceful = graceful.clone();
+        if stream
+            .set_write_timeout(Some(std::time::Duration::from_secs(2)))
+            .is_err()
+        {
+            return;
+        }
         self.connections.lock().unwrap().insert(
             conn_id,
             ConnectionHandle {
                 writer_tx,
                 socket: stream,
+                writer_done,
+                graceful,
             },
         );
         std::thread::spawn(move || {
             let mut writer = BufWriter::new(writer_stream);
             while let Ok(message) = writer_rx.recv() {
-                if frame::write_message(&mut writer, &message).is_err() {
+                let closed = matches!(message, ClientMessage::Closed { .. });
+                if frame::write_message(&mut writer, &message).is_err() || closed {
                     break;
                 }
             }
+            if writer_graceful.load(Ordering::Acquire) {
+                let _ = frame::write_message(
+                    &mut writer,
+                    &ClientMessage::Closed {
+                        reason: "daemon_shutdown".into(),
+                    },
+                );
+            }
             let _ = writer.get_ref().shutdown(std::net::Shutdown::Both);
+            let _ = done_tx.send(());
         });
         let events_tx = self.events_tx.clone();
         std::thread::spawn(move || {
@@ -304,9 +327,32 @@ impl IpcServer {
     /// 关闭全部连接并停止 accept。进程退出时兜底。
     pub fn shutdown(&self) {
         self.shutdown.store(true, Ordering::Release);
-        for (_, handle) in self.connections.lock().unwrap().drain() {
-            let _ = handle.socket.shutdown(std::net::Shutdown::Both);
+        // Drain a final Closed frame before closing sockets. A stalled peer is bounded
+        // by the common deadline and socket write timeout, never by queue capacity.
+        let handles: Vec<_> = self
+            .connections
+            .lock()
+            .unwrap()
+            .drain()
+            .map(|(_, h)| h)
+            .collect();
+        for handle in &handles {
+            handle.graceful.store(true, Ordering::Release);
         }
+        let finishing: Vec<_> = handles
+            .into_iter()
+            .map(|handle| {
+                drop(handle.writer_tx);
+                (handle.socket, handle.writer_done)
+            })
+            .collect();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        for (socket, done) in finishing {
+            let _ =
+                done.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()));
+            let _ = socket.shutdown(std::net::Shutdown::Both);
+        }
+        *self.primary.lock().unwrap() = None;
         self.subscriptions.lock().unwrap().clear();
         let _ = fs::remove_file(&self.socket_path);
     }
@@ -344,6 +390,39 @@ mod tests {
             std::env::temp_dir().join(format!("verge-ipc-test-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("daemon.sock")
+    }
+
+    #[test]
+    fn shutdown_delivers_closed_before_eof_and_releases_connections() {
+        let socket = temp_socket("graceful");
+        let (server, incoming) = IpcServer::bind(&socket).unwrap();
+        server.spawn_accept();
+        let mut stream = UnixStream::connect(&socket).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+            .unwrap();
+        frame::write_message(
+            &mut stream,
+            &DaemonMessage::Hello {
+                protocol_version: PROTOCOL_VERSION,
+                app_version: "test".into(),
+            },
+        )
+        .unwrap();
+        let IpcServerEvent::Connected { conn_id, .. } = incoming
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap()
+        else {
+            panic!("connected expected")
+        };
+        server.try_claim_primary(conn_id);
+        server.shutdown();
+        assert!(
+            matches!(frame::read_message::<ClientMessage>(&mut stream).unwrap(), ClientMessage::Closed { reason } if reason == "daemon_shutdown")
+        );
+        assert!(frame::read_message::<ClientMessage>(&mut stream).is_err());
+        assert!(server.connections.lock().unwrap().is_empty());
+        assert!(server.primary().is_none());
     }
 
     #[test]
@@ -452,6 +531,8 @@ mod tests {
             ConnectionHandle {
                 writer_tx: tx,
                 socket: local,
+                writer_done: mpsc::channel().1,
+                graceful: Arc::new(AtomicBool::new(false)),
             },
         );
         server.send(99, ClientMessage::ActivateWindow).unwrap();

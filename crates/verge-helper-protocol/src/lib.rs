@@ -35,11 +35,17 @@ impl TunConfig {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HelperRequest {
-    Ping { protocol_version: u32 },
+    Ping {
+        protocol_version: u32,
+    },
     GetCapabilities,
-    EnableTun { config: TunConfig },
+    EnableTun {
+        config: TunConfig,
+    },
     /// device 为 None 时拆除 helper 当前管理的全部 TUN 设备。
-    DisableTun { device: Option<String> },
+    DisableTun {
+        device: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -86,7 +92,10 @@ mod tests {
         ];
         for request in requests {
             let bytes = serde_json::to_vec(&request).unwrap();
-            assert_eq!(serde_json::from_slice::<HelperRequest>(&bytes).unwrap(), request);
+            assert_eq!(
+                serde_json::from_slice::<HelperRequest>(&bytes).unwrap(),
+                request
+            );
         }
         let responses = [
             HelperResponse::TunEnabled {

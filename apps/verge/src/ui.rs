@@ -60,6 +60,25 @@ mod envelope_tests {
     }
 
     #[test]
+    fn disconnect_clears_pending_and_rejects_old_session_results() {
+        let mut state = UiState {
+            page: Page::Profiles,
+            profile_yaml: Some((ProfileId::parse("draft").unwrap(), "draft: true".into())),
+            ..Default::default()
+        };
+        state.begin_envelope(&envelope(1));
+        state.disconnect("reconnecting".into());
+        state.apply_response_envelope(mode_response(1, RunMode::Global));
+        assert_eq!(state.mode, None);
+        assert!(state.pending.is_empty());
+        assert_eq!(state.page, Page::Profiles);
+        assert_eq!(state.profile_yaml.as_ref().unwrap().1, "draft: true");
+        state.begin_envelope(&envelope(2));
+        state.apply_response_envelope(mode_response(2, RunMode::Rule));
+        assert_eq!(state.mode, Some(RunMode::Rule));
+    }
+
+    #[test]
     fn duplicate_pending_requests_remain_pending_until_all_finish() {
         let mut state = UiState::default();
         state.begin_envelope(&envelope(1));
@@ -539,6 +558,9 @@ impl UiAction {
 #[derive(Clone, Debug, Default)]
 pub struct UiState {
     pub daemon_capabilities: Vec<String>,
+    /// Present while the daemon connection is unavailable; independent of command errors.
+    pub connection_notice: Option<String>,
+    discarded_request_id: u64,
     pub page: Page,
     pub core_status: CoreStatus,
     pub mode: Option<RunMode>,
@@ -588,6 +610,23 @@ pub struct UiState {
 }
 
 impl UiState {
+    pub fn pending_request_count(&self) -> usize {
+        self.pending_requests.len()
+    }
+
+    pub fn disconnect(&mut self, message: String) {
+        self.connection_notice = Some(message);
+        self.discarded_request_id = self
+            .discarded_request_id
+            .max(self.pending_requests.keys().copied().max().unwrap_or(0));
+        self.pending.clear();
+        self.pending_requests.clear();
+        self.latest_requests.clear();
+        self.latest_delay_requests.clear();
+        self.delay_pending.clear();
+        self.core_status = CoreStatus::Offline;
+    }
+
     pub fn begin_envelope(&mut self, envelope: &UiRequestEnvelope) {
         let key = request_key(&envelope.request);
         self.pending_requests.insert(envelope.request_id, key);
@@ -836,6 +875,9 @@ impl UiState {
             self.apply_response(envelope.response);
             return;
         };
+        if request_id <= self.discarded_request_id {
+            return;
+        }
         let Some(request) = response_request(&envelope.response) else {
             self.apply_response(envelope.response);
             return;

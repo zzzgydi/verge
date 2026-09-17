@@ -3,15 +3,20 @@
 //! `connect` 同步完成 Hello 握手并取回初始快照，之后：
 //! - 读线程把服务端消息转成 [`ClientEvent`] 推到 futures channel，GUI 主协程
 //!   用 `into_events().next().await` 事件驱动消费（无轮询）；
-//! - 写线程从 std mpsc 消费 `UiRequestEnvelope` 写 socket，UI 线程永不阻塞在 IO。
+//! - 写线程从有界 std mpsc 消费 `UiRequestEnvelope` 写 socket，UI 线程永不阻塞在 IO。
 //!   `request_sender()` 直接返回该通道，视图层可原样持有。
 
 use std::{
     fmt,
     io::{BufReader, BufWriter},
+    net::Shutdown,
     os::unix::net::UnixStream,
     path::Path,
-    sync::mpsc::{self, Sender},
+    sync::mpsc::{self, SyncSender},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -60,7 +65,7 @@ pub enum ConnectError {
 
 pub struct IpcClient {
     events_rx: Receiver<ClientEvent>,
-    requests_tx: Sender<UiRequestEnvelope>,
+    requests_tx: SyncSender<UiRequestEnvelope>,
 }
 
 impl fmt::Debug for IpcClient {
@@ -79,6 +84,9 @@ impl IpcClient {
         let stream = UnixStream::connect(socket_path).map_err(ConnectError::Io)?;
         stream
             .set_read_timeout(Some(HANDSHAKE_TIMEOUT))
+            .map_err(ConnectError::Io)?;
+        stream
+            .set_write_timeout(Some(HANDSHAKE_TIMEOUT))
             .map_err(ConnectError::Io)?;
         let reader_stream = stream.try_clone().map_err(ConnectError::Io)?;
         let writer_stream = stream.try_clone().map_err(ConnectError::Io)?;
@@ -136,6 +144,8 @@ impl IpcClient {
             })
             .expect("new event queue has room for Welcome");
 
+        let connected = Arc::new(AtomicBool::new(true));
+        let reader_connected = connected.clone();
         std::thread::spawn(move || {
             let mut reader = reader;
             while let Ok(message) = frame::read_message::<ClientMessage>(&mut reader) {
@@ -153,16 +163,29 @@ impl IpcClient {
                     break;
                 }
             }
+            reader_connected.store(false, Ordering::Release);
+            let _ = reader.get_ref().shutdown(Shutdown::Both);
         });
 
-        let (requests_tx, requests_rx) = mpsc::channel::<UiRequestEnvelope>();
+        let (requests_tx, requests_rx) = mpsc::sync_channel::<UiRequestEnvelope>(32);
         std::thread::spawn(move || {
             let mut writer = writer;
-            while let Ok(envelope) = requests_rx.recv() {
+            while connected.load(Ordering::Acquire) {
+                let envelope = match requests_rx.recv_timeout(Duration::from_millis(250)) {
+                    Ok(envelope) => envelope,
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    // Event-only consumers may intentionally drop the request sender.
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                };
+                if !connected.load(Ordering::Acquire) {
+                    break;
+                }
                 if frame::write_message(&mut writer, &DaemonMessage::Request(envelope)).is_err() {
                     break;
                 }
             }
+            connected.store(false, Ordering::Release);
+            let _ = writer.get_ref().shutdown(Shutdown::Both);
         });
 
         Ok(Self {
@@ -178,8 +201,8 @@ impl IpcClient {
         self.events_rx
     }
 
-    /// 请求发送端（std mpsc）。视图层 `MainView::new` 直接持有。
-    pub fn request_sender(&self) -> Sender<UiRequestEnvelope> {
+    /// 请求发送端（有界 std mpsc；GUI 使用 try_send）。视图层 `MainView::new` 直接持有。
+    pub fn request_sender(&self) -> SyncSender<UiRequestEnvelope> {
         self.requests_tx.clone()
     }
 }
@@ -213,6 +236,105 @@ mod tests {
             // 保持连接直到测试结束。
             std::thread::sleep(Duration::from_secs(10));
         });
+    }
+
+    #[test]
+    fn eof_reconnects_to_a_fresh_session_without_replaying_requests() {
+        use std::os::unix::net::UnixListener;
+        let dir = Path::new("/tmp").join(format!("v-reconnect-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("s");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (continue_tx, continue_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            for session in 0..2 {
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = BufWriter::new(stream);
+                let _: DaemonMessage = frame::read_message(&mut reader).unwrap();
+                frame::write_message(
+                    &mut writer,
+                    &ClientMessage::Welcome {
+                        protocol_version: PROTOCOL_VERSION,
+                        initial: InitialSnapshot::default(),
+                    },
+                )
+                .unwrap();
+                let DaemonMessage::Request(request) = frame::read_message(&mut reader).unwrap()
+                else {
+                    panic!("request expected")
+                };
+                assert_eq!(request.request_id, session + 1);
+                if session == 0 {
+                    // Drop without replying: execution outcome is unknown to the GUI.
+                    let _ = writer.get_ref().shutdown(Shutdown::Both);
+                } else {
+                    frame::write_message(&mut writer, &ClientMessage::ActivateWindow).unwrap();
+                    continue_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                    reader
+                        .get_ref()
+                        .set_read_timeout(Some(Duration::from_millis(100)))
+                        .unwrap();
+                    assert!(
+                        frame::read_message::<DaemonMessage>(&mut reader).is_err(),
+                        "old write was replayed"
+                    );
+                    frame::write_message(
+                        &mut writer,
+                        &ClientMessage::Closed {
+                            reason: "daemon_shutdown".into(),
+                        },
+                    )
+                    .unwrap();
+                }
+            }
+        });
+        let request = |id| UiRequestEnvelope {
+            request_id: id,
+            operation_id: id,
+            operation_index: 0,
+            operation_len: 1,
+            context: crate::domain::CommandContext {
+                actor: crate::domain::CommandActor::UserInterface,
+                approval: None,
+            },
+            request: crate::ui::UiRequest::Runtime(crate::domain::RuntimeCommand::SetMode {
+                mode: crate::domain::RunMode::Global,
+            }),
+        };
+        let first = IpcClient::connect(&socket, "test").unwrap();
+        let old_sender = first.request_sender();
+        let mut events = first.into_events();
+        assert!(matches!(
+            futures::executor::block_on(events.next()),
+            Some(ClientEvent::Welcome { .. })
+        ));
+        old_sender.send(request(1)).unwrap();
+        assert!(futures::executor::block_on(events.next()).is_none());
+        let second = IpcClient::connect(&socket, "test").unwrap();
+        let new_sender = second.request_sender();
+        let mut events = second.into_events();
+        assert!(matches!(
+            futures::executor::block_on(events.next()),
+            Some(ClientEvent::Welcome { .. })
+        ));
+        new_sender.send(request(2)).unwrap();
+        assert!(matches!(
+            futures::executor::block_on(events.next()),
+            Some(ClientEvent::ActivateWindow)
+        ));
+        let _ = old_sender.send(request(99));
+        continue_tx.send(()).unwrap();
+        assert!(matches!(
+            futures::executor::block_on(events.next()),
+            Some(ClientEvent::Closed { .. })
+        ));
+        server.join().unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

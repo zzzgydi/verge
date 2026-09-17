@@ -13,7 +13,7 @@ use crate::{
 #[gpui_kit::test]
 fn multiline_logs_fit_and_longest_log_scrolls_both_axes(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
-    let (tx, _rx) = mpsc::channel();
+    let (tx, _rx) = mpsc::sync_channel(32);
     let holder = Rc::new(RefCell::new(None));
     let copy = holder.clone();
     let (_, cx) = cx.add_window_view(|window, cx| {

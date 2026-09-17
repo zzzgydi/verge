@@ -205,7 +205,7 @@ MIHOMO_BIN=/absolute/path/to/mihomo \
 
 安装或卸载特权 helper、开启 TUN 和替换应用都会修改系统状态。Verge 会先请求确认，macOS 也可能要求管理员授权。
 
-应用数据默认保存在 `~/Library/Application Support/Verge`。日志位于该目录下的 `logs/verge.log`。诊断导出会遮盖 controller secret、订阅 URL、认证头和用户主目录。
+应用数据默认保存在 `~/Library/Application Support/Verge`。日志位于该目录下的 `logs/verge.log`，另保留 3 份轮转文件，每份最多 2 MiB。GUI 与 daemon 通过文件锁协调轮转。诊断导出会遮盖 controller secret、订阅 URL、认证头和用户主目录。
 
 ## 平台状态
 

@@ -1467,7 +1467,7 @@ fn run_daemon_backend(
         }
     });
 
-    let mut command_bus = CommandBus::default();
+    let mut command_buses = std::collections::HashMap::<u64, CommandBus>::new();
     let mut isolated_jobs = 0_usize;
     let mut quit = false;
     while !quit {
@@ -1494,7 +1494,7 @@ fn run_daemon_backend(
                 handle_daemon_request(
                     &mut backend,
                     &server,
-                    &mut command_bus,
+                    command_buses.entry(conn_id).or_default(),
                     &event_tx,
                     conn_id,
                     envelope,
@@ -1502,8 +1502,8 @@ fn run_daemon_backend(
                 );
             }
             DaemonEvent::Ipc(IpcServerEvent::Disconnected { conn_id }) => {
-                server.release_primary(conn_id);
-                server.clear_subscriptions(conn_id);
+                server.close(conn_id);
+                command_buses.remove(&conn_id);
             }
             DaemonEvent::WorkerDone {
                 conn_id,
@@ -1514,6 +1514,9 @@ fn run_daemon_backend(
                 isolated_jobs = isolated_jobs.saturating_sub(1);
                 let risk = envelope.request.risk();
                 let last_in_operation = envelope.operation_index + 1 == envelope.operation_len;
+                let Some(command_bus) = command_buses.get_mut(&conn_id) else {
+                    continue;
+                };
                 command_bus.complete(
                     envelope.operation_id,
                     risk,
@@ -2665,7 +2668,7 @@ mod tests {
     #[ignore = "requires MIHOMO_BIN pointing to the pinned sidecar"]
     fn shutdown_signal_terminates_the_real_mihomo_child() {
         let binary = PathBuf::from(std::env::var_os("MIHOMO_BIN").expect("MIHOMO_BIN is required"));
-        let data_dir = std::env::temp_dir().join(format!(
+        let data_dir = PathBuf::from("/tmp").join(format!(
             "verge-runtime-real-shutdown-{}-{}",
             std::process::id(),
             SystemTime::now()

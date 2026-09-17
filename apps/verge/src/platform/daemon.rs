@@ -1,7 +1,7 @@
 //! 双进程守护相关的平台辅助：socket 路径、守护进程拉起、无窗口 AppKit 事件循环。
 
 use std::{
-    fs, io,
+    io,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -14,8 +14,8 @@ pub fn daemon_socket_path(data_dir: &Path) -> PathBuf {
 /// 把当前进程的 stderr 重定向到 `{data_dir}/logs/verge.log`。
 ///
 /// 守护进程与 GUI 进程都调用（双击启动时没有终端，日志必须落盘才能排查）。
-/// 用 `dup2` 把 stderr 文件描述符指向日志文件；此后所有 `eprintln!` / panic
-/// 输出都会写入该文件。
+/// stderr 经有界本机 socket 交给日志线程；跨进程锁协调轮转，保留当前文件与 3 份历史，
+/// 每份最多 2 MiB。强制退出时尚在 socket 缓冲内的末尾日志可能丢失。
 pub fn redirect_stderr_to_log(data_dir: &Path) -> io::Result<std::path::PathBuf> {
     let path = data_dir.join("logs").join("verge.log");
     redirect_stderr(&path)?;
@@ -26,19 +26,7 @@ pub fn redirect_stderr_to_log(data_dir: &Path) -> io::Result<std::path::PathBuf>
 pub fn redirect_stderr(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::fd::AsRawFd;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
-        let fd = file.as_raw_fd();
-        if unsafe { libc::dup2(fd, libc::STDERR_FILENO) } == -1 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
+        super::rotating_log::redirect(path)
     }
     #[cfg(not(unix))]
     {

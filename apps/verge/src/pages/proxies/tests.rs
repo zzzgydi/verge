@@ -48,7 +48,7 @@ fn snapshot() -> ProxySnapshot {
 #[gpui_kit::test]
 fn group_filter_locate_selection_and_global_layout(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(32);
     let holder = Rc::new(RefCell::new(None));
     let copy = holder.clone();
     let (_, cx) = cx.add_window_view(|window, cx| {

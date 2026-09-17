@@ -123,7 +123,9 @@ pub fn run() {
             return;
         }
     };
+    let socket = daemon_socket_path(&data_directory);
     let request_tx = client.request_sender();
+    let quit_sender = std::sync::Arc::new(std::sync::Mutex::new(Some(request_tx.clone())));
     let mut events = client.into_events();
 
     let application = gpui_kit::application()
@@ -164,9 +166,9 @@ pub fn run() {
             }
         });
         bind_window_actions(cx);
-        let quit_requests = request_tx.clone();
+        let quit_requests = quit_sender.clone();
         cx.on_action(move |_: &QuitVerge, cx| {
-            if quit_requests.send(quit_request()).is_err() {
+            if quit_requests.lock().unwrap().as_ref().is_none_or(|sender| sender.try_send(quit_request()).is_err()) {
                 cx.quit();
             }
         });
@@ -203,6 +205,7 @@ pub fn run() {
             // IPC 事件驱动消费：Welcome / Response / RealtimeBatch / 窗口控制。
             // 窗口句柄通过 weak_view.update_in 获取，协程不持有 WindowHandle。
             cx.spawn(async move |cx| {
+                loop {
                 while let Some(event) = events.next().await {
                     match event {
                         ClientEvent::Welcome {
@@ -211,6 +214,9 @@ pub fn run() {
                         } => {
                             let _ = weak_view.update_in(cx, |view, window, cx| {
                                 // 初始快照直接填充领域态，首帧即有内容。
+                                if view.state.connection_notice.take().is_some() {
+                                    window.push_notification(Notification::info(tr(view.lang(), "connection.recovered")).autohide(false), cx);
+                                }
                                 view.state.daemon_capabilities = initial.capabilities;
                                 view.state.profiles = initial.profiles;
                                 view.state.selected_profile = initial.selected_profile;
@@ -227,6 +233,8 @@ pub fn run() {
                                 view.dispatch(UiAction::RefreshHome, cx);
                                 view.dispatch(UiAction::RefreshProfiles, cx);
                                 view.dispatch(UiAction::RefreshSettings, cx);
+                                view.refresh_current_page(cx);
+                                cx.notify();
                             });
                             let _ = protocol_version;
                         }
@@ -338,13 +346,52 @@ pub fn run() {
                         }
                         ClientEvent::Closed { reason } => {
                             eprintln!("Verge daemon closed the connection: {reason}");
-                            cx.update(|cx| cx.quit());
+                            if reason == "daemon_shutdown" {
+                                cx.update(|cx| cx.quit());
+                            } else {
+                                let _ = weak_view.update_in(cx, |view, window, cx| {
+                                    view.daemon_disconnected(window, cx);
+                                    view.state.connection_notice = Some(tr(view.lang(), "connection.incompatible").into());
+                                    cx.notify();
+                                });
+                            }
                             return;
                         }
                     }
                 }
-                // 事件流结束（守护进程退出）：本实例也退出。
-                cx.update(|cx| cx.quit());
+                // EOF is recoverable. Never unlink a live daemon socket or replay requests.
+                *quit_sender.lock().unwrap() = None;
+                if weak_view.update_in(cx, |view, window, cx| view.daemon_disconnected(window, cx)).is_err() { return; }
+                let mut delay = Duration::from_millis(250);
+                loop {
+                    cx.background_executor().timer(delay).await;
+                    let socket = socket.clone();
+                    let result = cx.background_executor().spawn(async move {
+                        IpcClient::connect(&socket, env!("CARGO_PKG_VERSION"))
+                    }).await;
+                    match result {
+                        Ok(client) => {
+                            let sender = client.request_sender();
+                            *quit_sender.lock().unwrap() = Some(sender.clone());
+                            if weak_view.update_in(cx, |view, _, _| view.requests = sender).is_err() { return; }
+                            events = client.into_events();
+                            break;
+                        }
+                        Err(ConnectError::Duplicate) => {
+                            // An old primary may still be draining. Retry after it is released.
+                        }
+                        Err(ConnectError::Closed { .. } | ConnectError::VersionMismatch { .. } | ConnectError::Protocol(_)) => {
+                            let _ = weak_view.update_in(cx, |view, _, cx| {
+                                view.state.connection_notice = Some(tr(view.lang(), "connection.incompatible").into());
+                                cx.notify();
+                            });
+                            return;
+                        }
+                        Err(ConnectError::Io(_)) => {}
+                    }
+                    delay = (delay * 2).min(Duration::from_secs(5));
+                }
+                }
             })
             .detach();
             cx.new(|cx| Root::new(view, window, cx).bg(cx.theme().background))
@@ -420,10 +467,14 @@ fn connect_or_start_daemon(socket: &Path) -> Result<IpcClient, String> {
         Err(ConnectError::Closed { reason }) => {
             return Err(format!("Verge 守护进程拒绝连接：{reason}"));
         }
-        Err(ConnectError::Io(_) | ConnectError::Protocol(_)) => {}
+        Err(ConnectError::Io(error))
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            ) => {}
+        Err(error) => return Err(format!("Verge daemon connection failed: {error:?}")),
     }
-    // 无守护进程：清理可能的 stale socket 后拉起。
-    let _ = std::fs::remove_file(socket);
+    // Binding and stale-socket cleanup belong to the daemon after acquiring its lock.
     if let Err(error) = spawn_daemon() {
         return Err(format!("failed to start Verge daemon: {error}"));
     }
