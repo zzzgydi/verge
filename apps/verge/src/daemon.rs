@@ -181,6 +181,7 @@ struct Engine {
 }
 
 struct Backend {
+    geo_job_running: bool,
     config: BackendConfig,
     profiles: FileProfileStore,
     settings: FileSettingsStore,
@@ -237,6 +238,7 @@ impl Backend {
             system_proxy.recover_pending()?;
         }
         let mut backend = Self {
+            geo_job_running: false,
             config,
             profiles,
             settings,
@@ -460,6 +462,23 @@ impl Backend {
                 | AppCommand::UpdateRemoteProfile { .. }
         );
         match &command {
+            AppCommand::MoveProfile { id, up } => {
+                self.profiles.move_profile(id, *up)?;
+                return Ok(AppCommandResult {
+                    output: AppCommandOutput::Profiles {
+                        profiles: self.profiles.list().to_vec(),
+                        selected: self.profiles.selected().cloned(),
+                    },
+                    summary: "Profile order saved".into(),
+                });
+            }
+            AppCommand::UpdateGeoData { kind } => {
+                self.update_geo_data(*kind)?;
+                return Ok(AppCommandResult {
+                    output: AppCommandOutput::None,
+                    summary: "Geo data updated".into(),
+                });
+            }
             AppCommand::GetCoreNetworkSettings => {
                 return Ok(AppCommandResult {
                     output: AppCommandOutput::CoreNetworkSettings(
@@ -548,7 +567,9 @@ impl Backend {
             AppCommand::ResetApplicationSettingsScope { scope } => {
                 let mut settings = self.settings.get().clone();
                 settings.reset_scope(*scope);
-                self.persist_settings(&settings)?;
+                let network = matches!(scope, crate::domain::SettingsScope::Network)
+                    .then(crate::domain::CoreNetworkSettings::default);
+                self.persist_imported_settings(&settings, network)?;
                 return Ok(AppCommandResult {
                     output: AppCommandOutput::ApplicationSettings(self.settings_snapshot()),
                     summary: "Application settings scope reset to defaults".into(),
@@ -633,6 +654,15 @@ impl Backend {
                         yaml: self.profiles.merge_yaml()?,
                     },
                     summary: "Merge config loaded".into(),
+                });
+            }
+            AppCommand::PreviewMergeConfig { id, yaml } => {
+                return Ok(AppCommandResult {
+                    output: AppCommandOutput::MergedProfileYaml {
+                        id: id.clone(),
+                        yaml: self.profiles.preview_merge(id, yaml)?,
+                    },
+                    summary: "Merge draft preview generated without saving".into(),
                 });
             }
             AppCommand::GetMergedProfileYaml { id } => {
@@ -911,7 +941,10 @@ impl Backend {
                 "settings export destination must be an absolute path",
             ));
         }
-        let bytes = crate::config::export_settings_json(self.settings.get())?;
+        let bytes = crate::config::export_portable_settings(
+            self.settings.get(),
+            &self.profiles.network_settings()?,
+        )?;
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent)
                 .map_err(|error| AppError::new(ErrorCode::StorageFailed, error.to_string()))?;
@@ -939,7 +972,11 @@ impl Backend {
         source: &str,
     ) -> Result<crate::domain::SettingsImportPreview, AppError> {
         let bytes = self.read_settings_import(source)?;
-        crate::config::settings_import_preview(self.settings.get(), &bytes)
+        crate::config::portable_settings_preview(
+            self.settings.get(),
+            &self.profiles.network_settings()?,
+            &bytes,
+        )
     }
 
     /// 应用导入:重新解析校验(与 UpdateApplicationSettings 相同的校验),再持久化。
@@ -948,9 +985,38 @@ impl Backend {
         source: &str,
     ) -> Result<crate::domain::ApplicationSettings, AppError> {
         let bytes = self.read_settings_import(source)?;
-        let settings = crate::config::parse_settings_import(&bytes)?;
-        self.persist_settings(&settings)?;
+        let (settings, portable) = crate::config::parse_portable_settings(&bytes)?;
+        let current = self.profiles.network_settings()?;
+        let network = portable.map(|network| network.apply_to(&current));
+        self.persist_imported_settings(&settings, network)?;
         Ok(settings)
+    }
+
+    fn persist_imported_settings(
+        &mut self,
+        settings: &ApplicationSettings,
+        network: Option<crate::domain::CoreNetworkSettings>,
+    ) -> Result<(), AppError> {
+        settings.validate()?;
+        let Some(network) = network else {
+            return self.persist_settings(settings);
+        };
+        network.validate()?;
+        let previous_override = self.profiles.network_override();
+        let previous = self.profiles.network_settings()?;
+        self.update_core_network(network)?;
+        if let Err(mut error) = self.persist_settings(settings) {
+            if let Err(restore) = self
+                .update_core_network(previous)
+                .and_then(|()| self.profiles.set_network_override(previous_override))
+            {
+                error
+                    .message
+                    .push_str(&format!("; network recovery failed: {}", restore.message));
+            }
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// 设置落盘前先同步系统侧副作用（登录启动）。副作用失败则整体失败、
@@ -1042,6 +1108,82 @@ impl Backend {
         fs::write(&destination, bytes)
             .map_err(|error| AppError::new(ErrorCode::StorageFailed, error.to_string()))?;
         Ok(destination.display().to_string())
+    }
+
+    fn update_geo_data(&mut self, kind: crate::domain::GeoDataKind) -> Result<(), AppError> {
+        self.profiles.selected().ok_or_else(|| {
+            AppError::new(
+                ErrorCode::NotFound,
+                "select a profile before updating Geo data",
+            )
+        })?;
+        if self.engine.is_none() {
+            return Err(self.runtime_unavailable());
+        }
+        let directory = self.config.data_dir.join("mihomo");
+        let (asset, _) = crate::application::geodata::geo_asset(kind, &directory)?;
+        let staging = self.config.data_dir.join("updates/geodata");
+        let mut fetcher = ReqwestArtifactFetcher::new(
+            Duration::from_secs(60),
+            64 * 1024 * 1024,
+            [
+                "api.github.com",
+                "github.com",
+                "release-assets.githubusercontent.com",
+                "objects.githubusercontent.com",
+            ]
+            .map(str::to_owned),
+        )?;
+        let (candidate, digest) =
+            crate::application::geodata::download_geo_candidate(&mut fetcher, asset, &staging)?;
+        let result = self.apply_geo_candidate(kind, asset, &candidate, &digest);
+        let _ = fs::remove_file(candidate);
+        result
+    }
+
+    fn apply_geo_candidate(
+        &mut self,
+        kind: crate::domain::GeoDataKind,
+        asset: &str,
+        candidate: &std::path::Path,
+        digest: &str,
+    ) -> Result<(), AppError> {
+        let selected = self.profiles.selected().cloned().ok_or_else(|| {
+            AppError::new(
+                ErrorCode::NotFound,
+                "select a profile before updating Geo data",
+            )
+        })?;
+        if self.engine.is_none() {
+            return Err(self.runtime_unavailable());
+        }
+        let (current_asset, active) =
+            crate::application::geodata::geo_asset(kind, &self.config.data_dir.join("mihomo"))?;
+        if current_asset != asset {
+            return Err(AppError::new(
+                ErrorCode::Conflict,
+                "Geo target changed during download; retry",
+            ));
+        }
+        let config = self.profiles.materialize_runtime(
+            &selected,
+            self.config.controller,
+            &self.config.secret,
+        )?;
+        let engine = self.engine.as_mut().unwrap();
+        let mut core = SupervisorControl::new(&mut engine.supervisor, Duration::from_secs(5));
+        crate::application::update_geo_artifact(&mut core, candidate, &active, digest, &config)
+            .map_err(|failure| {
+                let mut error = failure.cause;
+                if let crate::application::RecoveryStatus::Failed { error: recovery } =
+                    failure.recovery
+                {
+                    error
+                        .message
+                        .push_str(&format!("; Geo recovery failed: {}", recovery.message));
+                }
+                error
+            })
     }
 
     fn update_mihomo(&mut self) -> Result<String, AppError> {
@@ -1264,7 +1406,13 @@ impl Backend {
     /// 组装 IPC 握手快照：一次拉全可重建的领域态。
     fn initial_snapshot(&self) -> InitialSnapshot {
         InitialSnapshot {
-            capabilities: vec![crate::ipc::protocol::UNIFIED_SYSTEM_PROXY.into()],
+            capabilities: vec![
+                crate::ipc::protocol::UNIFIED_SYSTEM_PROXY.into(),
+                crate::ipc::protocol::CLOSE_ALL_CONNECTIONS.into(),
+                crate::ipc::protocol::GEO_DATA_UPDATE.into(),
+                crate::ipc::protocol::PROFILE_ORDER.into(),
+                crate::ipc::protocol::MERGE_PREVIEW.into(),
+            ],
             profiles: self.profiles.list().to_vec(),
             selected_profile: self.profiles.selected().cloned(),
             application_settings: ApplicationSettingsSnapshot {
@@ -1505,6 +1653,43 @@ fn run_daemon_backend(
                 server.close(conn_id);
                 command_buses.remove(&conn_id);
             }
+            DaemonEvent::GeoDownloaded {
+                conn_id,
+                envelope,
+                kind,
+                asset,
+                result,
+            } => {
+                backend.geo_job_running = false;
+                let Some(command_bus) = command_buses.get_mut(&conn_id) else {
+                    if let Ok((candidate, _)) = result {
+                        let _ = fs::remove_file(candidate);
+                    }
+                    continue;
+                };
+                let result = result.and_then(|(candidate, digest)| {
+                    let result = backend.apply_geo_candidate(kind, &asset, &candidate, &digest);
+                    let _ = fs::remove_file(candidate);
+                    result.map(|()| AppCommandResult {
+                        output: AppCommandOutput::None,
+                        summary: "Geo data updated".into(),
+                    })
+                });
+                let response = UiResponse::Profile {
+                    request: AppCommand::UpdateGeoData { kind },
+                    result,
+                };
+                command_bus.complete(
+                    envelope.operation_id,
+                    envelope.request.risk(),
+                    response_succeeded(&response),
+                    envelope.operation_index + 1 == envelope.operation_len,
+                );
+                let _ = server.send(
+                    conn_id,
+                    ClientMessage::Response(UiResponseEnvelope::for_request(&envelope, response)),
+                );
+            }
             DaemonEvent::WorkerDone {
                 conn_id,
                 envelope,
@@ -1654,6 +1839,70 @@ fn handle_daemon_request(
     let request = envelope.request.clone();
     let risk = request.risk();
     let last_in_operation = envelope.operation_index + 1 == envelope.operation_len;
+    if let UiRequest::Profile(AppCommand::UpdateGeoData { kind }) = &request {
+        let kind = *kind;
+        let prepare = command_bus
+            .authorize(envelope.operation_id, envelope.context, risk)
+            .and_then(|()| {
+                if backend.geo_job_running {
+                    return Err(AppError::new(
+                        ErrorCode::Conflict,
+                        "A Geo update is already running",
+                    ));
+                }
+                if backend.engine.is_none() {
+                    return Err(backend.runtime_unavailable());
+                }
+                crate::application::geodata::geo_asset(
+                    kind,
+                    &backend.config.data_dir.join("mihomo"),
+                )
+            });
+        match prepare {
+            Err(error) => {
+                command_bus.complete(envelope.operation_id, risk, false, last_in_operation);
+                let _ = server.send(
+                    conn_id,
+                    ClientMessage::Response(UiResponseEnvelope::for_request(
+                        &envelope,
+                        failed_response(request, error),
+                    )),
+                );
+            }
+            Ok((asset, _)) => {
+                backend.geo_job_running = true;
+                let staging = backend.config.data_dir.join("updates/geodata");
+                let tx = event_tx.clone();
+                std::thread::spawn(move || {
+                    let result = ReqwestArtifactFetcher::new(
+                        Duration::from_secs(60),
+                        64 * 1024 * 1024,
+                        [
+                            "github.com",
+                            "release-assets.githubusercontent.com",
+                            "objects.githubusercontent.com",
+                        ]
+                        .map(str::to_owned),
+                    )
+                    .and_then(|mut fetcher| {
+                        crate::application::geodata::download_geo_candidate(
+                            &mut fetcher,
+                            asset,
+                            &staging,
+                        )
+                    });
+                    let _ = tx.send(DaemonEvent::GeoDownloaded {
+                        conn_id,
+                        envelope,
+                        kind,
+                        asset: asset.into(),
+                        result,
+                    });
+                });
+            }
+        }
+        return;
+    }
     if is_isolated_runtime_request(&request) {
         if *isolated_jobs >= 8 {
             let response = failed_response(
@@ -1822,6 +2071,13 @@ fn spawn_gui_process() -> std::io::Result<()> {
 
 /// 守护进程事件队列的统一事件。
 enum DaemonEvent {
+    GeoDownloaded {
+        conn_id: u64,
+        envelope: UiRequestEnvelope,
+        kind: crate::domain::GeoDataKind,
+        asset: String,
+        result: Result<(PathBuf, String), AppError>,
+    },
     Ipc(IpcServerEvent),
     WorkerDone {
         conn_id: u64,
@@ -2481,6 +2737,37 @@ mod tests {
                     && snapshot.settings.language == "en"
                     && snapshot.settings.log_limit == 1_000
         ));
+        let custom_network = crate::domain::CoreNetworkSettings {
+            mixed_port: 18789,
+            dns_override: true,
+            ..Default::default()
+        };
+        backend.update_core_network(custom_network.clone()).unwrap();
+        backend
+            .export_application_settings(export_path.to_str().unwrap())
+            .unwrap();
+        backend
+            .execute_profile(AppCommand::ResetApplicationSettingsScope {
+                scope: crate::domain::SettingsScope::Network,
+            })
+            .unwrap();
+        assert_eq!(
+            backend.profiles.network_settings().unwrap(),
+            crate::domain::CoreNetworkSettings::default()
+        );
+        backend
+            .import_application_settings(export_path.to_str().unwrap())
+            .unwrap();
+        assert_eq!(backend.profiles.network_settings().unwrap(), custom_network);
+        // A settings validation failure cannot leave half-applied network changes.
+        let mut invalid = backend.settings.get().clone();
+        invalid.log_limit = 0;
+        assert!(
+            backend
+                .persist_imported_settings(&invalid, Some(Default::default()))
+                .is_err()
+        );
+        assert_eq!(backend.profiles.network_settings().unwrap(), custom_network);
         let listed = backend.execute_profile(AppCommand::ListProfiles).unwrap();
         assert!(matches!(
             listed.output,

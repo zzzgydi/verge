@@ -52,6 +52,7 @@ pub struct SheetState {
     pub pending_merge: bool,
     /// 正在等待合并结果生成的配置 id。
     pub pending_merged: Option<ProfileId>,
+    pub merge_preview_dialog: bool,
 }
 
 pub struct MainView {
@@ -358,6 +359,62 @@ impl MainView {
             self.state.last_error = Some(crate::domain::AppError::new(
                 crate::domain::ErrorCode::Conflict,
                 tr(self.lang(), "proxy.restart_required"),
+            ));
+            cx.notify();
+            return;
+        }
+        if matches!(action, UiAction::CloseAllConnections)
+            && !self
+                .state
+                .daemon_capabilities
+                .iter()
+                .any(|c| c == crate::ipc::protocol::CLOSE_ALL_CONNECTIONS)
+        {
+            self.state.set_error(crate::domain::AppError::new(
+                crate::domain::ErrorCode::Conflict,
+                tr(self.lang(), "connection.incompatible"),
+            ));
+            cx.notify();
+            return;
+        }
+        if matches!(action, UiAction::UpdateGeoData(_))
+            && !self
+                .state
+                .daemon_capabilities
+                .iter()
+                .any(|c| c == crate::ipc::protocol::GEO_DATA_UPDATE)
+        {
+            self.state.set_error(crate::domain::AppError::new(
+                crate::domain::ErrorCode::Conflict,
+                tr(self.lang(), "connection.incompatible"),
+            ));
+            cx.notify();
+            return;
+        }
+        if matches!(action, UiAction::MoveProfile { .. })
+            && !self
+                .state
+                .daemon_capabilities
+                .iter()
+                .any(|c| c == crate::ipc::protocol::PROFILE_ORDER)
+        {
+            self.state.set_error(crate::domain::AppError::new(
+                crate::domain::ErrorCode::Conflict,
+                tr(self.lang(), "connection.incompatible"),
+            ));
+            cx.notify();
+            return;
+        }
+        if matches!(action, UiAction::PreviewMergeConfig { .. })
+            && !self
+                .state
+                .daemon_capabilities
+                .iter()
+                .any(|c| c == crate::ipc::protocol::MERGE_PREVIEW)
+        {
+            self.state.set_error(crate::domain::AppError::new(
+                crate::domain::ErrorCode::Conflict,
+                tr(self.lang(), "connection.incompatible"),
             ));
             cx.notify();
             return;

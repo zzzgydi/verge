@@ -64,7 +64,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
             .into_any_element()
         });
     }
-    for profile in &view.state.profiles {
+    for (profile_index, profile) in view.state.profiles.iter().enumerate() {
         let id = profile.id.clone();
         let selected = view.state.selected_profile.as_ref() == Some(&id);
         let remote = matches!(profile.source, ProfileSource::Remote { .. });
@@ -136,6 +136,8 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                         let entity = cx.entity().downgrade();
                         let id = id.clone();
                         let name = profile.name.clone();
+                        let can_up = profile_index > 0;
+                        let can_down = profile_index + 1 < view.state.profiles.len();
                         move |menu, _, _| {
                             let merged_entity = entity.clone();
                             let merged_id = id.clone();
@@ -145,7 +147,45 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                             let delete_entity = entity.clone();
                             let delete_id = id.clone();
                             let delete_name = name.clone();
-                            menu.item(PopupMenuItem::new(tr(lang, "profiles.merged")).on_click(
+                            let up_entity = entity.clone();
+                            let up_id = id.clone();
+                            let down_entity = entity.clone();
+                            let down_id = id.clone();
+                            menu.when(can_up, |menu| {
+                                menu.item(
+                                    PopupMenuItem::new(tr(lang, "profiles.move_up")).on_click(
+                                        move |_, _, cx| {
+                                            let _ = up_entity.update(cx, |view, cx| {
+                                                view.dispatch(
+                                                    UiAction::MoveProfile {
+                                                        id: up_id.clone(),
+                                                        up: true,
+                                                    },
+                                                    cx,
+                                                )
+                                            });
+                                        },
+                                    ),
+                                )
+                            })
+                            .when(can_down, |menu| {
+                                menu.item(
+                                    PopupMenuItem::new(tr(lang, "profiles.move_down")).on_click(
+                                        move |_, _, cx| {
+                                            let _ = down_entity.update(cx, |view, cx| {
+                                                view.dispatch(
+                                                    UiAction::MoveProfile {
+                                                        id: down_id.clone(),
+                                                        up: false,
+                                                    },
+                                                    cx,
+                                                )
+                                            });
+                                        },
+                                    ),
+                                )
+                            })
+                            .item(PopupMenuItem::new(tr(lang, "profiles.merged")).on_click(
                                 move |_, window, cx| {
                                     let _ = merged_entity.update(cx, |this, cx| {
                                         this.open_merged_sheet(merged_id.clone(), window, cx)

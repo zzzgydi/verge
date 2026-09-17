@@ -72,9 +72,24 @@ pub struct CommandContext {
     pub approval: Option<CommandApproval>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GeoDataKind {
+    GeoIp,
+    GeoSite,
+    Country,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AppCommand {
+    MoveProfile {
+        id: ProfileId,
+        up: bool,
+    },
+    UpdateGeoData {
+        kind: GeoDataKind,
+    },
     GetCoreNetworkSettings,
     UpdateCoreNetworkSettings {
         settings: CoreNetworkSettings,
@@ -154,6 +169,10 @@ pub enum AppCommand {
     },
     GetMergeConfig,
     UpdateMergeConfig {
+        yaml: String,
+    },
+    PreviewMergeConfig {
+        id: ProfileId,
         yaml: String,
     },
     GetMergedProfileYaml {
@@ -760,6 +779,7 @@ pub enum RuntimeCommand {
     CloseConnection {
         id: String,
     },
+    CloseAllConnections,
     StartRealtime {
         topics: Vec<RealtimeTopic>,
     },
@@ -780,6 +800,7 @@ impl RuntimeCommand {
             | Self::DrainRealtime => CommandRisk::ReadOnly,
             Self::SelectProxy { .. }
             | Self::TestProxyDelay { .. }
+            | Self::CloseAllConnections
             | Self::CloseConnection { .. }
             | Self::UpdateProvider { .. } => CommandRisk::LowRiskWrite,
             Self::SetMode { .. } | Self::SetNetworkSettings { .. } => CommandRisk::PrivilegedWrite,
@@ -939,9 +960,11 @@ impl AppCommand {
             | Self::ListProfiles
             | Self::GetProfileYaml { .. }
             | Self::GetMergeConfig
+            | Self::PreviewMergeConfig { .. }
             | Self::GetMergedProfileYaml { .. }
             | Self::CheckAppUpdate => CommandRisk::ReadOnly,
-            Self::ImportProfile { .. }
+            Self::MoveProfile { .. }
+            | Self::ImportProfile { .. }
             | Self::ImportRemoteProfile { .. }
             | Self::SelectProfile { .. }
             | Self::UpdateProfileYaml { .. }
@@ -956,6 +979,7 @@ impl AppCommand {
             | Self::ExportEncryptedBackup { .. } => CommandRisk::LowRiskWrite,
             Self::UpdateCoreNetworkSettings { .. }
             | Self::UpdateSystemProxySettings { .. }
+            | Self::UpdateGeoData { .. }
             | Self::UpdateMihomo
             | Self::InstallHelper
             | Self::UpdateApplication

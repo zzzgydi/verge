@@ -165,6 +165,7 @@ impl MainView {
         let sheet_state = self.sheet_state.clone();
         let editor = self.merge_editor.clone();
         let mono = cx.theme().mono_font_family.clone();
+        let selected_profile = self.state.selected_profile.clone();
         window.open_sheet(cx, move |sheet, _, cx| {
             let view = view.clone();
             let sheet_state = sheet_state.clone();
@@ -195,45 +196,84 @@ impl MainView {
                         ),
                 )
                 .footer(
-                    h_flex().gap_2().justify_end().child(
-                        Button::new("save-merge")
-                            .label(tr(lang, "sheet.merge.save"))
-                            .primary()
-                            .disabled(loading)
-                            .on_click({
-                                let view = view.clone();
-                                move |_, window, cx| {
+                    h_flex()
+                        .gap_2()
+                        .justify_end()
+                        .child(
+                            Button::new("preview-merge")
+                                .label(tr(lang, "sheet.merge.preview"))
+                                .outline()
+                                .disabled(loading || selected_profile.is_none())
+                                .on_click({
                                     let view = view.clone();
-                                    window.open_alert_dialog(cx, move |alert, _, _| {
-                                        let view = view.clone();
-                                        alert
-                                            .confirm()
-                                            .title(tr(lang, "sheet.merge.confirm_title"))
-                                            .description(tr(lang, "sheet.merge.confirm_desc"))
-                                            .button_props(
-                                                DialogButtonProps::default()
-                                                    .ok_text(tr(lang, "common.save"))
-                                                    .cancel_text(tr(lang, "common.cancel"))
-                                                    .show_cancel(true),
-                                            )
-                                            .on_ok(move |_, _, cx| {
-                                                view.update(cx, |this, cx| {
-                                                    let yaml = this
-                                                        .merge_editor
-                                                        .read(cx)
-                                                        .value()
-                                                        .to_string();
-                                                    this.dispatch(
-                                                        UiAction::SaveMergeConfig { yaml },
-                                                        cx,
-                                                    );
+                                    let selected = selected_profile.clone();
+                                    move |_, window, cx| {
+                                        if let Some(id) = selected.clone() {
+                                            view.update(cx, |view, cx| {
+                                                let yaml =
+                                                    view.merge_editor.read(cx).value().to_string();
+                                                view.sheet_state.update(cx, |state, _| {
+                                                    state.pending_merged = Some(id.clone())
                                                 });
-                                                true
-                                            })
-                                    });
-                                }
-                            }),
-                    ),
+                                                view.sheet_state.update(cx, |state, _| {
+                                                    state.merge_preview_dialog = true
+                                                });
+                                                view.state.merged_yaml = None;
+                                                view.dispatch(
+                                                    UiAction::PreviewMergeConfig { id, yaml },
+                                                    cx,
+                                                );
+                                                window.push_notification(
+                                                    Notification::info(tr(
+                                                        lang,
+                                                        "sheet.merge.preview_note",
+                                                    )),
+                                                    cx,
+                                                );
+                                            });
+                                        }
+                                    }
+                                }),
+                        )
+                        .child(
+                            Button::new("save-merge")
+                                .label(tr(lang, "sheet.merge.save"))
+                                .primary()
+                                .disabled(loading)
+                                .on_click({
+                                    let view = view.clone();
+                                    move |_, window, cx| {
+                                        let view = view.clone();
+                                        window.open_alert_dialog(cx, move |alert, _, _| {
+                                            let view = view.clone();
+                                            alert
+                                                .confirm()
+                                                .title(tr(lang, "sheet.merge.confirm_title"))
+                                                .description(tr(lang, "sheet.merge.confirm_desc"))
+                                                .button_props(
+                                                    DialogButtonProps::default()
+                                                        .ok_text(tr(lang, "common.save"))
+                                                        .cancel_text(tr(lang, "common.cancel"))
+                                                        .show_cancel(true),
+                                                )
+                                                .on_ok(move |_, _, cx| {
+                                                    view.update(cx, |this, cx| {
+                                                        let yaml = this
+                                                            .merge_editor
+                                                            .read(cx)
+                                                            .value()
+                                                            .to_string();
+                                                        this.dispatch(
+                                                            UiAction::SaveMergeConfig { yaml },
+                                                            cx,
+                                                        );
+                                                    });
+                                                    true
+                                                })
+                                        });
+                                    }
+                                }),
+                        ),
                 )
         });
         self.dispatch(UiAction::LoadMergeConfig, cx);
@@ -343,6 +383,18 @@ impl MainView {
             .update(cx, |state, _| state.pending_merged = None);
         self.merged_editor
             .update(cx, |editor, cx| editor.set_value(yaml.clone(), window, cx));
+        if self.sheet_state.read(cx).merge_preview_dialog {
+            self.sheet_state
+                .update(cx, |state, _| state.merge_preview_dialog = false);
+            let editor = self.merged_editor.clone();
+            let lang = self.lang();
+            window.open_dialog(cx, move |dialog, window, _| {
+                dialog
+                    .title(tr(lang, "sheet.merge.preview"))
+                    .width(rems(36.).to_pixels(window.rem_size()))
+                    .child(div().h(px(340.)).child(Textarea::new(&editor).h_full()))
+            });
+        }
     }
 
     /// 合并结果生成失败时保留 Sheet，并在编辑器内直接显示错误。

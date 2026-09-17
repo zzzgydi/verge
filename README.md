@@ -76,7 +76,7 @@ only. The internal controller uses `<data_dir>/control/mihomo.sock` in a private
 so disabling the external TCP controller does not disconnect Verge. Changed ports retarget
 only enabled system proxy endpoints that still point to Verge; existing recovery records
 are preserved. Applying network settings restarts the core and can interrupt active connections.
-Network overrides currently stay local and are not included in application settings exports. TUN remains a separate helper-managed runtime switch.
+Application settings exports include portable network overrides. External controller settings and credentials stay local. TUN remains a separate helper-managed runtime switch.
 
 ## Requirements
 

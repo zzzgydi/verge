@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
-use crate::domain::ConnectionSnapshot;
+use crate::domain::{Connection, ConnectionSnapshot};
 use crate::ui::UiAction;
 use gpui_kit::component::{
-    ActiveTheme as _, Sizable as _,
+    ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
+    dialog::DialogButtonProps,
     menu::{PopupMenu, PopupMenuItem},
+    scroll::ScrollableElement as _,
     table::{Column, DataTable, TableDelegate, TableState},
     tooltip::Tooltip,
     v_flex,
@@ -133,6 +135,15 @@ impl TableDelegate for ConnectionsDelegate {
                     .truncate()
                     .child(target.clone())
                     .tooltip(move |window, cx| Tooltip::new(target.clone()).build(window, cx))
+                    .on_mouse_down(MouseButton::Left, {
+                        let actions = self.actions.clone();
+                        let connection = connection.clone();
+                        move |_, window, cx| {
+                            let _ = actions.update(cx, |view, cx| {
+                                view.open_connection_details(connection.clone(), window, cx)
+                            });
+                        }
+                    })
                     .into_any_element()
             }
             2 => text(if connection.rule_payload.is_empty() {
@@ -193,7 +204,18 @@ impl TableDelegate for ConnectionsDelegate {
         };
         let id = connection.id.clone();
         let actions = self.actions.clone();
+        let details = connection.clone();
+        let details_actions = self.actions.clone();
         menu.item(
+            PopupMenuItem::new(tr(self.language, "connections.details")).on_click(
+                move |_, window, cx| {
+                    let _ = details_actions.update(cx, |view, cx| {
+                        view.open_connection_details(details.clone(), window, cx)
+                    });
+                },
+            ),
+        )
+        .item(
             PopupMenuItem::new(tr(self.language, "connections.close_menu")).on_click(
                 move |_, _, cx| {
                     let _ = actions.update(cx, |view, cx| {
@@ -223,7 +245,27 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         .flex_1()
         .min_h_0()
         .gap_4()
-        .child(PageHeader::new(tr(lang, "connections.title")).child(muted(summary, cx)))
+        .child(
+            PageHeader::new(tr(lang, "connections.title")).child(
+                Button::new("close-all-connections")
+                    .label(tr(lang, "connections.close_all"))
+                    .small()
+                    .danger()
+                    .disabled(
+                        view.state.connection_notice.is_some()
+                            || view.is_pending(&["connections_write"])
+                            || view
+                                .state
+                                .connections
+                                .as_ref()
+                                .is_none_or(|s| s.connection_count == 0),
+                    )
+                    .on_click(cx.listener(|view, _, window, cx| {
+                        view.confirm_close_all_connections(window, cx)
+                    })),
+            ),
+        )
+        .child(muted(summary, cx))
         .child(
             div().flex_1().min_h_0().child(
                 DataTable::new(&view.connections_table)
@@ -233,4 +275,96 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
             ),
         )
         .into_any_element()
+}
+
+impl MainView {
+    pub(crate) fn open_connection_details(
+        &mut self,
+        connection: Connection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let lang = self.lang();
+        // Capture the selected row: live snapshots must not change the detail being inspected.
+        let rows = vec![
+            ("ID", connection.id),
+            (tr(lang, "connections.col.process"), connection.process),
+            (tr(lang, "connections.network"), connection.network),
+            (tr(lang, "connections.source"), connection.source),
+            (tr(lang, "connections.col.target"), connection.destination),
+            ("Host", connection.host),
+            (tr(lang, "connections.started"), connection.start),
+            (
+                tr(lang, "connections.col.rule"),
+                format!("{} {}", connection.rule, connection.rule_payload),
+            ),
+            (
+                tr(lang, "connections.col.chains"),
+                connection.chains.join(" → "),
+            ),
+            (
+                tr(lang, "connections.col.upload"),
+                format::bytes(connection.upload),
+            ),
+            (
+                tr(lang, "connections.col.download"),
+                format::bytes(connection.download),
+            ),
+        ];
+        window.open_sheet(cx, move |sheet, _, cx| {
+            sheet
+                .title(tr(lang, "connections.details"))
+                .size(rems(30.))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_h_0()
+                        .gap_3()
+                        .overflow_y_scrollbar()
+                        .children(rows.iter().map(|(label, value)| {
+                            v_flex()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(*label),
+                                )
+                                .child(div().text_sm().child(if value.trim().is_empty() {
+                                    "—".into()
+                                } else {
+                                    value.clone()
+                                }))
+                        })),
+                )
+        });
+    }
+
+    pub(crate) fn confirm_close_all_connections(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let lang = self.lang();
+        let view = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let view = view.clone();
+            alert
+                .confirm()
+                .title(tr(lang, "connections.close_all"))
+                .description(tr(lang, "connections.close_all.desc"))
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(tr(lang, "connections.close_all"))
+                        .cancel_text(tr(lang, "common.cancel"))
+                        .show_cancel(true),
+                )
+                .on_ok(move |_, _, cx| {
+                    view.update(cx, |view, cx| {
+                        view.dispatch_confirmed(UiAction::CloseAllConnections, cx)
+                    });
+                    true
+                })
+        });
+    }
 }

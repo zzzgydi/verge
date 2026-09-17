@@ -262,6 +262,11 @@ pub enum UiAction {
         destination: String,
     },
     UpdateMihomo,
+    UpdateGeoData(crate::domain::GeoDataKind),
+    MoveProfile {
+        id: ProfileId,
+        up: bool,
+    },
     /// 检查应用自身更新（只读，返回当前/最新版本与是否有更新）。
     CheckAppUpdate,
     /// 下载并替换当前 .app（高权限写入，需确认弹窗 + 显式授权；重启后生效）。
@@ -297,6 +302,10 @@ pub enum UiAction {
         yaml: String,
     },
     LoadMergedYaml(ProfileId),
+    PreviewMergeConfig {
+        id: ProfileId,
+        yaml: String,
+    },
     DeleteProfile(ProfileId),
     UpdateRemoteProfile(ProfileId),
     SetProfileUpdatePolicy {
@@ -327,6 +336,7 @@ pub enum UiAction {
         timeout_ms: u32,
     },
     CloseConnection(String),
+    CloseAllConnections,
     UpdateProvider {
         kind: ProviderKind,
         name: String,
@@ -414,6 +424,12 @@ impl UiAction {
                     AppCommand::ResetApplicationSettingsScope { scope },
                 )]
             }
+            Self::MoveProfile { id, up } => {
+                vec![UiRequest::Profile(AppCommand::MoveProfile { id, up })]
+            }
+            Self::UpdateGeoData(kind) => {
+                vec![UiRequest::Profile(AppCommand::UpdateGeoData { kind })]
+            }
             Self::UpdateMihomo => vec![UiRequest::Profile(AppCommand::UpdateMihomo)],
             Self::CheckAppUpdate => vec![UiRequest::Profile(AppCommand::CheckAppUpdate)],
             // 更新与重启是单命令事务；失败时错误 toast 已足够，不做跟随刷新。
@@ -490,6 +506,12 @@ impl UiAction {
                 UiRequest::Profile(AppCommand::UpdateMergeConfig { yaml }),
                 UiRequest::Profile(AppCommand::GetMergeConfig),
             ],
+            Self::PreviewMergeConfig { id, yaml } => {
+                vec![UiRequest::Profile(AppCommand::PreviewMergeConfig {
+                    id,
+                    yaml,
+                })]
+            }
             Self::LoadMergedYaml(id) => {
                 vec![UiRequest::Profile(AppCommand::GetMergedProfileYaml { id })]
             }
@@ -544,6 +566,9 @@ impl UiAction {
                 url,
                 timeout_ms,
             })],
+            Self::CloseAllConnections => {
+                vec![UiRequest::Runtime(RuntimeCommand::CloseAllConnections)]
+            }
             Self::CloseConnection(id) => {
                 vec![UiRequest::Runtime(RuntimeCommand::CloseConnection { id })]
             }
@@ -964,6 +989,7 @@ fn request_key(request: &UiRequest) -> &'static str {
             | AppCommand::ExportDiagnostics { .. }
             | AppCommand::ExportEncryptedBackup { .. }
             | AppCommand::RestoreEncryptedBackup { .. }
+            | AppCommand::UpdateGeoData { .. }
             | AppCommand::UpdateMihomo,
         ) => "application_settings_write",
         UiRequest::Profile(AppCommand::PreviewApplicationSettingsImport { .. }) => {
@@ -972,9 +998,12 @@ fn request_key(request: &UiRequest) -> &'static str {
         UiRequest::Profile(AppCommand::ListProfiles) => "profiles",
         UiRequest::Profile(AppCommand::GetProfileYaml { .. }) => "profile_yaml",
         UiRequest::Profile(AppCommand::GetMergeConfig) => "merge_config",
-        UiRequest::Profile(AppCommand::GetMergedProfileYaml { .. }) => "merged_yaml",
         UiRequest::Profile(
-            AppCommand::ImportProfile { .. }
+            AppCommand::GetMergedProfileYaml { .. } | AppCommand::PreviewMergeConfig { .. },
+        ) => "merged_yaml",
+        UiRequest::Profile(
+            AppCommand::MoveProfile { .. }
+            | AppCommand::ImportProfile { .. }
             | AppCommand::ImportRemoteProfile { .. }
             | AppCommand::SelectProfile { .. }
             | AppCommand::UpdateProfileYaml { .. }
@@ -992,7 +1021,9 @@ fn request_key(request: &UiRequest) -> &'static str {
         UiRequest::Runtime(RuntimeCommand::SetNetworkSettings { .. }) => "network_settings_write",
         UiRequest::Runtime(RuntimeCommand::SelectProxy { .. }) => "select_proxy",
         UiRequest::Runtime(RuntimeCommand::TestProxyDelay { .. }) => "delay",
-        UiRequest::Runtime(RuntimeCommand::CloseConnection { .. }) => "connections_write",
+        UiRequest::Runtime(
+            RuntimeCommand::CloseConnection { .. } | RuntimeCommand::CloseAllConnections,
+        ) => "connections_write",
         UiRequest::Runtime(
             RuntimeCommand::StartRealtime { .. }
             | RuntimeCommand::StopRealtime

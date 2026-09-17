@@ -250,7 +250,7 @@ pub fn run() {
                                         result: Err(error),
                                     } => (None, Some(error.clone()), None),
                                     UiResponse::Profile {
-                                        request: AppCommand::GetMergedProfileYaml { .. },
+                                        request: AppCommand::GetMergedProfileYaml { .. } | AppCommand::PreviewMergeConfig { .. },
                                         result: Err(error),
                                     } => (None, None, Some(error.clone())),
                                     _ => (None, None, None),
@@ -272,7 +272,9 @@ pub fn run() {
                                     *os_notification_slot =
                                         notification_for(lang, &envelope.response);
                                     let toast = toast_for(lang, &envelope.response);
+                                    let refresh_settings = matches!(&envelope.response, UiResponse::Profile { request: AppCommand::ImportApplicationSettings { .. } | AppCommand::ResetApplicationSettingsScope { .. }, result: Ok(_) });
                                     view.state.apply_response_envelope(envelope);
+                                    if refresh_settings { view.dispatch(UiAction::RefreshSettings, cx); }
                                     set_app_menus(view.lang(), cx);
                                     if let Some(error) = &yaml_load_error {
                                         view.fail_yaml_sheet(error, window, cx);
@@ -574,6 +576,7 @@ fn toast_for(lang: Lang, response: &UiResponse) -> Option<Notification> {
                 AppCommand::ResetApplicationSettingsScope { .. } => {
                     Some(tr(lang, "toast.settings_reset"))
                 }
+                AppCommand::UpdateGeoData { .. } => Some(tr(lang, "toast.geo_updated")),
                 AppCommand::UpdateMihomo => Some(tr(lang, "toast.mihomo_updated")),
                 AppCommand::UpdateApplication => Some(tr(lang, "toast.app_updated")),
                 AppCommand::RestartApplication => Some(tr(lang, "toast.app_restarting")),
@@ -619,6 +622,7 @@ fn toast_for(lang: Lang, response: &UiResponse) -> Option<Notification> {
                     RuntimeCommand::SetMode { .. }
                         | RuntimeCommand::SetNetworkSettings { .. }
                         | RuntimeCommand::SelectProxy { .. }
+                        | RuntimeCommand::CloseAllConnections
                         | RuntimeCommand::CloseConnection { .. }
                         | RuntimeCommand::TestProxyDelay { .. }
                 );

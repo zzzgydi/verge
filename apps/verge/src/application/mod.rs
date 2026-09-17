@@ -25,6 +25,7 @@ use crate::mihomo::{
 use crate::platform::{HelperControl, SystemProxyPlatform, TunConfig};
 
 pub mod app_update;
+pub mod geodata;
 mod network;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -324,6 +325,7 @@ pub trait RuntimeControl {
     fn select_proxy(&mut self, group: &str, proxy: &str) -> Result<(), AppError>;
     fn delay(&mut self, proxy: &str, url: &str, timeout_ms: u32) -> Result<u32, AppError>;
     fn close_connection(&mut self, id: &str) -> Result<(), AppError>;
+    fn close_all_connections(&mut self) -> Result<(), AppError>;
     fn start_realtime(&mut self, topics: &[RealtimeTopic]) -> Result<(), AppError>;
     fn stop_realtime(&mut self);
     fn drain_realtime(&mut self) -> Vec<RealtimeEvent>;
@@ -428,6 +430,9 @@ impl<T: ControllerTransport> RuntimeControl for MihomoRuntime<T> {
 
     fn close_connection(&mut self, id: &str) -> Result<(), AppError> {
         self.client.close_connection(id)
+    }
+    fn close_all_connections(&mut self) -> Result<(), AppError> {
+        self.client.close_all_connections()
     }
 
     fn start_realtime(&mut self, topics: &[RealtimeTopic]) -> Result<(), AppError> {
@@ -575,6 +580,10 @@ impl<'a, C: RuntimeControl> RuntimeCommandHandler<'a, C> {
                 RuntimeCommandOutput::Delay(self.runtime.delay(&proxy, &url, timeout_ms)?),
                 "Proxy delay tested",
             ),
+            RuntimeCommand::CloseAllConnections => {
+                self.runtime.close_all_connections()?;
+                (RuntimeCommandOutput::None, "All connections closed")
+            }
             RuntimeCommand::CloseConnection { id } => {
                 self.runtime.close_connection(&id)?;
                 (RuntimeCommandOutput::None, "Connection closed")
@@ -729,7 +738,8 @@ pub fn update_geo_artifact<C: CoreControl>(
     let install =
         install_verified_artifact(candidate, active, expected_sha256).map_err(no_recovery)?;
     if let Err(cause) = core
-        .apply_config(active_config)
+        .validate_candidate(active_config)
+        .and_then(|()| core.apply_config(active_config))
         .and_then(|()| core.health())
     {
         let mut recovery_errors = Vec::new();
@@ -1568,6 +1578,7 @@ impl<'a, C: CoreControl> ProfileCommandHandler<'a, C> {
             | AppCommand::ExportDiagnostics { .. }
             | AppCommand::ExportEncryptedBackup { .. }
             | AppCommand::RestoreEncryptedBackup { .. }
+            | AppCommand::UpdateGeoData { .. }
             | AppCommand::UpdateMihomo
             | AppCommand::CheckAppUpdate
             | AppCommand::UpdateApplication
@@ -1577,6 +1588,13 @@ impl<'a, C: CoreControl> ProfileCommandHandler<'a, C> {
                     ErrorCode::InvalidInput,
                     "application settings are owned by the application backend",
                 )));
+            }
+            AppCommand::MoveProfile { id, up } => {
+                self.profiles.move_profile(&id, up).map_err(no_recovery)?;
+                AppCommandOutput::Profiles {
+                    profiles: self.profiles.list().to_vec(),
+                    selected: self.profiles.selected().cloned(),
+                }
             }
             AppCommand::ListProfiles => AppCommandOutput::Profiles {
                 profiles: self.profiles.list().to_vec(),
@@ -1620,6 +1638,13 @@ impl<'a, C: CoreControl> ProfileCommandHandler<'a, C> {
             }
             AppCommand::GetMergeConfig => AppCommandOutput::MergeConfigYaml {
                 yaml: self.profiles.merge_yaml().map_err(no_recovery)?,
+            },
+            AppCommand::PreviewMergeConfig { id, yaml } => AppCommandOutput::MergedProfileYaml {
+                yaml: self
+                    .profiles
+                    .preview_merge(&id, &yaml)
+                    .map_err(no_recovery)?,
+                id,
             },
             AppCommand::GetMergedProfileYaml { id } => AppCommandOutput::MergedProfileYaml {
                 yaml: self.profiles.merged_yaml(&id).map_err(no_recovery)?,
@@ -1808,6 +1833,41 @@ mod tests {
         assert_eq!(error.recovery, RecoveryStatus::Restored);
         assert_eq!(fs::read(&active).unwrap(), b"old binary");
         assert_eq!(core.start_calls, 1);
+    }
+
+    #[test]
+    fn merge_draft_preview_does_not_save_or_change_runtime() {
+        let directory = TestDir::new("merge-draft");
+        let (store, first, _) = store_with_profiles(&directory.0);
+        let saved = store.merge_yaml().unwrap();
+        let draft = "rules:\n  - key: mode\n    op: override\n    value: global\n";
+        let preview: serde_yaml::Value =
+            serde_yaml::from_str(&store.preview_merge(&first, draft).unwrap()).unwrap();
+        assert_eq!(preview["mode"].as_str(), Some("global"));
+        assert_eq!(store.merge_yaml().unwrap(), saved);
+        let effective: serde_yaml::Value =
+            serde_yaml::from_str(&store.merged_yaml(&first).unwrap()).unwrap();
+        assert_eq!(effective["mode"].as_str(), Some("rule"));
+        assert!(store.preview_merge(&first, "rules: [broken]").is_err());
+    }
+
+    #[test]
+    fn profile_order_persists_and_preserves_selection() {
+        let directory = TestDir::new("profile-order");
+        let (mut store, first, second) = store_with_profiles(&directory.0);
+        let selected = store.selected().cloned();
+        store.move_profile(&second, true).unwrap();
+        assert_eq!(store.list()[0].id, second);
+        store.move_profile(&second, true).unwrap();
+        let reopened = FileProfileStore::open(&directory.0).unwrap();
+        assert_eq!(reopened.list()[0].id, second);
+        assert_eq!(reopened.list()[1].id, first);
+        assert_eq!(reopened.selected().cloned(), selected);
+        assert!(
+            store
+                .move_profile(&ProfileId::parse("missing").unwrap(), true)
+                .is_err()
+        );
     }
 
     #[test]
@@ -2551,6 +2611,10 @@ mod tests {
             self.failure.take().map_or(Ok(42), Err)
         }
 
+        fn close_all_connections(&mut self) -> Result<(), AppError> {
+            self.calls.push("close_all_connections".into());
+            Ok(())
+        }
         fn close_connection(&mut self, id: &str) -> Result<(), AppError> {
             self.calls.push(format!("close_connection:{id}"));
             self.failure.take().map_or(Ok(()), Err)
@@ -2663,6 +2727,9 @@ mod tests {
             RuntimeCommandOutput::Delay(42)
         );
         handler
+            .execute(RuntimeCommand::CloseAllConnections)
+            .unwrap();
+        handler
             .execute(RuntimeCommand::CloseConnection { id: "abc".into() })
             .unwrap();
         handler
@@ -2683,6 +2750,7 @@ mod tests {
         assert_eq!(runtime.mode, Some(RunMode::Global));
         assert!(runtime.calls.iter().any(|call| call.starts_with("select:")));
         assert!(runtime.calls.contains(&"close_connection:abc".to_owned()));
+        assert!(runtime.calls.contains(&"close_all_connections".to_owned()));
         assert!(
             runtime
                 .calls
@@ -3008,6 +3076,9 @@ mod tun_coordination_tests {
         }
         fn delay(&mut self, _proxy: &str, _url: &str, _timeout_ms: u32) -> Result<u32, AppError> {
             unimplemented!()
+        }
+        fn close_all_connections(&mut self) -> Result<(), AppError> {
+            Ok(())
         }
         fn close_connection(&mut self, _id: &str) -> Result<(), AppError> {
             unimplemented!()

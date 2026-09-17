@@ -1,3 +1,5 @@
+mod transfer;
+pub use transfer::{export_portable_settings, parse_portable_settings, portable_settings_preview};
 mod network;
 use std::{
     collections::HashSet,
@@ -488,6 +490,19 @@ impl FileProfileStore {
         serde_yaml::to_string(&value).map_err(storage_error)
     }
 
+    pub fn preview_merge(&self, id: &ProfileId, yaml: &str) -> Result<String, AppError> {
+        let merge: MergeConfig = if yaml.trim().is_empty() {
+            MergeConfig::default()
+        } else {
+            serde_yaml::from_str(yaml)
+                .map_err(|_| AppError::new(ErrorCode::ValidationFailed, "invalid Merge YAML"))?
+        };
+        let source: serde_yaml::Value =
+            serde_yaml::from_str(&self.yaml(id)?).map_err(storage_error)?;
+        let value = self.apply_network(apply_merge(&source, &merge)?)?;
+        serde_yaml::to_string(&value).map_err(storage_error)
+    }
+
     /// Preserve the proxy-group order declared by the selected source and Merge config.
     pub fn proxy_group_order(&self) -> Result<Vec<String>, AppError> {
         let Some(id) = self.selected() else {
@@ -883,6 +898,29 @@ impl FileProfileStore {
         self.root
             .join("snapshots")
             .join(format!("{}.yaml", id.as_str()))
+    }
+
+    pub fn move_profile(&mut self, id: &ProfileId, up: bool) -> Result<(), AppError> {
+        let index = self
+            .manifest
+            .profiles
+            .iter()
+            .position(|profile| profile.id == *id)
+            .ok_or_else(|| AppError::new(ErrorCode::NotFound, "profile not found"))?;
+        let target = if up {
+            index.saturating_sub(1)
+        } else {
+            (index + 1).min(self.manifest.profiles.len() - 1)
+        };
+        if index == target {
+            return Ok(());
+        }
+        self.manifest.profiles.swap(index, target);
+        if let Err(error) = self.save_manifest() {
+            self.manifest.profiles.swap(index, target);
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn save_manifest(&self) -> Result<(), AppError> {

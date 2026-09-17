@@ -235,6 +235,34 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                             ),
                         ),
                 )
+                .child(
+                    field()
+                        .label(tr(lang, "settings.geo"))
+                        .description(tr(lang, "settings.geo.desc"))
+                        .child(
+                            h_flex().gap_2().children(
+                                [
+                                    ("GeoIP", crate::domain::GeoDataKind::GeoIp),
+                                    ("GeoSite", crate::domain::GeoDataKind::GeoSite),
+                                    ("IP DB", crate::domain::GeoDataKind::Country),
+                                ]
+                                .map(|(label, kind)| {
+                                    Button::new(format!("update-{label}"))
+                                        .label(label)
+                                        .small()
+                                        .outline()
+                                        .disabled(
+                                            view.state.selected_profile.is_none()
+                                                || view.state.connection_notice.is_some()
+                                                || view.is_pending(&["application_settings_write"]),
+                                        )
+                                        .on_click(cx.listener(move |view, _, _, cx| {
+                                            view.dispatch(UiAction::UpdateGeoData(kind), cx)
+                                        }))
+                                }),
+                            ),
+                        ),
+                )
                 .when_some(view.state.mihomo_version.clone(), |form, version| {
                     form.child(
                         field()

@@ -846,3 +846,73 @@ fn daemon_requests_are_bounded_while_responses_are_stalled(cx: &mut TestAppConte
         })
     });
 }
+
+#[gpui_kit::test]
+fn connection_details_and_close_all_use_real_overlays(cx: &mut TestAppContext) {
+    use crate::domain::{Connection, RuntimeCommand};
+    use crate::ui::{UiAction, UiRequest};
+    cx.update(gpui_kit::init);
+    let (tx, rx) = mpsc::sync_channel(32);
+    let holder = Rc::new(RefCell::new(None));
+    let slot = holder.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| MainView::new(tx, window, cx));
+        *slot.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = holder.borrow().clone().unwrap();
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.open_connection_details(
+                Connection {
+                    host: "test.example".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            assert!(Root::render_sheet_layer(window, cx).is_some());
+            view.confirm_close_all_connections(window, cx);
+            assert!(window.has_active_dialog(cx));
+            assert!(rx.try_recv().is_err());
+            view.dispatch(UiAction::CloseAllConnections, cx);
+            assert!(
+                rx.try_recv().is_err(),
+                "unsupported daemon must not receive new command"
+            );
+            view.state
+                .daemon_capabilities
+                .push(crate::ipc::protocol::CLOSE_ALL_CONNECTIONS.into());
+            view.dispatch_confirmed(UiAction::CloseAllConnections, cx);
+            assert!(matches!(
+                rx.try_recv().unwrap().request,
+                UiRequest::Runtime(RuntimeCommand::CloseAllConnections)
+            ));
+        })
+    });
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn merge_preview_keeps_editor_draft_and_opens_a_result_dialog(cx: &mut TestAppContext) {
+    use crate::domain::ProfileId;
+    let (_, holder, cx) = setup(cx);
+    let view = holder.borrow().clone().unwrap();
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.merge_editor
+                .update(cx, |editor, cx| editor.set_value("rules: []", window, cx));
+            let id = ProfileId::parse("draft").unwrap();
+            view.sheet_state.update(cx, |state, _| {
+                state.pending_merged = Some(id.clone());
+                state.merge_preview_dialog = true;
+            });
+            view.state.merged_yaml = Some((id, "mode: global".into()));
+            view.maybe_open_merged_sheet(window, cx);
+            assert!(window.has_active_dialog(cx));
+            assert_eq!(view.merge_editor.read(cx).value().as_str(), "rules: []");
+            assert_eq!(view.merged_editor.read(cx).value().as_str(), "mode: global");
+        })
+    });
+    cx.run_until_parked();
+}

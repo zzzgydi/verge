@@ -113,6 +113,9 @@ fn application_commands_drive_pinned_mihomo() {
     )
     .unwrap();
     let mut handler = RuntimeCommandHandler::new(&mut runtime);
+    handler
+        .execute(RuntimeCommand::CloseAllConnections)
+        .unwrap();
 
     assert_eq!(
         handler.execute(RuntimeCommand::GetMode).unwrap().output,

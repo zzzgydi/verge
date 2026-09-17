@@ -453,6 +453,10 @@ impl<T: ControllerTransport> MihomoClient<T> {
         Ok(response.delay)
     }
 
+    pub fn close_all_connections(&mut self) -> Result<(), AppError> {
+        self.empty("DELETE", "/connections", None)
+    }
+
     pub fn close_connection(&mut self, id: &str) -> Result<(), AppError> {
         if id.is_empty() {
             return Err(AppError::new(
@@ -716,6 +720,18 @@ mod tests {
         assert!(snapshot.proxies["Remote"].xudp && snapshot.proxies["Remote"].smux);
         assert!(!snapshot.proxies.contains_key("Ambiguous"));
         assert!(!snapshot.proxies.contains_key("Missing"));
+    }
+
+    #[test]
+    fn close_all_connections_uses_collection_delete_and_reports_failure() {
+        let mut client = MihomoClient::new(FakeTransport::new([
+            response(204, ""),
+            response(500, "failed"),
+        ]));
+        client.close_all_connections().unwrap();
+        assert_eq!(client.transport.requests[0].method, "DELETE");
+        assert_eq!(client.transport.requests[0].path, "/connections");
+        assert!(client.close_all_connections().is_err());
     }
 
     #[test]

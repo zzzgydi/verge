@@ -20,6 +20,10 @@ pub const PROTOCOL_VERSION: u32 = 6;
 
 /// Unified manual/PAC configuration and the SetEnabled command.
 pub const UNIFIED_SYSTEM_PROXY: &str = "unified_system_proxy";
+pub const MERGE_PREVIEW: &str = "merge_preview";
+pub const PROFILE_ORDER: &str = "profile_order";
+pub const GEO_DATA_UPDATE: &str = "geo_data_update";
+pub const CLOSE_ALL_CONNECTIONS: &str = "close_all_connections";
 
 #[cfg(test)]
 mod compatibility_tests;
