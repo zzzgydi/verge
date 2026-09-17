@@ -91,8 +91,8 @@ pub struct MainView {
     pub log_layout: pages::logs::LogLayout,
     pub proxy_page: Entity<pages::proxies::ProxyPage>,
     pub rule_scroll: VirtualListScrollHandle,
-    /// 日志级别过滤，None 表示全部。
-    pub log_filter: Option<&'static str>,
+    /// 各数据页的本地筛选条件和输入框。
+    pub filters: pages::filters::PageFilters,
     /// 点击“预览导入”后等待预览结果再打开确认弹窗的设置文件路径。
     pub pending_settings_import: Option<String>,
     focus_handle: FocusHandle,
@@ -235,7 +235,7 @@ impl MainView {
             log_layout: pages::logs::LogLayout::default(),
             proxy_page,
             rule_scroll: VirtualListScrollHandle::new(),
-            log_filter: None,
+            filters: pages::filters::PageFilters::new(window, cx),
             pending_settings_import: None,
             sheet_state: cx.new(|_| SheetState::default()),
             settings_category: pages::settings::SettingsCategory::General,
@@ -262,7 +262,7 @@ impl MainView {
         search.update(cx, |input, cx| {
             input.set_placeholder(tr(lang, "proxies.search"), window, cx)
         });
-        let fields: [(Entity<InputState>, &'static str); 6] = [
+        let fields: [(Entity<InputState>, &'static str); 10] = [
             (self.profile_id.clone(), "placeholder.profile_id"),
             (self.profile_name.clone(), "placeholder.profile_name"),
             (
@@ -278,6 +278,10 @@ impl MainView {
                 "placeholder.settings_import_path",
             ),
             (self.global_hotkey.clone(), "placeholder.global_hotkey"),
+            (self.filters.rule_search.clone(), "rules.search"),
+            (self.filters.connection_search.clone(), "connections.search"),
+            (self.filters.log_search.clone(), "logs.search"),
+            (self.filters.log_exclude.clone(), "logs.exclude"),
         ];
         for (input, key) in fields {
             input.update(cx, |input, cx| {
@@ -549,15 +553,16 @@ impl MainView {
         let snapshot = self.state.connections.clone();
         let lang = self.lang();
         self.connections_table.update(cx, |table, cx| {
-            let same = match (&table.delegate().snapshot, &snapshot) {
-                (Some(old), Some(new)) => std::sync::Arc::ptr_eq(old, new),
-                (None, None) => true,
-                _ => false,
-            };
+            let filter_changed = table.delegate().filter != self.filters.connections;
+            let data_changed = table
+                .delegate_mut()
+                .sync(snapshot, self.filters.connections.clone());
             let language_changed = table.delegate_mut().set_language(lang);
-            if !same || language_changed {
-                table.delegate_mut().snapshot = snapshot;
+            if data_changed || language_changed {
                 table.refresh(cx);
+            }
+            if filter_changed {
+                table.scroll_to_row(0, cx);
             }
         });
     }

@@ -6,29 +6,16 @@ mod tests;
 use std::rc::Rc;
 
 use gpui_kit::component::{
-    ActiveTheme as _, Sizable as _,
-    button::Button,
-    menu::{DropdownMenu as _, PopupMenuItem},
+    ActiveTheme as _, h_flex,
     scroll::{Scrollbar, ScrollbarMode},
     v_flex, v_virtual_list,
 };
 use gpui_kit::*;
 
-use crate::{
-    i18n::{self, tr},
-    view::MainView,
-};
+use crate::{i18n::tr, ui::Page, view::MainView};
 
 use super::components::PageHeader;
-
-/// (文案 key, 级别过滤值)。
-const LEVELS: [(&str, Option<&'static str>); 5] = [
-    ("logs.level.all", None),
-    ("logs.level.info", Some("info")),
-    ("logs.level.warning", Some("warning")),
-    ("logs.level.error", Some("error")),
-    ("logs.level.debug", Some("debug")),
-];
+use super::filters::{self, Choice};
 
 /// 日志行高。虚拟列表要求渲染行高与 item_sizes 逐像素一致。
 const LOG_ROW_HEIGHT: f32 = 24.;
@@ -82,75 +69,46 @@ fn render_log_row(
 pub fn render(view: &mut MainView, window: &mut Window, cx: &mut Context<MainView>) -> AnyElement {
     view.log_layout.sync(&view.state, window, cx);
     let lang = view.lang();
-    let filter = view.log_filter;
-    let filter_label = LEVELS
-        .iter()
-        .find(|(_, level)| *level == filter)
-        .map_or(tr(lang, "logs.level.all"), |(key, _)| tr(lang, key));
-
     let view_entity = cx.entity();
-    let filter_button = Button::new("log-level-filter")
-        .small()
-        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
-        .outline()
-        .label(i18n::fmt_logs_filter(lang, filter_label))
-        .dropdown_menu({
-            let view_entity = view_entity.downgrade();
-            move |menu, _, _| {
-                LEVELS.into_iter().fold(menu, |menu, (key, level)| {
-                    menu.item(PopupMenuItem::new(tr(lang, key)).on_click({
-                        let view = view_entity.clone();
-                        move |_, _, cx| {
-                            let _ = view.update(cx, |this, cx| {
-                                this.log_filter = level;
-                                cx.notify();
-                            });
-                        }
-                    }))
-                })
-            }
-        });
-
-    let mut content = v_flex()
-        .flex_1()
-        .min_h_0()
-        .gap_4()
-        .child(PageHeader::new(tr(lang, "logs.title")).child(filter_button));
-
+    let mut content = v_flex().flex_1().min_h_0().gap_4();
     // Retain only indices; clone/format payloads only for the visible range.
     let rows: Vec<usize> = view
         .state
         .logs
         .iter()
         .enumerate()
-        .filter(|(_, log)| filter.is_none_or(|level| log.level == level))
+        .filter(|(_, log)| view.filters.logs.matches(log))
         .map(|(ix, _)| ix)
         .collect();
+    content = content
+        .child(
+            PageHeader::new(tr(lang, "logs.title")).child(filters::count(
+                rows.len(),
+                view.state.logs.len(),
+                cx,
+            )),
+        )
+        .child(toolbar(view, cx));
     if rows.is_empty() {
-        let empty = super::EmptyState::new(
+        content = content.child(super::EmptyState::new(
             gpui_kit::component::IconName::SquareTerminal,
-            tr(lang, "logs.empty.title"),
-            if filter.is_some() {
-                tr(lang, "logs.empty.filtered")
-            } else {
-                tr(lang, "logs.empty.unfiltered")
-            },
-        );
-        content = content.child(if filter.is_some() {
-            empty.action(
-                Button::new("clear-log-filter")
-                    .label(tr(lang, "logs.clear_filter"))
-                    .small()
-                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
-                    .outline()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.log_filter = None;
-                        cx.notify();
-                    })),
-            )
-        } else {
-            empty
-        });
+            tr(
+                lang,
+                if view.filters.active(Page::Logs) {
+                    "filters.empty"
+                } else {
+                    "logs.empty.title"
+                },
+            ),
+            tr(
+                lang,
+                if view.filters.active(Page::Logs) {
+                    "filters.empty.desc"
+                } else {
+                    "logs.empty.unfiltered"
+                },
+            ),
+        ));
     } else {
         // 按行虚拟列表：每行独立渲染并带级别着色；长日志滚动不卡。
         let width = rows
@@ -202,4 +160,47 @@ pub fn render(view: &mut MainView, window: &mut Window, cx: &mut Context<MainVie
         );
     }
     content.into_any_element()
+}
+
+fn toolbar(view: &MainView, cx: &mut Context<MainView>) -> impl IntoElement {
+    let lang = view.lang();
+    let mut options: Vec<(String, String)> = [
+        ("problems", "logs.level.problems"),
+        ("error", "logs.level.error"),
+        ("warning", "logs.level.warning"),
+        ("info", "logs.level.info"),
+        ("debug", "logs.level.debug"),
+    ]
+    .into_iter()
+    .map(|(value, label)| (value.into(), tr(lang, label).into()))
+    .collect();
+    for (value, label) in filters::choices(
+        view.state
+            .logs
+            .iter()
+            .map(|r| filters::normalized_level(&r.level)),
+    ) {
+        if !options.iter().any(|(v, _)| v == &value) {
+            options.push((value, label));
+        }
+    }
+    h_flex()
+        .debug_selector(|| "logs-filters".into())
+        .gap_2()
+        .h_8()
+        .child(filters::search(&view.filters.log_search, "logs-search"))
+        .child(filters::search(&view.filters.log_exclude, "logs-exclude"))
+        .child(filters::choice(
+            view,
+            Choice {
+                id: "log-level-filter",
+                label: "logs.filter.level",
+                page: Page::Logs,
+                selected: view.filters.logs.level.clone(),
+                options,
+                set: |v, value| v.filters.logs.level = value,
+            },
+            cx,
+        ))
+        .child(filters::clear_button(view, Page::Logs, cx))
 }

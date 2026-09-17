@@ -105,7 +105,7 @@ fn multiline_logs_fit_and_longest_log_scrolls_both_axes(cx: &mut TestAppContext)
     assert_eq!(scroll.offset(), offset);
     cx.update(|_, cx| {
         view.update(cx, |view, cx| {
-            view.log_filter = Some("warning");
+            view.filters.logs.level = Some("warning".into());
             cx.notify();
         })
     });
@@ -116,7 +116,7 @@ fn multiline_logs_fit_and_longest_log_scrolls_both_axes(cx: &mut TestAppContext)
     // Buffer eviction must discard cached widths instead of keeping an old outlier.
     cx.update(|_, cx| {
         view.update(cx, |view, cx| {
-            view.log_filter = None;
+            view.filters.logs.level = None;
             for _ in 0..510 {
                 view.state.apply_realtime(RealtimeEvent::Log(LogEvent {
                     level: "info".into(),

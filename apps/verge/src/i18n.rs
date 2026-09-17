@@ -24,6 +24,36 @@ impl Lang {
 
 /// 文案表：`(key, zh-CN, en)`。key 按页面/用途命名。
 const ENTRIES: &[(&str, &str, &str)] = &[
+    ("filters.all", "全部", "All"),
+    ("filters.clear", "清空", "Clear"),
+    ("filters.empty", "没有匹配结果", "No matching results"),
+    (
+        "filters.empty.desc",
+        "调整筛选条件，或点击清空查看全部。",
+        "Adjust the filters or clear them to show all results.",
+    ),
+    (
+        "rules.search",
+        "搜索规则或提供者",
+        "Search rules or providers",
+    ),
+    (
+        "connections.search",
+        "搜索域名、IP、进程、规则",
+        "Search host, IP, process, rule",
+    ),
+    (
+        "logs.search",
+        "包含关键词（空格分隔）",
+        "Include words (space-separated)",
+    ),
+    (
+        "logs.exclude",
+        "排除关键词（空格分隔）",
+        "Exclude words (space-separated)",
+    ),
+    ("logs.filter.level", "级别", "Level"),
+    ("logs.level.problems", "警告及错误", "Warnings & errors"),
     ("ai.title", "AI 助手", "AI Assistant"),
     ("ai.settings", "模型设置", "Provider"),
     ("ai.clear", "新对话", "New conversation"),

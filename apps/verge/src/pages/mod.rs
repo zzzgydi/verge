@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod components;
 pub mod connections;
+pub mod filters;
 pub mod home;
 pub mod logs;
 pub mod profiles;

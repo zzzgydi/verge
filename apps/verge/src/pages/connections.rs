@@ -6,6 +6,7 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     dialog::DialogButtonProps,
+    h_flex,
     menu::{PopupMenu, PopupMenuItem},
     scroll::ScrollableElement as _,
     table::{Column, DataTable, TableDelegate, TableState},
@@ -21,7 +22,9 @@ use crate::{
 };
 
 use super::components::PageHeader;
+use super::filters::{self, Choice, ConnectionFilter};
 use super::muted;
+use crate::ui::Page;
 
 /// 列名对应的 i18n key（与 columns 的声明顺序一致）。
 const COLUMN_KEYS: [&str; 7] = [
@@ -37,6 +40,8 @@ const COLUMN_KEYS: [&str; 7] = [
 /// 连接表共享不可变快照；按钮通过弱实体句柄即时派发 typed action。
 pub struct ConnectionsDelegate {
     pub snapshot: Option<Arc<ConnectionSnapshot>>,
+    pub filter: ConnectionFilter,
+    pub rows: Vec<usize>,
     columns: Vec<Column>,
     actions: WeakEntity<MainView>,
     language: Lang,
@@ -48,6 +53,8 @@ impl ConnectionsDelegate {
         let language = Lang::En;
         Self {
             snapshot: None,
+            filter: Default::default(),
+            rows: Vec::new(),
             // Keep all seven columns, including close actions, visible at 960px window width.
             columns: vec![
                 Column::new("process", tr(language, COLUMN_KEYS[0])).width(80.),
@@ -65,6 +72,32 @@ impl ConnectionsDelegate {
             actions,
             language,
         }
+    }
+
+    pub fn sync(
+        &mut self,
+        snapshot: Option<Arc<ConnectionSnapshot>>,
+        filter: ConnectionFilter,
+    ) -> bool {
+        let same = match (&self.snapshot, &snapshot) {
+            (Some(old), Some(new)) => Arc::ptr_eq(old, new),
+            (None, None) => true,
+            _ => false,
+        };
+        if same && self.filter == filter {
+            return false;
+        }
+        self.rows = snapshot.as_ref().map_or_else(Vec::new, |s| {
+            s.connections
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| filter.matches(row))
+                .map(|(i, _)| i)
+                .collect()
+        });
+        self.snapshot = snapshot;
+        self.filter = filter;
+        true
     }
 
     /// 语言切换后重设列名；返回是否有变化（调用方据此 refresh 表格）。
@@ -86,7 +119,7 @@ impl TableDelegate for ConnectionsDelegate {
     }
 
     fn rows_count(&self, _cx: &App) -> usize {
-        self.snapshot.as_ref().map_or(0, |s| s.connections.len())
+        self.rows.len()
     }
 
     fn column(&self, col_ix: usize, _cx: &App) -> Column {
@@ -100,11 +133,11 @@ impl TableDelegate for ConnectionsDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let Some(connection) = self
-            .snapshot
-            .as_ref()
-            .and_then(|s| s.connections.get(row_ix))
-        else {
+        let Some(connection) = self.snapshot.as_ref().and_then(|s| {
+            self.rows
+                .get(row_ix)
+                .and_then(|&index| s.connections.get(index))
+        }) else {
             return div().into_any_element();
         };
         let text = |content: String| {
@@ -195,11 +228,11 @@ impl TableDelegate for ConnectionsDelegate {
         _window: &mut Window,
         _cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
-        let Some(connection) = self
-            .snapshot
-            .as_ref()
-            .and_then(|s| s.connections.get(row_ix))
-        else {
+        let Some(connection) = self.snapshot.as_ref().and_then(|s| {
+            self.rows
+                .get(row_ix)
+                .and_then(|&index| s.connections.get(index))
+        }) else {
             return menu;
         };
         let id = connection.id.clone();
@@ -265,16 +298,115 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                     })),
             ),
         )
-        .child(muted(summary, cx))
         .child(
-            div().flex_1().min_h_0().child(
-                DataTable::new(&view.connections_table)
-                    .small()
-                    .bordered(false)
-                    .stripe(true),
-            ),
+            h_flex()
+                .justify_between()
+                .child(muted(summary, cx))
+                .child(filters::count(
+                    view.connections_table.read(cx).delegate().rows.len(),
+                    view.state
+                        .connections
+                        .as_ref()
+                        .map_or(0, |s| s.connections.len()),
+                    cx,
+                )),
+        )
+        .child(toolbar(view, cx))
+        .child(
+            if view.connections_table.read(cx).delegate().rows.is_empty()
+                && view.filters.active(Page::Connections)
+            {
+                super::EmptyState::new(
+                    gpui_kit::component::IconName::Search,
+                    tr(lang, "filters.empty"),
+                    tr(lang, "filters.empty.desc"),
+                )
+                .into_any_element()
+            } else {
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
+                        DataTable::new(&view.connections_table)
+                            .small()
+                            .bordered(false)
+                            .stripe(true),
+                    )
+                    .into_any_element()
+            },
         )
         .into_any_element()
+}
+
+fn toolbar(view: &MainView, cx: &mut Context<MainView>) -> impl IntoElement {
+    let rows = view
+        .state
+        .connections
+        .as_ref()
+        .map(|s| s.connections.as_slice())
+        .unwrap_or(&[]);
+    let filter = &view.filters.connections;
+    let mut processes = filters::choices(rows.iter().map(|r| r.process.clone()));
+    for (value, label) in &mut processes {
+        if value.is_empty() {
+            *label = tr(view.lang(), "connections.unknown_process").into();
+        }
+    }
+    h_flex()
+        .debug_selector(|| "connections-filters".into())
+        .gap_2()
+        .h_8()
+        .child(filters::search(
+            &view.filters.connection_search,
+            "connections-search",
+        ))
+        .child(filters::choice(
+            view,
+            Choice {
+                id: "connections-network",
+                label: "connections.network",
+                page: Page::Connections,
+                selected: filter.network.clone(),
+                options: filters::choices(
+                    rows.iter()
+                        .map(|r| r.network.to_ascii_uppercase())
+                        .filter(|n| !n.is_empty()),
+                ),
+                set: |v, value| v.filters.connections.network = value,
+            },
+            cx,
+        ))
+        .child(filters::choice(
+            view,
+            Choice {
+                id: "connections-process",
+                label: "connections.col.process",
+                page: Page::Connections,
+                selected: filter.process.clone(),
+                options: processes,
+                set: |v, value| v.filters.connections.process = value,
+            },
+            cx,
+        ))
+        .child(filters::choice(
+            view,
+            Choice {
+                id: "connections-chain",
+                label: "connections.col.chains",
+                page: Page::Connections,
+                selected: filter.chain.clone(),
+                options: filters::choices(rows.iter().flat_map(|r| {
+                    if r.chains.is_empty() {
+                        vec!["DIRECT".into()]
+                    } else {
+                        r.chains.clone()
+                    }
+                })),
+                set: |v, value| v.filters.connections.chain = value,
+            },
+            cx,
+        ))
+        .child(filters::clear_button(view, Page::Connections, cx))
 }
 
 impl MainView {

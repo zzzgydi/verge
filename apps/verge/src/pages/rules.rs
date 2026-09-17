@@ -1,4 +1,6 @@
 use super::components::PageHeader;
+use super::filters::{self, Choice};
+use crate::ui::Page;
 use crate::{domain::ProviderKind, i18n::tr, ui::UiAction, view::MainView};
 use gpui_kit::component::{
     ActiveTheme as _, Sizable as _, StyledExt as _, button::Button, h_flex, scroll::Scrollbar,
@@ -29,44 +31,35 @@ impl RuleRow {
 pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
     let lang = view.lang();
     let refreshing = view.is_pending(&["rules", "providers"]);
-    if view.state.rules.is_empty() && view.state.providers.is_empty() {
-        return v_flex()
-            .flex_1()
-            .min_h_0()
-            .gap_4()
-            .child(PageHeader::new(tr(lang, "rules.title")))
-            .child(if refreshing {
-                super::skeleton_rows(5).into_any_element()
-            } else {
-                super::EmptyState::new(
-                    gpui_kit::component::IconName::BookOpen,
-                    tr(lang, "rules.empty.title"),
-                    tr(lang, "rules.empty.desc"),
-                )
-                .action(
-                    Button::new("empty-refresh-rules")
-                        .label(tr(lang, "common.refresh"))
-                        .small()
-                        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
-                        .outline()
-                        .on_click(
-                            cx.listener(|this, _, _, cx| this.dispatch(UiAction::RefreshRules, cx)),
-                        ),
-                )
-                .into_any_element()
-            })
-            .into_any_element();
-    }
+    let rule_indices: Vec<_> = view
+        .state
+        .rules
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| view.filters.rules.matches(r))
+        .map(|(i, _)| i)
+        .collect();
+    let provider_indices: Vec<_> = view
+        .state
+        .providers
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| view.filters.rules.matches_provider(p))
+        .map(|(i, _)| i)
+        .collect();
+    let rule_count = rule_indices.len();
+    let provider_count = provider_indices.len();
     let mut rows = Vec::new();
-    if !view.state.providers.is_empty() {
+    if provider_count > 0 {
         rows.push(RuleRow::Providers);
-        rows.extend((0..view.state.providers.len()).map(RuleRow::Provider));
+        rows.extend(provider_indices.into_iter().map(RuleRow::Provider));
     }
-    rows.push(RuleRow::Rules);
-    if !view.state.rules.is_empty() {
+    if rule_count > 0 {
+        rows.push(RuleRow::Rules);
         rows.push(RuleRow::Columns);
-        rows.extend((0..view.state.rules.len()).map(RuleRow::Rule));
+        rows.extend(rule_indices.into_iter().map(RuleRow::Rule));
     }
+    let empty = rows.is_empty();
     let sizes = Rc::new(rows.iter().map(|row| size(px(0.), row.height())).collect());
     let list = v_virtual_list(
         cx.entity(),
@@ -88,14 +81,16 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                             .text_sm()
                             .child(if matches!(row, RuleRow::Providers) {
                                 format!(
-                                    "{}   /   {}",
+                                    "{}   {} / {}",
                                     tr(lang, "rules.providers"),
+                                    provider_count,
                                     this.state.providers.len()
                                 )
                             } else {
                                 format!(
-                                    "{}   /   {}",
+                                    "{}   {} / {}",
                                     tr(lang, "rules.section"),
+                                    rule_count,
                                     this.state.rules.len()
                                 )
                             })
@@ -162,7 +157,8 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                             .into_any_element(),
                         RuleRow::Rule(ix) => {
                             let rule = &this.state.rules[ix];
-                            base.text_sm()
+                            base.debug_selector(move || format!("rule-row-{ix}"))
+                                .text_sm()
                                 .border_b_1()
                                 .border_color(cx.theme().border.opacity(0.45))
                                 .hover(|row| row.bg(cx.theme().list_hover))
@@ -207,20 +203,48 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         .min_h_0()
         .gap_4()
         .child(
-            PageHeader::new(tr(lang, "rules.title")).child(
-                Button::new("refresh-rules")
-                    .debug_selector(|| "refresh-rules".into())
-                    .label(tr(lang, "common.refresh"))
-                    .small()
-                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
-                    .outline()
-                    .loading(refreshing)
-                    .on_click(
-                        cx.listener(|this, _, _, cx| this.dispatch(UiAction::RefreshRules, cx)),
-                    ),
-            ),
+            PageHeader::new(tr(lang, "rules.title"))
+                .child(filters::count(rule_count, view.state.rules.len(), cx))
+                .child(
+                    Button::new("refresh-rules")
+                        .debug_selector(|| "refresh-rules".into())
+                        .label(tr(lang, "common.refresh"))
+                        .small()
+                        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
+                        .outline()
+                        .loading(refreshing)
+                        .on_click(
+                            cx.listener(|this, _, _, cx| this.dispatch(UiAction::RefreshRules, cx)),
+                        ),
+                ),
         )
-        .child(
+        .child(toolbar(view, cx))
+        .child(if empty {
+            if refreshing && view.state.rules.is_empty() && view.state.providers.is_empty() {
+                super::skeleton_rows(5).into_any_element()
+            } else {
+                super::EmptyState::new(
+                    gpui_kit::component::IconName::BookOpen,
+                    tr(
+                        lang,
+                        if view.filters.active(Page::Rules) {
+                            "filters.empty"
+                        } else {
+                            "rules.empty.title"
+                        },
+                    ),
+                    tr(
+                        lang,
+                        if view.filters.active(Page::Rules) {
+                            "filters.empty.desc"
+                        } else {
+                            "rules.empty.desc"
+                        },
+                    ),
+                )
+                .into_any_element()
+            }
+        } else {
             div()
                 .debug_selector(|| "rule-list".into())
                 .relative()
@@ -228,7 +252,41 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 .min_h_0()
                 .overflow_hidden()
                 .child(list)
-                .child(Scrollbar::vertical(&view.rule_scroll)),
-        )
+                .child(Scrollbar::vertical(&view.rule_scroll))
+                .into_any_element()
+        })
         .into_any_element()
+}
+
+fn toolbar(view: &MainView, cx: &mut Context<MainView>) -> impl IntoElement {
+    h_flex()
+        .debug_selector(|| "rules-filters".into())
+        .gap_2()
+        .h_8()
+        .child(filters::search(&view.filters.rule_search, "rules-search"))
+        .child(filters::choice(
+            view,
+            Choice {
+                id: "rules-type",
+                label: "rules.column.type",
+                page: Page::Rules,
+                selected: view.filters.rules.kind.clone(),
+                options: filters::choices(view.state.rules.iter().map(|r| r.kind.clone())),
+                set: |v, value| v.filters.rules.kind = value,
+            },
+            cx,
+        ))
+        .child(filters::choice(
+            view,
+            Choice {
+                id: "rules-target",
+                label: "rules.column.target",
+                page: Page::Rules,
+                selected: view.filters.rules.target.clone(),
+                options: filters::choices(view.state.rules.iter().map(|r| r.proxy.clone())),
+                set: |v, value| v.filters.rules.target = value,
+            },
+            cx,
+        ))
+        .child(filters::clear_button(view, Page::Rules, cx))
 }
