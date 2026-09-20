@@ -249,22 +249,6 @@ pub fn run() {
                             let _ = protocol_version;
                         }
                         ClientEvent::Response(envelope) => {
-                            let (yaml_load_error, merge_load_error, merged_load_error) =
-                                match &envelope.response {
-                                    UiResponse::Profile {
-                                        request: AppCommand::GetProfileYaml { .. },
-                                        result: Err(error),
-                                    } => (Some(error.clone()), None, None),
-                                    UiResponse::Profile {
-                                        request: AppCommand::GetMergeConfig,
-                                        result: Err(error),
-                                    } => (None, Some(error.clone()), None),
-                                    UiResponse::Profile {
-                                        request: AppCommand::GetMergedProfileYaml { .. } | AppCommand::PreviewMergeConfig { .. },
-                                        result: Err(error),
-                                    } => (None, None, Some(error.clone())),
-                                    _ => (None, None, None),
-                                };
                             let import_preview_failed = matches!(
                                 &envelope.response,
                                 UiResponse::Profile {
@@ -284,19 +268,11 @@ pub fn run() {
                                     let toast = toast_for(lang, &envelope.response);
                                     let refresh_settings = matches!(&envelope.response, UiResponse::Profile { request: AppCommand::ImportApplicationSettings { .. } | AppCommand::ResetApplicationSettingsScope { .. }, result: Ok(_) });
                                     view.ai_response(&envelope.response, window, cx);
+                                    view.profile_sheet_response(&envelope, window, cx);
                                     view.state.apply_response_envelope(envelope);
                                     view.finish_ai_save(window, cx);
                                     if refresh_settings { view.dispatch(UiAction::RefreshSettings, cx); }
                                     set_app_menus(view.lang(), cx);
-                                    if let Some(error) = &yaml_load_error {
-                                        view.fail_yaml_sheet(error, window, cx);
-                                    }
-                                    if let Some(error) = &merge_load_error {
-                                        view.fail_merge_sheet(error, window, cx);
-                                    }
-                                    if let Some(error) = &merged_load_error {
-                                        view.fail_merged_sheet(error, window, cx);
-                                    }
                                     if import_preview_failed {
                                         view.fail_import_preview();
                                     }
@@ -306,11 +282,6 @@ pub fn run() {
                                     view.sync_form_inputs(window, cx);
                                     view.sync_connections(cx);
                                     view.sync_proxies(cx);
-                                    // “查看 YAML”在加载完成后打开 Sheet。
-                                    view.maybe_open_yaml_sheet(window, cx);
-                                    // Merge 配置与合并结果 Sheet 同样在加载完成后填充。
-                                    view.maybe_open_merge_sheet(window, cx);
-                                    view.maybe_open_merged_sheet(window, cx);
                                     // 设置导入预览到达后打开差异确认弹窗。
                                     view.maybe_open_import_preview_dialog(window, cx);
                                     if let Some(toast) = toast {

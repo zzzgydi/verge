@@ -1,8 +1,8 @@
 use crate::{
-    domain::{AppError, ProfileId},
+    domain::{AppCommand, AppCommandOutput, AppError, ErrorCode, ProfileId},
     i18n::{self, tr},
-    ui::UiAction,
-    view::MainView,
+    ui::{UiAction, UiResponse, UiResponseEnvelope},
+    view::{MainView, SheetState},
 };
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, WindowExt as _,
@@ -18,8 +18,12 @@ use gpui_kit::*;
 impl MainView {
     pub fn open_yaml_sheet(&mut self, id: ProfileId, window: &mut Window, cx: &mut Context<Self>) {
         let lang = self.lang();
-        self.sheet_state
-            .update(cx, |state, _| state.pending_yaml = Some(id.clone()));
+        self.sheet_state.update(cx, |state, _| {
+            *state = SheetState {
+                pending_yaml: Some(id.clone()),
+                ..Default::default()
+            };
+        });
         self.yaml_editor.update(cx, |editor, cx| {
             editor.set_value(tr(lang, "sheet.yaml.loading"), window, cx)
         });
@@ -37,6 +41,12 @@ impl MainView {
             sheet
                 .title(i18n::fmt_titled(lang, "sheet.yaml.title", id.as_str()))
                 .size(rems(32.))
+                .on_close({
+                    let sheet_state = sheet_state.clone();
+                    move |_, _, cx| {
+                        sheet_state.update(cx, |state, _| *state = SheetState::default())
+                    }
+                })
                 .child(
                     div()
                         .flex_1()
@@ -68,6 +78,7 @@ impl MainView {
                         )
                         .child(
                             Button::new("save-yaml")
+                                .debug_selector(|| "save-yaml".into())
                                 .label(tr(lang, "sheet.yaml.save"))
                                 .primary()
                                 .disabled(loading)
@@ -90,7 +101,7 @@ impl MainView {
                                                         .cancel_text(tr(lang, "common.cancel"))
                                                         .show_cancel(true),
                                                 )
-                                                .on_ok(move |_, window, cx| {
+                                                .on_ok(move |_, _, cx| {
                                                     view.update(cx, |this, cx| {
                                                         let yaml = this
                                                             .yaml_editor
@@ -105,7 +116,6 @@ impl MainView {
                                                             cx,
                                                         );
                                                     });
-                                                    window.close_sheet(cx);
                                                     true
                                                 })
                                         });
@@ -114,25 +124,94 @@ impl MainView {
                         ),
                 )
         });
-        self.dispatch(UiAction::LoadProfileYaml(request_id), cx);
+        self.load_profile_sheet(UiAction::LoadProfileYaml(request_id), window, cx);
     }
 
-    /// YAML 加载成功后填入已经打开的 Sheet。
-    pub fn maybe_open_yaml_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let want = self.sheet_state.read(cx).pending_yaml.clone();
-        let Some(want) = want else {
-            return;
-        };
-        let Some((id, yaml)) = self.state.profile_yaml.clone() else {
-            return;
-        };
-        if id != want {
+    fn load_profile_sheet(
+        &mut self,
+        action: UiAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let request_id = self.dispatch_sheet_request(action, cx);
+        self.sheet_state
+            .update(cx, |state, _| state.request_id = request_id);
+        if request_id.is_none() {
+            let error = self.state.last_error.clone().unwrap_or_else(|| {
+                AppError::new(
+                    ErrorCode::Conflict,
+                    tr(self.lang(), "connection.reconnecting"),
+                )
+            });
+            if self.sheet_state.read(cx).pending_yaml.is_some() {
+                self.fail_yaml_sheet(&error, window, cx);
+            } else if self.sheet_state.read(cx).pending_merge {
+                self.fail_merge_sheet(&error, window, cx);
+            } else {
+                self.fail_merged_sheet(&error, window, cx);
+            }
+        }
+    }
+
+    /// 只消费当前编辑器请求的结果；无关响应和上次缓存都不能结束加载。
+    pub(crate) fn profile_sheet_response(
+        &mut self,
+        envelope: &UiResponseEnvelope,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if envelope.request_id.is_none()
+            || envelope.request_id != self.sheet_state.read(cx).request_id
+        {
             return;
         }
+        let UiResponse::Profile { request, result } = &envelope.response else {
+            return;
+        };
         self.sheet_state
-            .update(cx, |state, _| state.pending_yaml = None);
-        self.yaml_editor
-            .update(cx, |editor, cx| editor.set_value(yaml.clone(), window, cx));
+            .update(cx, |state, _| state.request_id = None);
+        match request {
+            AppCommand::GetProfileYaml { id }
+                if self.sheet_state.read(cx).pending_yaml.as_ref() == Some(id) =>
+            {
+                match result {
+                    Ok(result) => {
+                        if let AppCommandOutput::ProfileYaml { yaml, .. } = &result.output {
+                            self.sheet_state
+                                .update(cx, |state, _| state.pending_yaml = None);
+                            self.yaml_editor.update(cx, |editor, cx| {
+                                editor.set_value(yaml.clone(), window, cx)
+                            });
+                        }
+                    }
+                    Err(error) => self.fail_yaml_sheet(error, window, cx),
+                }
+            }
+            AppCommand::GetMergeConfig if self.sheet_state.read(cx).pending_merge => match result {
+                Ok(result) => {
+                    if let AppCommandOutput::MergeConfigYaml { yaml } = &result.output {
+                        self.sheet_state
+                            .update(cx, |state, _| state.pending_merge = false);
+                        self.merge_editor
+                            .update(cx, |editor, cx| editor.set_value(yaml.clone(), window, cx));
+                    }
+                }
+                Err(error) => self.fail_merge_sheet(error, window, cx),
+            },
+            AppCommand::GetMergedProfileYaml { id } | AppCommand::PreviewMergeConfig { id, .. }
+                if self.sheet_state.read(cx).pending_merged.as_ref() == Some(id) =>
+            {
+                match result {
+                    Ok(result) => {
+                        if let AppCommandOutput::MergedProfileYaml { yaml, .. } = &result.output {
+                            self.show_merged_result(yaml.clone(), window, cx);
+                        }
+                    }
+                    Err(error) => self.fail_merged_sheet(error, window, cx),
+                }
+            }
+            _ => {}
+        }
     }
 
     /// YAML 加载失败时保留 Sheet，并在编辑器内直接显示错误。
@@ -153,11 +232,15 @@ impl MainView {
         });
     }
 
-    /// 点击后立即打开 Merge 配置 Sheet；加载完成后由响应轮询填入编辑器。
+    /// 点击后立即打开 Merge 配置 Sheet；匹配的响应到达后填入编辑器。
     pub fn open_merge_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let lang = self.lang();
-        self.sheet_state
-            .update(cx, |state, _| state.pending_merge = true);
+        self.sheet_state.update(cx, |state, _| {
+            *state = SheetState {
+                pending_merge: true,
+                ..Default::default()
+            };
+        });
         self.merge_editor.update(cx, |editor, cx| {
             editor.set_value(tr(lang, "sheet.merge.loading"), window, cx)
         });
@@ -175,6 +258,12 @@ impl MainView {
             sheet
                 .title(tr(lang, "sheet.merge.title"))
                 .size(rems(32.))
+                .on_close({
+                    let sheet_state = sheet_state.clone();
+                    move |_, _, cx| {
+                        sheet_state.update(cx, |state, _| *state = SheetState::default())
+                    }
+                })
                 .child(
                     v_flex()
                         .flex_1()
@@ -201,6 +290,7 @@ impl MainView {
                         .justify_end()
                         .child(
                             Button::new("preview-merge")
+                                .debug_selector(|| "preview-merge".into())
                                 .label(tr(lang, "sheet.merge.preview"))
                                 .outline()
                                 .disabled(loading || selected_profile.is_none())
@@ -219,8 +309,9 @@ impl MainView {
                                                     state.merge_preview_dialog = true
                                                 });
                                                 view.state.merged_yaml = None;
-                                                view.dispatch(
+                                                view.load_profile_sheet(
                                                     UiAction::PreviewMergeConfig { id, yaml },
+                                                    window,
                                                     cx,
                                                 );
                                                 window.push_notification(
@@ -276,21 +367,7 @@ impl MainView {
                         ),
                 )
         });
-        self.dispatch(UiAction::LoadMergeConfig, cx);
-    }
-
-    /// Merge 配置加载成功后填入已经打开的 Sheet。
-    pub fn maybe_open_merge_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.sheet_state.read(cx).pending_merge {
-            return;
-        }
-        let Some(yaml) = self.state.merge_yaml.clone() else {
-            return;
-        };
-        self.sheet_state
-            .update(cx, |state, _| state.pending_merge = false);
-        self.merge_editor
-            .update(cx, |editor, cx| editor.set_value(yaml.clone(), window, cx));
+        self.load_profile_sheet(UiAction::LoadMergeConfig, window, cx);
     }
 
     /// Merge 配置加载失败时保留 Sheet，并在编辑器内直接显示错误。
@@ -319,8 +396,12 @@ impl MainView {
         cx: &mut Context<Self>,
     ) {
         let lang = self.lang();
-        self.sheet_state
-            .update(cx, |state, _| state.pending_merged = Some(id.clone()));
+        self.sheet_state.update(cx, |state, _| {
+            *state = SheetState {
+                pending_merged: Some(id.clone()),
+                ..Default::default()
+            };
+        });
         self.merged_editor.update(cx, |editor, cx| {
             editor.set_value(tr(lang, "sheet.merged.loading"), window, cx)
         });
@@ -336,13 +417,19 @@ impl MainView {
             sheet
                 .title(i18n::fmt_titled(lang, "sheet.merged.title", id.as_str()))
                 .size(rems(32.))
+                .on_close({
+                    let sheet_state = sheet_state.clone();
+                    move |_, _, cx| {
+                        sheet_state.update(cx, |state, _| *state = SheetState::default())
+                    }
+                })
                 .child(
                     div()
                         .flex_1()
                         .min_h_0()
                         .font_family(mono)
                         .text_xs()
-                        .child(Textarea::new(&editor).h_full()),
+                        .child(Textarea::new(&editor).readonly(true).h_full()),
                 )
                 .footer(
                     h_flex().gap_2().justify_end().child(
@@ -364,21 +451,10 @@ impl MainView {
                     ),
                 )
         });
-        self.dispatch(UiAction::LoadMergedYaml(request_id), cx);
+        self.load_profile_sheet(UiAction::LoadMergedYaml(request_id), window, cx);
     }
 
-    /// 合并结果加载成功后填入已经打开的 Sheet。
-    pub fn maybe_open_merged_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let want = self.sheet_state.read(cx).pending_merged.clone();
-        let Some(want) = want else {
-            return;
-        };
-        let Some((id, yaml)) = self.state.merged_yaml.clone() else {
-            return;
-        };
-        if id != want {
-            return;
-        }
+    fn show_merged_result(&mut self, yaml: String, window: &mut Window, cx: &mut Context<Self>) {
         self.sheet_state
             .update(cx, |state, _| state.pending_merged = None);
         self.merged_editor
@@ -392,7 +468,11 @@ impl MainView {
                 dialog
                     .title(tr(lang, "sheet.merge.preview"))
                     .width(rems(36.).to_pixels(window.rem_size()))
-                    .child(div().h(px(340.)).child(Textarea::new(&editor).h_full()))
+                    .child(
+                        div()
+                            .h(px(340.))
+                            .child(Textarea::new(&editor).readonly(true).h_full()),
+                    )
             });
         }
     }
@@ -404,8 +484,10 @@ impl MainView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.sheet_state
-            .update(cx, |state, _| state.pending_merged = None);
+        self.sheet_state.update(cx, |state, _| {
+            state.pending_merged = None;
+            state.merge_preview_dialog = false;
+        });
         self.merged_editor.update(cx, |editor, cx| {
             editor.set_value(
                 i18n::fmt_load_failed(self.lang(), "sheet.merged.load_failed", &error.message),

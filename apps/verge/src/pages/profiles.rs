@@ -1,5 +1,7 @@
 mod actions;
 mod sheets;
+#[cfg(test)]
+mod tests;
 use super::components::{PageHeader, panel};
 use crate::{
     domain::{Profile, ProfileSource, UpdatePolicy},

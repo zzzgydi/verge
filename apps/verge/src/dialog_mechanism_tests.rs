@@ -1042,11 +1042,31 @@ fn merge_preview_keeps_editor_draft_and_opens_a_result_dialog(cx: &mut TestAppCo
                 .update(cx, |editor, cx| editor.set_value("rules: []", window, cx));
             let id = ProfileId::parse("draft").unwrap();
             view.sheet_state.update(cx, |state, _| {
+                state.request_id = Some(42);
                 state.pending_merged = Some(id.clone());
                 state.merge_preview_dialog = true;
             });
-            view.state.merged_yaml = Some((id, "mode: global".into()));
-            view.maybe_open_merged_sheet(window, cx);
+            view.profile_sheet_response(
+                &crate::ui::UiResponseEnvelope {
+                    request_id: Some(42),
+                    operation_id: Some(42),
+                    response: crate::ui::UiResponse::Profile {
+                        request: crate::domain::AppCommand::PreviewMergeConfig {
+                            id: id.clone(),
+                            yaml: "rules: []".into(),
+                        },
+                        result: Ok(crate::domain::AppCommandResult {
+                            output: crate::domain::AppCommandOutput::MergedProfileYaml {
+                                id,
+                                yaml: "mode: global".into(),
+                            },
+                            summary: String::new(),
+                        }),
+                    },
+                },
+                window,
+                cx,
+            );
             assert!(window.has_active_dialog(cx));
             assert_eq!(view.merge_editor.read(cx).value().as_str(), "rules: []");
             assert_eq!(view.merged_editor.read(cx).value().as_str(), "mode: global");

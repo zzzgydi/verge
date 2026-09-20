@@ -46,6 +46,8 @@ actions!(
 /// MainView 会 double-lease panic。因此这些状态放进独立实体，builder 只读它。
 #[derive(Default)]
 pub struct SheetState {
+    /// 唯一一次编辑器加载/预览请求；共享缓存不能代表本次请求已完成。
+    pub request_id: Option<u64>,
     /// 正在等待 YAML 加载的配置 id。
     pub pending_yaml: Option<ProfileId>,
     /// 正在等待 Merge 配置加载。
@@ -347,6 +349,24 @@ impl MainView {
             },
             cx,
         );
+    }
+
+    /// Sheet 的读取和预览各只发送一个请求，保留其 ID 以匹配响应。
+    pub(crate) fn dispatch_sheet_request(
+        &mut self,
+        action: UiAction,
+        cx: &mut Context<Self>,
+    ) -> Option<u64> {
+        let request_id = self.next_request_id;
+        self.dispatch_with_context(
+            action,
+            CommandContext {
+                actor: CommandActor::UserInterface,
+                approval: None,
+            },
+            cx,
+        )
+        .then_some(request_id)
     }
 
     pub(crate) fn try_dispatch_ai(
