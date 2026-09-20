@@ -14,7 +14,7 @@ dev-stop:
 mihomo:
 	@./scripts/ensure-mihomo.sh
 
-# Local optimized .app and ZIP, with bundled Mihomo and ad-hoc signing by default.
+# Local optimized .app, updater ZIP and drag-to-install DMG.
 release:
 	@./apps/verge/scripts/build-macos-app.sh
 	@$(MAKE) --no-print-directory release-size

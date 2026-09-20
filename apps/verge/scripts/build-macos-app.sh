@@ -66,3 +66,4 @@ archive="$repo_dir/dist/Verge-macos-arm64.zip"
 
 echo "$bundle"
 echo "$archive"
+"$repo_dir/scripts/build-dmg.sh"

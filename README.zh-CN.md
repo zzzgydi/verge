@@ -136,7 +136,7 @@ make dev
 
 ## 构建 macOS 应用
 
-本机 Release 应用和压缩包可一键生成：
+本机 Release 应用、拖拽安装 DMG 和自动更新 ZIP 可一键生成：
 
 ```bash
 make release
@@ -150,14 +150,21 @@ SHA-256；helper 的摘要在签名完成后生成。
 产物：
 
 - `dist/Verge.app`：包含 Mihomo 和 TUN helper 的独立应用。
-- `dist/Verge-macos-arm64.zip`：应用压缩包。
+- `dist/Verge-macos-arm64.dmg`：拖拽安装包。
+- `dist/Verge-macos-arm64.dmg.sha256`：DMG 摘要。
+- `dist/Verge-macos-arm64.zip`：供自动更新使用的应用压缩包。
 - `dist/Verge-macos-arm64.zip.sha256`：压缩包摘要。
 
-打包结束会显示应用、ZIP、主程序和内核的体积；之后可用 `make release-size`
-重新查看，无需构建。可以将 `Verge.app` 拷贝到 `/Applications`，也可以直接打开：
+打开 DMG，将 Verge 拖到 Applications，然后从“应用程序”启动。
+`make release` 只生成产物，不安装、启动或退出应用。日常使用安装后的版本，
+不要长期从 `dist` 运行；下次构建会替换这个目录中的应用包。
+
+DMG 脚本自动下载并校验固定版本的 `create-dmg` v1.3.0，缓存在 `.cache/`。
+Finder 布局需要 macOS 图形会话，并允许执行命令的终端控制 Finder。ZIP 继续
+用于应用自动更新。之后可用 `make release-size` 查看各产物体积，无需重新构建。
 
 ```bash
-open dist/Verge.app
+open dist/Verge-macos-arm64.dmg
 ```
 
 在终端中构建并启动包内程序：
@@ -186,7 +193,8 @@ make release
 ```
 
 默认使用供本机测试的 ad-hoc 签名，并执行 `codesign --verify --deep --strict`
-验证应用包。脚本不负责公证或发布。
+验证应用包。脚本不负责公证或发布。只给外层应用签 Developer ID 还不足以完成
+公证：重新签名 Mihomo 会改变固定摘要，需要同时调整构建和运行时校验。
 
 ## 测试
 
@@ -212,7 +220,7 @@ MIHOMO_BIN=/absolute/path/to/mihomo \
 
 ## 使用
 
-1. 构建并打开 `dist/Verge.app`，开发时也可以直接运行 GPUI target。
+1. 从 DMG 安装 Verge，再从“应用程序”启动。开发时使用 `make dev`，系统网络仍由正式版管理。
 2. 打开“配置”，粘贴本地 YAML 内容或填写远程订阅地址。
 3. 启用配置。Verge 会先校验并生成私有运行配置，再启动或重载 Mihomo。
 4. 在“概览”或菜单栏打开系统代理，并选择 Rule、Global 或 Direct 模式。

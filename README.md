@@ -164,7 +164,7 @@ These variables are for development and testing. Do not put real secrets in shel
 
 ## Build the macOS application
 
-Build a local Release app and ZIP with one command:
+Build a local Release app, drag-to-install DMG, and updater ZIP with one command:
 
 ```bash
 make release
@@ -179,15 +179,22 @@ and pinned SHA-256; the helper checksum is recorded after signing.
 Outputs:
 
 - `dist/Verge.app`: standalone application with Mihomo and the TUN helper bundled.
-- `dist/Verge-macos-arm64.zip`: compressed application bundle.
+- `dist/Verge-macos-arm64.dmg`: drag Verge into Applications to install.
+- `dist/Verge-macos-arm64.dmg.sha256`: DMG checksum.
+- `dist/Verge-macos-arm64.zip`: application bundle used by the updater.
 - `dist/Verge-macos-arm64.zip.sha256`: archive checksum.
 
-The command also reports the app, ZIP, executable, and sidecar sizes. To show
-sizes again without building, run `make release-size`. You can copy `Verge.app`
-to `/Applications` or open it directly:
+Open the DMG, drag Verge onto Applications, and launch it from Applications for
+daily use. `make release` only builds artifacts; it does not install, launch, or
+stop an app. Keep the installed app outside `dist`, which is replaced on rebuild.
+
+DMG packaging automatically downloads and verifies pinned `create-dmg` v1.3.0
+into `.cache/`. Its Finder layout requires a macOS graphical session and permission
+for the invoking terminal to control Finder. ZIP output remains available for
+app updates. Run `make release-size` to inspect artifact sizes without rebuilding.
 
 ```bash
-open dist/Verge.app
+open dist/Verge-macos-arm64.dmg
 ```
 
 To build and run the bundled executable from the terminal:
@@ -219,7 +226,9 @@ make release
 
 The default signature is ad-hoc and is intended for local testing. The script
 verifies the bundle with `codesign --verify --deep --strict`; notarization and
-publishing are not included.
+publishing are not included. A Developer ID on the outer bundle alone is not a
+complete notarization workflow: signing the bundled Mihomo also changes its
+pinned digest and requires coordinated build/runtime verification changes.
 
 ## Testing
 
@@ -245,7 +254,7 @@ The binary must match the pinned executable checksum in `assets/mihomo/manifest.
 
 ## Use
 
-1. Build and open `dist/Verge.app`, or run the GPUI target during development.
+1. Install Verge from the DMG and open it from Applications. For development, use `make dev`; system network controls remain with the installed app.
 2. Open **Profiles** and import local YAML content or a remote subscription URL.
 3. Activate the profile. Verge validates and materializes a private Mihomo runtime configuration before starting or reloading the core.
 4. Use **Overview** or the menu bar to enable the system proxy and choose Rule, Global, or Direct mode.
