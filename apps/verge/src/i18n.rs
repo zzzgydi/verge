@@ -194,8 +194,43 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ),
     (
         "ai.error_network",
-        "连接失败或等待超时，请检查网络和服务地址后重试。",
-        "Connection failed or timed out. Check your network and service address, then retry.",
+        "无法连接服务，请检查网络、代理和服务地址后重试。",
+        "Could not connect to the service. Check your network, proxy and service address, then retry.",
+    ),
+    (
+        "ai.error_timeout",
+        "等待服务响应超时，请检查网络和代理，或在高级设置中延长超时时间。",
+        "The service did not respond in time. Check your network and proxy, or increase the timeout in advanced settings.",
+    ),
+    (
+        "ai.error_api_address",
+        "这个地址返回的是网页。请填写服务商的 API 地址，通常需在域名后添加 /v1。",
+        "This address returned a web page. Use the provider's API base address, usually with /v1 after the domain.",
+    ),
+    (
+        "ai.error_stream_format",
+        "服务没有返回流式回复，请确认地址和模型支持 Chat Completions 流式接口。",
+        "The service did not return a stream. Check that the address and model support streaming Chat Completions.",
+    ),
+    (
+        "ai.error_refused",
+        "服务或代理拒绝连接，请检查地址、端口，并确认对应服务已启动。",
+        "The service or proxy refused the connection. Check its address and port, and make sure it is running.",
+    ),
+    (
+        "ai.error_dns",
+        "无法解析服务或代理的域名，请检查地址和 DNS 设置。",
+        "Could not resolve the service or proxy hostname. Check the address and DNS settings.",
+    ),
+    (
+        "ai.error_tls",
+        "无法建立安全连接，请检查服务证书、系统时间，以及代理是否正常。",
+        "Could not establish a secure connection. Check the service certificate, system time and proxy.",
+    ),
+    (
+        "ai.error_disconnected",
+        "连接在响应完成前断开，请检查服务和代理后重试。",
+        "The connection closed before the response completed. Check the service and proxy, then retry.",
     ),
     (
         "ai.error_limit",

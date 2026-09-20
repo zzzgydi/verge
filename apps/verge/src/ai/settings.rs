@@ -33,13 +33,7 @@ impl ProviderConfig {
         self.base_url = self.base_url.trim().trim_end_matches('/').to_owned();
         self.model = self.model.trim().to_owned();
         let url = reqwest::Url::parse(&self.base_url).map_err(|_| error("Invalid AI Base URL"))?;
-        let local = url.host_str().is_some_and(|host| {
-            host == "localhost"
-                || host
-                    .trim_matches(['[', ']'])
-                    .parse::<std::net::IpAddr>()
-                    .is_ok_and(|ip| ip.is_loopback())
-        });
+        let local = is_loopback(&url);
         if self.base_url.len() > 2048
             || !(url.scheme() == "https" || (url.scheme() == "http" && local))
             || url.host_str().is_none()
@@ -67,6 +61,16 @@ impl ProviderConfig {
     pub fn endpoint(&self) -> String {
         format!("{}/chat/completions", self.base_url)
     }
+}
+
+pub(super) fn is_loopback(url: &reqwest::Url) -> bool {
+    url.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .trim_matches(['[', ']'])
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+    })
 }
 
 #[derive(Default, Serialize, Deserialize)]

@@ -57,8 +57,24 @@ pub(super) fn error_text(lang: Lang, error: &str) -> String {
         "ai.error_quota"
     } else if error.contains("404") {
         "ai.error_model"
-    } else if error.contains("timed out") || error.contains("deadline") || error.contains("timeout")
-    {
+    } else if error == "AI endpoint returned a web page instead of an API response" {
+        "ai.error_api_address"
+    } else if error == "AI provider did not return an event stream" {
+        "ai.error_stream_format"
+    } else if error == "AI connection refused" {
+        "ai.error_refused"
+    } else if error == "AI DNS lookup failed" {
+        "ai.error_dns"
+    } else if error == "AI TLS handshake failed" {
+        "ai.error_tls"
+    } else if error == "AI connection reset" || error == "AI stream disconnected" {
+        "ai.error_disconnected"
+    } else if error == "AI connection failed or timed out" {
+        // Compatibility with older daemons that discarded the underlying cause.
+        "ai.error_network"
+    } else if error.contains("timed out") || error.contains("deadline") {
+        "ai.error_timeout"
+    } else if error == "AI connection failed" || error == "AI request failed" {
         "ai.error_network"
     } else if error.contains("Conversation limit") {
         "ai.error_limit"
@@ -212,6 +228,29 @@ mod tests {
     #[test]
     fn errors_and_evidence_explain_what_to_do() {
         assert!(error_text(Lang::ZhCn, "AI provider HTTP 401").contains("密钥"));
+        for (failure, hint) in [
+            (
+                "AI endpoint returned a web page instead of an API response",
+                "/v1",
+            ),
+            ("AI provider did not return an event stream", "流式"),
+            ("AI connection refused", "端口"),
+            ("AI DNS lookup failed", "DNS"),
+            ("AI TLS handshake failed", "证书"),
+            ("AI request timed out", "超时时间"),
+            ("AI turn timed out", "超时时间"),
+            ("AI stream disconnected", "断开"),
+        ] {
+            assert!(error_text(Lang::ZhCn, failure).contains(hint), "{failure}");
+            assert_ne!(error_text(Lang::En, failure), failure);
+        }
+        assert!(
+            error_text(
+                Lang::ZhCn,
+                "Set a model, timeout of 5–120 seconds and tool limit of 1–8"
+            )
+            .contains("高级设置")
+        );
         let e = Evidence {
             id: "R1-E7".into(),
             source: "config_check".into(),
