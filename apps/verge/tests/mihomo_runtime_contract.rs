@@ -1,6 +1,6 @@
 use std::{
     env, fs,
-    io::Write,
+    io::{Read, Write},
     net::{SocketAddr, TcpListener},
     path::{Path, PathBuf},
     thread,
@@ -161,6 +161,68 @@ fn application_commands_drive_pinned_mihomo() {
         .write_all(b"GET http://example.invalid/ HTTP/1.1\r\nHost: example.invalid\r\n\r\n")
         .unwrap();
 
+    // Keep a real proxied connection open: an empty snapshot must not satisfy
+    // the contract, since it never exercises Mihomo's connection metadata.
+    handler
+        .execute(RuntimeCommand::SelectProxy {
+            group: "contract".into(),
+            proxy: "DIRECT".into(),
+        })
+        .unwrap();
+    let target = TcpListener::bind("127.0.0.1:0").unwrap();
+    let destination = target.local_addr().unwrap();
+    let mut active_proxy = std::net::TcpStream::connect(("127.0.0.1", mixed_port)).unwrap();
+    active_proxy
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    active_proxy
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    write!(
+        active_proxy,
+        "CONNECT {destination} HTTP/1.1\r\nHost: {destination}\r\n\r\n"
+    )
+    .unwrap();
+    let mut response = Vec::new();
+    while !response.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        active_proxy.read_exact(&mut byte).unwrap();
+        response.push(byte[0]);
+        assert!(response.len() < 4096);
+    }
+    assert!(response.starts_with(b"HTTP/1.1 200 "));
+    target.set_nonblocking(true).unwrap();
+    let accept_deadline = Instant::now() + Duration::from_secs(2);
+    let mut upstream = loop {
+        match target.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(
+                    Instant::now() < accept_deadline,
+                    "proxy did not reach target"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("accept proxy connection: {error}"),
+        }
+    };
+    upstream.set_nonblocking(false).unwrap();
+    upstream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    upstream
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    active_proxy.write_all(b"upload").unwrap();
+    let mut uploaded = [0; 6];
+    upstream.read_exact(&mut uploaded).unwrap();
+    assert_eq!(&uploaded, b"upload");
+    upstream.write_all(b"download").unwrap();
+    let mut downloaded = [0; 8];
+    active_proxy.read_exact(&mut downloaded).unwrap();
+    assert_eq!(&downloaded, b"download");
+    let source = active_proxy.local_addr().unwrap().to_string();
+
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut traffic = false;
     let mut memory = false;
@@ -172,13 +234,26 @@ fn application_commands_drive_pinned_mihomo() {
             for event in events {
                 traffic |= matches!(event, RealtimeEvent::Traffic(_));
                 memory |= matches!(event, RealtimeEvent::Memory(_));
-                connections |= matches!(event, RealtimeEvent::Connections(_));
+                if let RealtimeEvent::Connections(snapshot) = &event {
+                    connections |= snapshot.connections.iter().any(|connection| {
+                        !connection.id.is_empty()
+                            && connection.source == source
+                            && connection.destination == destination.to_string()
+                            && connection.network == "tcp"
+                            && connection.upload >= 6
+                            && connection.download >= 8
+                            && connection.chains.iter().any(|chain| chain == "DIRECT")
+                    });
+                }
                 logs |= matches!(event, RealtimeEvent::Log(_));
             }
         }
         thread::sleep(Duration::from_millis(20));
     }
-    assert!((traffic && memory && connections && logs));
+    assert!(
+        traffic && memory && connections && logs,
+        "missing realtime data: traffic={traffic}, memory={memory}, active_connection={connections}, logs={logs}"
+    );
     handler.execute(RuntimeCommand::StopRealtime).unwrap();
     drop(runtime);
     supervisor.stop().unwrap();

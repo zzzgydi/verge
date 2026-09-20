@@ -291,9 +291,11 @@ fn parse_event(topic: RealtimeTopic, text: &str) -> Result<RealtimeEvent, AppErr
                 network: String,
                 #[serde(rename = "sourceIP")]
                 source_ip: String,
+                #[serde(deserialize_with = "deserialize_port")]
                 source_port: u16,
                 #[serde(rename = "destinationIP")]
                 destination_ip: String,
+                #[serde(deserialize_with = "deserialize_port")]
                 destination_port: u16,
                 host: String,
                 process: String,
@@ -336,6 +338,21 @@ fn parse_event(topic: RealtimeTopic, text: &str) -> Result<RealtimeEvent, AppErr
                 connections,
             }))
         }
+    }
+}
+
+// Mihomo serializes metadata ports as decimal strings. Accept numeric ports
+// too, while retaining u16 validation and the default for omitted fields.
+fn deserialize_port<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u16, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Port {
+        Number(u16),
+        Text(String),
+    }
+    match Port::deserialize(deserializer)? {
+        Port::Number(port) => Ok(port),
+        Port::Text(port) => port.parse().map_err(serde::de::Error::custom),
     }
 }
 
@@ -422,6 +439,48 @@ mod tests {
         assert_eq!(snapshot.connections[0].destination, "1.1.1.1:443");
         assert_eq!(snapshot.connections[0].host, "example.com");
         assert_eq!(snapshot.connections[0].chains, ["Proxy", "Node"]);
+    }
+
+    #[test]
+    fn parses_mihomo_string_ports_in_active_connections() {
+        let event = parse_event(
+            RealtimeTopic::Connections,
+            r#"{"uploadTotal":11,"downloadTotal":22,"connections":[{"id":"active","metadata":{"network":"tcp","sourceIP":"127.0.0.1","sourcePort":"50123","destinationIP":"::1","destinationPort":"443","host":"example.com","processPath":"/Applications/Browser"},"upload":3,"download":4,"chains":["DIRECT"],"rule":"Match"}]}"#,
+        )
+        .unwrap();
+        let RealtimeEvent::Connections(snapshot) = event else {
+            panic!("expected connections event");
+        };
+        assert_eq!(snapshot.connection_count, 1);
+        assert_eq!(snapshot.upload_total, 11);
+        assert_eq!(snapshot.download_total, 22);
+        let connection = &snapshot.connections[0];
+        assert_eq!(connection.id, "active");
+        assert_eq!(connection.source, "127.0.0.1:50123");
+        assert_eq!(connection.destination, "[::1]:443");
+        assert_eq!(connection.process, "/Applications/Browser");
+        assert_eq!((connection.upload, connection.download), (3, 4));
+        assert_eq!(connection.chains, ["DIRECT"]);
+    }
+
+    #[test]
+    fn invalid_connection_ports_remain_errors() {
+        for field in ["sourcePort", "destinationPort"] {
+            for port in [
+                serde_json::json!(-1),
+                serde_json::json!(65536),
+                serde_json::json!("-1"),
+                serde_json::json!("65536"),
+                serde_json::json!("https"),
+            ] {
+                let payload = serde_json::json!({
+                    "uploadTotal": 0,
+                    "downloadTotal": 0,
+                    "connections": [{"metadata": {field: port}}],
+                });
+                assert!(parse_event(RealtimeTopic::Connections, &payload.to_string()).is_err());
+            }
+        }
     }
 
     #[test]
