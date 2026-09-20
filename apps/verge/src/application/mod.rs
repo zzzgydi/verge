@@ -1108,7 +1108,10 @@ impl<'a, C: CoreControl> ConfigCommandHandler<'a, C> {
         let Some(selected) = self.profiles.selected().cloned() else {
             return Ok(());
         };
-        let source = self.profiles.yaml(&selected).map_err(no_recovery)?;
+        let source = self
+            .profiles
+            .yaml(&selected)
+            .map_err(|cause| self.restore_merge(cause, &previous_yaml))?;
         let candidate = match &self.runtime_credentials {
             Some(credentials) => self.profiles.prepare_runtime_candidate(
                 &selected,
@@ -1118,11 +1121,13 @@ impl<'a, C: CoreControl> ConfigCommandHandler<'a, C> {
             ),
             None => self.profiles.prepare_merge_candidate(&selected),
         }
-        .map_err(no_recovery)?;
+        .map_err(|cause| self.restore_merge(cause, &previous_yaml))?;
         if let Err(cause) = self.core.validate_candidate(candidate.path()) {
             return Err(self.restore_merge(cause, &previous_yaml));
         }
-        let active_path = self.active_path(&selected).map_err(no_recovery)?;
+        let active_path = self
+            .active_path(&selected)
+            .map_err(|cause| self.restore_merge(cause, &previous_yaml))?;
         if let Err(cause) = self.core.apply_config(&active_path) {
             return Err(self.recover_merge(cause, &selected, &previous_yaml));
         }
@@ -2324,6 +2329,41 @@ mod tests {
         assert!(core.validated_yaml[0].contains("secret: runtime-secret"));
         assert_eq!(core.applied_yaml.len(), 1);
         assert!(core.applied_yaml[0].contains("DOMAIN,example.com,REJECT"));
+    }
+
+    #[test]
+    fn merge_io_failure_restores_persisted_rules_before_core_apply() {
+        for blocker in ["candidates/first.runtime.tmp", "runtime-config.tmp"] {
+            let directory = TestDir::new("merge-io-failure");
+            let (mut store, first, _) = store_with_profiles(&directory.0);
+            let previous = store.merge_yaml().unwrap();
+            fs::create_dir(directory.0.join(blocker)).unwrap();
+            let mut core = FakeCore::default();
+            let error = ConfigCommandHandler::with_runtime_credentials(
+                &mut store,
+                &mut core,
+                credentials(),
+            )
+            .update_merge_config(
+                "rules:\n- key: mode\n  op: override\n  value: global\n",
+                2_000,
+            )
+            .unwrap_err();
+
+            assert_eq!(error.cause.code, ErrorCode::StorageFailed, "{blocker}");
+            assert_eq!(error.recovery, RecoveryStatus::Restored, "{blocker}");
+            assert_eq!(store.merge_yaml().unwrap(), previous, "{blocker}");
+            assert_eq!(
+                FileProfileStore::open(&directory.0)
+                    .unwrap()
+                    .merge_yaml()
+                    .unwrap(),
+                previous,
+                "{blocker}"
+            );
+            assert_eq!(store.selected(), Some(&first));
+            assert!(core.applied_yaml.is_empty());
+        }
     }
 
     #[test]
