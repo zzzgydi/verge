@@ -265,7 +265,11 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
                 h_flex().justify_end().child(
                     Switch::new("switch-tun")
                         .checked(network.tun_enabled)
-                        .disabled(busy || view.is_pending(&["network_settings_write"]))
+                        .disabled(
+                            crate::identity::AppChannel::current().is_dev()
+                                || busy
+                                || view.is_pending(&["network_settings_write"]),
+                        )
                         .on_click(cx.listener(|this, checked: &bool, _, cx| {
                             if let Some(mut settings) = this.state.network_settings.clone() {
                                 settings.tun_enabled = *checked;

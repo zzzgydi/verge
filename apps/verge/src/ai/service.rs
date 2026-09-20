@@ -17,11 +17,16 @@ pub struct AiService {
     cancelled: Arc<AtomicBool>,
     directory: PathBuf,
     loaded: bool,
+    channel: crate::identity::AppChannel,
 }
 
 impl AiService {
     pub fn new(directory: PathBuf) -> Self {
+        Self::for_channel(directory, crate::identity::AppChannel::Stable)
+    }
+    pub fn for_channel(directory: PathBuf, channel: crate::identity::AppChannel) -> Self {
         Self {
+            channel,
             state: Arc::new(Mutex::new(AiSnapshot::default())),
             cancelled: Arc::new(AtomicBool::new(false)),
             directory,
@@ -98,6 +103,7 @@ impl AiService {
         let cancel = self.cancelled.clone();
         let shared = self.state.clone();
         let directory = self.directory.clone();
+        let credentials = Keychain(self.channel);
         std::thread::spawn(move || {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                 || -> Result<(), AppError> {
@@ -109,7 +115,12 @@ impl AiService {
                     } = command
                     {
                         saved = settings::save(
-                            &directory, &saved, config, api_key, clear_key, &Keychain,
+                            &directory,
+                            &saved,
+                            config,
+                            api_key,
+                            clear_key,
+                            &credentials,
                         )?;
                         let mut state = shared.lock().unwrap();
                         state.config = saved.config;
@@ -129,7 +140,7 @@ impl AiService {
                     }
                     let config = saved.config.validated()?;
                     let key = match saved.credential {
-                        Some(account) => Keychain.get(&account)?,
+                        Some(account) => credentials.get(&account)?,
                         None => Secret::default(),
                     };
                     if cancel.load(Ordering::Relaxed) {

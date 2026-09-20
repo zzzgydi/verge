@@ -102,13 +102,33 @@ cd verge
 make dev
 ```
 
-`make dev` checks the Mihomo binary first. If it is missing or does not match
-`assets/mihomo/manifest.json`, the script downloads the asset for the current
-platform, verifies both SHA-256 values, installs it under
-`.cache/mihomo/<target>/mihomo`, and passes that path to the application through
-`VERGE_MIHOMO_BIN`. The repository cache is ignored by Git and does not write to
-the user's application data directory. The current development script supports
-Apple Silicon macOS.
+`make dev` builds and opens `dist/Verge Dev.app` with bundle ID
+`com.zzzgydi.verge.dev`, a DEV icon, and its own data directory at
+`~/Library/Application Support/Verge Dev`. Profiles, settings, logs, sockets,
+locks, and Keychain services are separate from the installed Verge app.
+The script prepares the pinned Mihomo binary in `.cache/mihomo/`, verifies its
+SHA-256, and copies it into the Dev bundle. Apple Silicon macOS is supported.
+
+After a successful build and signature check, the script gracefully quits only
+the previous Dev daemon and opens the new build. A failed build leaves the old
+Dev running. `make dev-stop` stops Dev, including its core and GUI;
+`make dev-build` replaces the Dev bundle and stops the old Dev without opening a
+new window. With a custom `VERGE_DATA_DIR`, pass the same value to `make dev-stop`.
+For optimized performance testing, use `VERGE_DEV_PROFILE=release make dev`;
+optimization does not change the Dev identity.
+
+Dev can run alongside `/Applications/Verge.app`. Its backend blocks system proxy
+and PAC changes, TUN, helper installation/removal, login items, global hotkeys,
+and app replacement. Imported profiles and Merge rules cannot enable TUN.
+Use Dev for UI, rules, connections, configuration, and AI work; system network
+takeover needs a separate test session. Set different listener ports manually,
+including mixed-port, DNS, and any HTTP/SOCKS/redir/tproxy or external controller
+listeners. Send test traffic explicitly to Dev's proxy port. The installed
+app's TUN and system DNS can still influence Dev's outbound traffic.
+
+Start with fresh Dev data and import profiles as needed. Do not copy the entire
+production data directory or Keychain references. Dev refuses the default
+production directory and paths inside or above it, including symlinks.
 
 To prepare Mihomo without starting the application:
 
@@ -130,7 +150,8 @@ Useful development overrides:
 
 | Variable | Purpose |
 |---|---|
-| `VERGE_DATA_DIR` | Override `~/Library/Application Support/Verge` |
+| `VERGE_DATA_DIR` | Absolute data path; Dev defaults to `~/Library/Application Support/Verge Dev`, stable to `~/Library/Application Support/Verge` |
+| `VERGE_DEV_PROFILE` | `dev` (default) or `release` optimization, both with Dev identity |
 | `VERGE_MIHOMO_BIN` | Use a specific Mihomo executable |
 | `VERGE_MIHOMO_CACHE_DIR` | Override the repository Mihomo cache directory used by `make dev` |
 | `VERGE_MIHOMO_MANIFEST` | Use a different sidecar manifest |
@@ -177,11 +198,11 @@ make release-run
 VERGE_DATA_DIR=/tmp/verge-release-test make release-run
 ```
 
-Before switching between Debug and Release with the same data directory, use
-**Quit** in Verge's menu bar to stop the old daemon. Closing only the window
-leaves the old executable running, which would invalidate a memory comparison.
-The app uses `~/Library/Application Support/Verge` by default, as `make dev` does.
-`make release-run` returns when the GUI exits; the daemon still requires **Quit**.
+`make release-run` uses the stable identity and data directory. Quit an existing
+stable daemon before testing a replacement from `dist`; closing its window is
+not enough. For concurrent development or performance tests, use `make dev` or
+`VERGE_DEV_PROFILE=release make dev` instead. `make release-run` returns when the
+GUI exits; the stable daemon still requires **Quit**.
 
 Compare runtime memory using the same profile, page, traffic and observation
 period. In Activity Monitor, include both `verge-gpui` processes (GUI and daemon)

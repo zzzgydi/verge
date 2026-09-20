@@ -8,6 +8,7 @@ pub mod domain;
 mod format;
 mod gui;
 mod i18n;
+pub mod identity;
 pub mod ipc;
 pub mod mihomo;
 mod pages;

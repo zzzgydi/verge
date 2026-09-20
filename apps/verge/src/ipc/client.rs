@@ -98,6 +98,8 @@ impl IpcClient {
             &DaemonMessage::Hello {
                 protocol_version: PROTOCOL_VERSION,
                 app_version: app_version.to_string(),
+                maintenance: false,
+                channel: Some(crate::identity::AppChannel::current().id().into()),
             },
         )
         .map_err(ConnectError::Io)?;
@@ -129,6 +131,16 @@ impl IpcClient {
                 }
             };
 
+        if initial
+            .capabilities
+            .iter()
+            .any(|value| value == "dev_instance_v1")
+            != crate::identity::AppChannel::current().is_dev()
+        {
+            return Err(ConnectError::Protocol(
+                "daemon belongs to a different app channel".into(),
+            ));
+        }
         // 握手完成后读线程应无限阻塞等待后续消息。
         reader
             .get_mut()
@@ -213,6 +225,14 @@ mod tests {
     use super::*;
     use futures::StreamExt;
 
+    fn test_snapshot() -> InitialSnapshot {
+        let mut initial = InitialSnapshot::default();
+        if crate::identity::AppChannel::current().is_dev() {
+            initial.capabilities.push("dev_instance_v1".into());
+        }
+        initial
+    }
+
     fn temp_socket(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "verge-ipc-client-test-{}-{name}",
@@ -260,7 +280,7 @@ mod tests {
                     &mut writer,
                     &ClientMessage::Welcome {
                         protocol_version: PROTOCOL_VERSION,
-                        initial: InitialSnapshot::default(),
+                        initial: test_snapshot(),
                     },
                 )
                 .unwrap();
@@ -361,7 +381,7 @@ mod tests {
             &socket,
             ClientMessage::Welcome {
                 protocol_version: PROTOCOL_VERSION,
-                initial: InitialSnapshot::default(),
+                initial: test_snapshot(),
             },
         );
         std::thread::sleep(Duration::from_millis(100));
@@ -382,7 +402,7 @@ mod tests {
             &socket,
             ClientMessage::Welcome {
                 protocol_version: PROTOCOL_VERSION + 1,
-                initial: InitialSnapshot::default(),
+                initial: test_snapshot(),
             },
         );
         std::thread::sleep(Duration::from_millis(100));
@@ -422,7 +442,7 @@ mod tests {
                 &mut writer,
                 &ClientMessage::Welcome {
                     protocol_version: PROTOCOL_VERSION,
-                    initial: InitialSnapshot::default(),
+                    initial: test_snapshot(),
                 },
             )
             .unwrap();
@@ -508,7 +528,7 @@ mod tests {
                             conn_id,
                             ClientMessage::Welcome {
                                 protocol_version: PROTOCOL_VERSION,
-                                initial: InitialSnapshot::default(),
+                                initial: test_snapshot(),
                             },
                         );
                     }

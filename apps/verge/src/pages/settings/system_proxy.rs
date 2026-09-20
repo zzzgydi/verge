@@ -22,7 +22,8 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
     let lang = view.lang();
     let runtime = view.state.runtime_settings.clone();
     let enabled = view.state.system_proxy_enabled();
-    let busy = view.is_pending(&["system_proxy", "application_settings_write"]);
+    let busy = crate::identity::AppChannel::current().is_dev()
+        || view.is_pending(&["system_proxy", "application_settings_write"]);
     SettingsSection::new()
         .id("settings-system-proxy")
         .title(tr(lang, "settings.group.proxy"))
@@ -60,6 +61,9 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
         .into_any_element()
 }
 fn status_text(view: &MainView, lang: Lang) -> String {
+    if crate::identity::AppChannel::current().is_dev() {
+        return tr(lang, "dev.system_read_only").into();
+    }
     let Some(state) = &view.state.system_proxy else {
         return tr(lang, "settings.proxy.not_loaded").into();
     };

@@ -1,9 +1,15 @@
 SHELL := /bin/sh
 
-.PHONY: dev mihomo release release-run release-size
+.PHONY: dev dev-build dev-stop mihomo release release-run release-size
 
 dev:
 	@./scripts/dev.sh
+
+dev-build:
+	@./scripts/dev.sh --build-only
+
+dev-stop:
+	@./scripts/dev.sh --stop
 
 mihomo:
 	@./scripts/ensure-mihomo.sh

@@ -108,7 +108,11 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                         .child(
                             Switch::new("system-proxy")
                                 .checked(view.state.system_proxy_enabled())
-                                .disabled(!proxy_available || view.is_pending(&["system_proxy"]))
+                                .disabled(
+                                    crate::identity::AppChannel::current().is_dev()
+                                        || !proxy_available
+                                        || view.is_pending(&["system_proxy"]),
+                                )
                                 .on_click(cx.listener(move |this, checked: &bool, _, cx| {
                                     this.dispatch(
                                         UiAction::SetSystemProxy { enabled: *checked },

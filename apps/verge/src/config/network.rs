@@ -185,11 +185,14 @@ impl FileProfileStore {
     ) -> Result<String, AppError> {
         let yaml = render_runtime_yaml(source, &self.merge, controller, secret)?;
         let mut value = self.apply_network(serde_yaml::from_str(&yaml).map_err(storage_error)?)?;
-        if let Some(enabled) = self.runtime_tun {
+        if let Some(enabled) = self.dev_mode.then_some(false).or(self.runtime_tun) {
             let mapping = value.as_mapping_mut().expect("validated runtime mapping");
             let tun = mapping
                 .entry(Value::String("tun".into()))
                 .or_insert_with(|| Value::Mapping(Default::default()));
+            if !tun.is_mapping() {
+                *tun = Value::Mapping(Default::default());
+            }
             if let Some(tun) = tun.as_mapping_mut() {
                 tun.insert(Value::String("enable".into()), Value::Bool(enabled));
             }

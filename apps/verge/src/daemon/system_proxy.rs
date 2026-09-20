@@ -40,6 +40,7 @@ impl Backend {
         &mut self,
         command: SystemProxyCommand,
     ) -> Result<SystemProxyCommandResult, AppError> {
+        self.check_dev_request(&UiRequest::SystemProxy(command.clone()))?;
         let state = match command {
             SystemProxyCommand::SetEnabled { enabled: true } => {
                 // All clients use the daemon's current saved host, mixed port and mode.
@@ -142,6 +143,12 @@ impl Backend {
         settings: &ApplicationSettings,
     ) -> Result<(), AppError> {
         settings.validate()?;
+        if self.config.channel.is_dev() {
+            if settings.launch_at_login || settings.global_hotkey.is_some() {
+                return Err(crate::identity::dev_restriction());
+            }
+            return self.settings.update(settings.clone());
+        }
         let previous = self.settings.get().clone();
         let previous_login = self.login_item.status().unwrap_or(previous.launch_at_login);
         let login_changed = settings.launch_at_login != previous_login;

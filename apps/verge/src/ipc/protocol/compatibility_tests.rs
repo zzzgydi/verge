@@ -6,6 +6,22 @@ use crate::{
 };
 use serde_json::json;
 
+#[test]
+fn old_hello_defaults_to_stable_gui_connection() {
+    let message: DaemonMessage = serde_json::from_value(json!({"Hello": {
+        "protocol_version": 6, "app_version": "0.1.0"
+    }}))
+    .unwrap();
+    assert!(matches!(
+        message,
+        DaemonMessage::Hello {
+            maintenance: false,
+            channel: None,
+            ..
+        }
+    ));
+}
+
 /// Wire fixtures are intentionally independent of the Rust serializer under test.
 #[test]
 fn future_error_code_keeps_the_response_and_does_not_mark_core_offline() {

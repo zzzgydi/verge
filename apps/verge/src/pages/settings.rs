@@ -52,6 +52,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
             .child(super::skeleton_rows(4))
             .into_any_element();
     };
+    let dev = crate::identity::AppChannel::current().is_dev();
     let settings = snapshot.settings;
     let data_directory = snapshot.data_directory;
     let app_version = snapshot.app_version;
@@ -135,7 +136,9 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                             h_flex().child(
                                 Switch::new("switch-launch-at-login")
                                     .checked(settings.launch_at_login)
-                                    .disabled(view.is_pending(&["application_settings_write"]))
+                                    .disabled(
+                                        dev || view.is_pending(&["application_settings_write"]),
+                                    )
                                     .on_click(cx.listener(move |this, checked: &bool, _, cx| {
                                         let mut updated = current.clone();
                                         updated.launch_at_login = *checked;
@@ -154,6 +157,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 .child(Input::new(&view.global_hotkey))
                                 .child(
                                     Button::new("save-global-hotkey")
+                                        .disabled(dev)
                                         .label(tr(lang, "common.save"))
                                         .small()
                                         .h(px(crate::appearance::metrics::COMPACT_CONTROL))
@@ -295,6 +299,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                         .child(
                             h_flex().child(
                                 Button::new("check-app-update")
+                                    .disabled(dev)
                                     .label(tr(lang, "settings.app.check"))
                                     .small()
                                     .h(px(crate::appearance::metrics::COMPACT_CONTROL))
@@ -322,6 +327,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                             field().label(tr(lang, "settings.app.update")).child(
                                 h_flex().child(
                                     Button::new("update-application")
+                                        .disabled(dev)
                                         .label(tr(lang, "settings.app.update.download"))
                                         .small()
                                         .h(px(crate::appearance::metrics::COMPACT_CONTROL))
@@ -379,6 +385,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                             .when(helper_installable, |row| {
                                 row.child(
                                     Button::new("install-helper")
+                                        .disabled(dev)
                                         .label(tr(lang, "settings.system.helper.install"))
                                         .small()
                                         .h(px(crate::appearance::metrics::COMPACT_CONTROL))
@@ -392,6 +399,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                             .when(helper_ready, |row| {
                                 row.child(
                                     Button::new("uninstall-helper")
+                                        .disabled(dev)
                                         .label(tr(lang, "settings.system.helper.uninstall"))
                                         .small()
                                         .h(px(crate::appearance::metrics::COMPACT_CONTROL))

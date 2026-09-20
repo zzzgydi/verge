@@ -46,6 +46,7 @@ use crate::ui::{UiRequest, UiRequestEnvelope, UiResponse, UiResponseEnvelope};
 
 #[derive(Clone)]
 struct BackendConfig {
+    channel: crate::identity::AppChannel,
     data_dir: PathBuf,
     binary: PathBuf,
     manifest: PathBuf,
@@ -134,6 +135,7 @@ impl BackendConfig {
             })
             .unwrap_or_else(|| data_dir.join("bin/mihomo"));
         Ok(Self {
+            channel: crate::identity::AppChannel::current(),
             binary,
             manifest,
             controller,
@@ -149,14 +151,11 @@ impl BackendConfig {
 }
 
 pub fn data_directory() -> Result<PathBuf, AppError> {
-    env::var_os("VERGE_DATA_DIR")
+    let home = env::var_os("HOME")
         .map(PathBuf::from)
-        .or_else(|| {
-            env::var_os("HOME")
-                .map(PathBuf::from)
-                .map(|home| home.join("Library/Application Support/Verge"))
-        })
-        .ok_or_else(|| AppError::new(ErrorCode::InvalidInput, "no Verge data directory"))
+        .ok_or_else(|| AppError::new(ErrorCode::InvalidInput, "no home directory"))?;
+    let override_path = env::var_os("VERGE_DATA_DIR").map(PathBuf::from);
+    crate::identity::AppChannel::current().data_directory(&home, override_path.as_deref())
 }
 
 fn bundled_resources_directory() -> Option<PathBuf> {
@@ -172,7 +171,9 @@ fn current_app_version() -> Option<String> {
     current_app_bundle().and_then(|bundle| bundle_short_version(&bundle).ok())
 }
 
+mod dev;
 mod system_proxy;
+pub use dev::stop_dev_daemon;
 mod tray;
 
 struct Engine {
@@ -216,7 +217,8 @@ struct Backend {
 
 impl Backend {
     fn new(mut config: BackendConfig) -> Result<Self, AppError> {
-        let mut profiles = FileProfileStore::open_with_keychain(config.data_dir.join("profiles"))?;
+        let mut profiles =
+            FileProfileStore::open_for_channel(config.data_dir.join("profiles"), config.channel)?;
         let control_dir = config.data_dir.join("control");
         fs::create_dir_all(&control_dir)
             .map_err(|e| AppError::new(ErrorCode::StorageFailed, e.to_string()))?;
@@ -232,6 +234,9 @@ impl Backend {
             crate::platform::SystemProxyRunner,
             config.recovery_path.clone(),
         );
+        if config.channel.is_dev() {
+            platform.set_read_only();
+        }
         let services = if config.services.is_empty() {
             platform.list_network_services()?
         } else {
@@ -244,7 +249,7 @@ impl Backend {
         }
         let mut backend = Self {
             geo_job_running: false,
-            ai: crate::ai::AiService::new(config.data_dir.clone()),
+            ai: crate::ai::AiService::for_channel(config.data_dir.clone(), config.channel),
             ai_connections: Default::default(),
             ai_connections_sample: None,
             ai_recent_errors: Default::default(),
@@ -420,6 +425,9 @@ impl Backend {
     }
 
     fn execute(&mut self, request: UiRequest) -> UiResponse {
+        if let Err(error) = self.check_dev_request(&request) {
+            return failed_response(request, error);
+        }
         match request {
             UiRequest::Ai(command) => {
                 let operation = command.operation();
@@ -452,8 +460,12 @@ impl Backend {
                     Some(engine) => {
                         // TUN 开关需要 helper 协调时由 handler 经 HelperControl 完成。
                         let helper = MacHelperClient::new(&self.config.helper_socket);
-                        RuntimeCommandHandler::with_helper(&mut engine.runtime, &helper)
-                            .execute(request.clone())
+                        if self.config.channel.is_dev() {
+                            RuntimeCommandHandler::new(&mut engine.runtime).execute(request.clone())
+                        } else {
+                            RuntimeCommandHandler::with_helper(&mut engine.runtime, &helper)
+                                .execute(request.clone())
+                        }
                     }
                     None => Err(unavailable),
                 };
@@ -484,6 +496,7 @@ impl Backend {
     }
 
     fn execute_profile(&mut self, command: AppCommand) -> Result<AppCommandResult, AppError> {
+        self.check_dev_request(&UiRequest::Profile(command.clone()))?;
         let now = unix_timestamp()?;
         let changes_runtime = matches!(
             &command,
@@ -852,6 +865,9 @@ impl Backend {
             crate::platform::SystemProxyRunner,
             self.config.recovery_path.clone(),
         );
+        if self.config.channel.is_dev() {
+            proxy.set_read_only();
+        }
         let mut core = SupervisorControl::new(&mut engine.supervisor, Duration::from_secs(5));
         let credentials = RuntimeCredentials {
             controller: self.config.controller,
@@ -863,6 +879,9 @@ impl Backend {
             credentials,
         )
         .update_network_settings(settings, |profiles| {
+            if self.config.channel.is_dev() {
+                return Ok(());
+            }
             if let (Some(id), Some(old)) = (&selected, &old_http) {
                 let mut new = profiles.system_proxy_endpoint(id)?;
                 new.host = proxy_host.clone();
@@ -1058,6 +1077,9 @@ impl Backend {
 
     /// 请求守护主线程同步全局快捷键注册（None = 禁用）。未接线时（测试）静默跳过。
     fn queue_hotkey_sync(&self, desired: Option<&str>) {
+        if self.config.channel.is_dev() {
+            return;
+        }
         if let Some(tx) = &self.hotkey_sync {
             let _ = tx.send(desired.map(str::to_owned));
         }
@@ -1260,8 +1282,14 @@ impl Backend {
     /// 应用设置快照：附带运行实例版本（非 .app 运行为 None，UI 据此提示）。
     fn settings_snapshot(&mut self) -> ApplicationSettingsSnapshot {
         let mut settings = self.settings.get().clone();
+        if self.config.channel.is_dev() {
+            settings.launch_at_login = false;
+            settings.global_hotkey = None;
+        }
         // Respect changes made in macOS System Settings; reading never registers an item.
-        if let Ok(enabled) = self.login_item.status() {
+        if !self.config.channel.is_dev()
+            && let Ok(enabled) = self.login_item.status()
+        {
             settings.launch_at_login = enabled;
         }
         ApplicationSettingsSnapshot {
@@ -1436,7 +1464,7 @@ impl Backend {
 
     /// 组装 IPC 握手快照：一次拉全可重建的领域态。
     fn initial_snapshot(&self) -> InitialSnapshot {
-        InitialSnapshot {
+        let mut snapshot = InitialSnapshot {
             capabilities: vec![
                 crate::ipc::protocol::UNIFIED_SYSTEM_PROXY.into(),
                 crate::ipc::protocol::CLOSE_ALL_CONNECTIONS.into(),
@@ -1454,7 +1482,13 @@ impl Backend {
                 app_version: current_app_version(),
             },
             runtime_settings: self.runtime_settings_snapshot(),
+        };
+        if self.config.channel.is_dev() {
+            snapshot.capabilities.push("dev_instance_v1".into());
+            snapshot.application_settings.settings.launch_at_login = false;
+            snapshot.application_settings.settings.global_hotkey = None;
         }
+        snapshot
     }
 
     /// 当前选中配置对应的运行时设置（无选中配置时为 None）。
@@ -1660,13 +1694,22 @@ fn run_daemon_backend(
             DaemonEvent::Ipc(IpcServerEvent::Connected {
                 conn_id,
                 protocol_version,
+                maintenance,
+                channel,
                 ..
             }) => {
                 backend.log_app(
                     "info",
                     format!("GUI 连接 (conn={conn_id}, protocol={protocol_version})"),
                 );
-                handle_daemon_connected(&server, &backend, conn_id, protocol_version);
+                handle_daemon_connected(
+                    &server,
+                    &backend,
+                    conn_id,
+                    protocol_version,
+                    maintenance,
+                    channel.as_deref(),
+                );
             }
             DaemonEvent::Ipc(IpcServerEvent::Request { conn_id, envelope }) => {
                 if tray::changes_menu(&envelope.request) {
@@ -1859,8 +1902,10 @@ fn show_main_window(server: &Arc<IpcServer>) {
     }
     if let Err(error) = spawn_gui_process() {
         eprintln!("failed to show Verge: {error}");
-        let _ =
-            crate::platform::MacNotifier::new(ProcessRunner).notify("Verge", &error.to_string());
+        let _ = crate::platform::MacNotifier::new(ProcessRunner).notify(
+            crate::identity::AppChannel::current().name(),
+            &error.to_string(),
+        );
     }
 }
 
@@ -1870,6 +1915,8 @@ fn handle_daemon_connected(
     backend: &Backend,
     conn_id: u64,
     protocol_version: u32,
+    maintenance: bool,
+    channel: Option<&str>,
 ) {
     if protocol_version != PROTOCOL_VERSION {
         let _ = server.send(
@@ -1883,7 +1930,21 @@ fn handle_daemon_connected(
         server.close(conn_id);
         return;
     }
-    if !server.try_claim_primary(conn_id) {
+    if channel.unwrap_or("stable") != backend.config.channel.id()
+        || (maintenance && !backend.config.channel.is_dev())
+    {
+        let _ = server.send(
+            conn_id,
+            ClientMessage::Closed {
+                reason:
+                    "daemon belongs to a different app channel or does not support Dev maintenance"
+                        .into(),
+            },
+        );
+        server.close(conn_id);
+        return;
+    }
+    if !maintenance && !server.try_claim_primary(conn_id) {
         if let Some(primary) = server.primary() {
             let _ = server.send(primary, ClientMessage::ActivateWindow);
         }
@@ -1911,6 +1972,10 @@ fn handle_daemon_request(
     envelope: UiRequestEnvelope,
     isolated_jobs: &mut usize,
 ) {
+    // A rejected Hello may already have pipelined requests in the event queue.
+    if !server.is_connected(conn_id) {
+        return;
+    }
     let request = envelope.request.clone();
     if matches!(request, UiRequest::Ai(_)) {
         backend.ai_connections.entry(conn_id).or_insert(u64::MAX);
@@ -2107,7 +2172,10 @@ fn run_daemon_appkit(
                     });
                     if let Err(error) = result {
                         eprintln!("[verge] [error] 全局快捷键同步失败: {}", error.message);
-                        let _ = notifier.notify("Verge", &error.message);
+                        let _ = notifier.notify(
+                            crate::identity::AppChannel::current().name(),
+                            &error.message,
+                        );
                     }
                 }
             });
@@ -2318,6 +2386,7 @@ mod tests {
         ));
         fs::create_dir_all(&data_dir).unwrap();
         let config = BackendConfig {
+            channel: crate::identity::AppChannel::Stable,
             binary: data_dir.join("missing-mihomo"),
             manifest: data_dir.join("missing-manifest.json"),
             controller: available_controller().unwrap(),
@@ -2413,6 +2482,7 @@ mod tests {
         ));
         fs::create_dir_all(&data_dir).unwrap();
         let config = BackendConfig {
+            channel: crate::identity::AppChannel::Stable,
             binary: data_dir.join("missing-mihomo"),
             manifest: data_dir.join("missing-manifest.json"),
             controller: available_controller().unwrap(),
@@ -2668,6 +2738,7 @@ mod tests {
         ));
         fs::create_dir_all(&data_dir).unwrap();
         let config = BackendConfig {
+            channel: crate::identity::AppChannel::Stable,
             binary: data_dir.join("missing-mihomo"),
             manifest: data_dir.join("missing-manifest.json"),
             controller: available_controller().unwrap(),
@@ -2715,6 +2786,7 @@ mod tests {
         ));
         fs::create_dir_all(&data_dir).unwrap();
         let config = BackendConfig {
+            channel: crate::identity::AppChannel::Stable,
             binary: data_dir.join("missing-mihomo"),
             manifest: data_dir.join("missing-manifest.json"),
             controller: available_controller().unwrap(),
@@ -2871,6 +2943,7 @@ mod tests {
         ));
         fs::create_dir_all(&data_dir).unwrap();
         let config = BackendConfig {
+            channel: crate::identity::AppChannel::Stable,
             binary: data_dir.join("missing-mihomo"),
             manifest: data_dir.join("missing-manifest.json"),
             controller: available_controller().unwrap(),
@@ -2994,6 +3067,7 @@ mod tests {
         ));
         fs::create_dir_all(&data_dir).unwrap();
         let config = BackendConfig {
+            channel: crate::identity::AppChannel::Stable,
             binary: data_dir.join("missing-mihomo"),
             manifest: data_dir.join("missing-manifest.json"),
             controller: available_controller().unwrap(),
@@ -3052,6 +3126,7 @@ mod tests {
         let controller = available_controller().unwrap();
         let mixed_port = available_controller().unwrap().port();
         let config = BackendConfig {
+            channel: crate::identity::AppChannel::Stable,
             binary,
             manifest,
             controller,

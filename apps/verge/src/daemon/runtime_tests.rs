@@ -22,6 +22,7 @@ fn fixture() -> (TestDirectory, BackendConfig) {
             .as_nanos()
     )));
     let config = BackendConfig {
+        channel: crate::identity::AppChannel::Stable,
         data_dir: dir.0.clone(),
         binary: dir.0.join("unused-mihomo"),
         manifest: PathBuf::from(env!("CARGO_MANIFEST_DIR"))

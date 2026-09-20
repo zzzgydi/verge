@@ -37,6 +37,8 @@ pub enum IpcServerEvent {
         conn_id: u64,
         protocol_version: u32,
         app_version: String,
+        maintenance: bool,
+        channel: Option<String>,
     },
     Request {
         conn_id: u64,
@@ -197,12 +199,14 @@ impl IpcServer {
         std::thread::spawn(move || {
             let mut reader = BufReader::new(reader_stream);
             // 第一帧必须是 Hello。
-            let (protocol_version, app_version) =
+            let (protocol_version, app_version, maintenance, channel) =
                 match frame::read_message::<DaemonMessage>(&mut reader) {
                     Ok(DaemonMessage::Hello {
                         protocol_version,
                         app_version,
-                    }) => (protocol_version, app_version),
+                        maintenance,
+                        channel,
+                    }) => (protocol_version, app_version, maintenance, channel),
                     _ => {
                         let _ = events_tx.send(IpcServerEvent::Disconnected { conn_id });
                         return;
@@ -213,6 +217,8 @@ impl IpcServer {
                     conn_id,
                     protocol_version,
                     app_version,
+                    maintenance,
+                    channel,
                 })
                 .is_err()
             {
@@ -221,6 +227,14 @@ impl IpcServer {
             while let Ok(DaemonMessage::Request(envelope)) =
                 frame::read_message::<DaemonMessage>(&mut reader)
             {
+                if maintenance
+                    && !matches!(
+                        envelope.request,
+                        crate::ui::UiRequest::Profile(crate::domain::AppCommand::QuitApplication)
+                    )
+                {
+                    break;
+                }
                 if events_tx
                     .send(IpcServerEvent::Request { conn_id, envelope })
                     .is_err()
@@ -316,6 +330,11 @@ impl IpcServer {
         }
     }
 
+    /// Whether this connection survived handshake validation and has not closed.
+    pub fn is_connected(&self, conn_id: u64) -> bool {
+        self.connections.lock().unwrap().contains_key(&conn_id)
+    }
+
     /// 主动关闭一条连接（如重复实例）：写队列关闭、订阅与主实例清理。
     /// 对端 socket 由 GUI 进程退出时关闭，读线程随后退出。
     pub fn close(&self, conn_id: u64) {
@@ -406,6 +425,8 @@ mod tests {
             &DaemonMessage::Hello {
                 protocol_version: PROTOCOL_VERSION,
                 app_version: "test".into(),
+                maintenance: false,
+                channel: Some("stable".into()),
             },
         )
         .unwrap();

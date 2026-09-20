@@ -379,6 +379,7 @@ pub struct FileProfileStore {
     internal_socket: Option<PathBuf>,
     keychain_service: Option<String>,
     runtime_tun: Option<bool>,
+    dev_mode: bool,
 }
 
 impl FileProfileStore {
@@ -388,6 +389,15 @@ impl FileProfileStore {
 
     pub fn open_with_keychain(root: impl Into<PathBuf>) -> Result<Self, AppError> {
         Self::open_inner(root.into(), Some("com.zzzgydi.verge.network".into()))
+    }
+
+    pub fn open_for_channel(
+        root: impl Into<PathBuf>,
+        channel: crate::identity::AppChannel,
+    ) -> Result<Self, AppError> {
+        let mut store = Self::open_inner(root.into(), Some(channel.network_service().into()))?;
+        store.dev_mode = channel.is_dev();
+        Ok(store)
     }
 
     fn open_inner(root: PathBuf, keychain_service: Option<String>) -> Result<Self, AppError> {
@@ -432,6 +442,7 @@ impl FileProfileStore {
             internal_socket: None,
             keychain_service,
             runtime_tun: None,
+            dev_mode: false,
         })
     }
 
@@ -1176,6 +1187,34 @@ use std::fmt;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dev_disables_tun_after_profile_merge_and_runtime_overrides() {
+        let dir = TestDir::new("dev-tun");
+        let mut store =
+            FileProfileStore::open_for_channel(&dir.0, crate::identity::AppChannel::Dev).unwrap();
+        store.preserve_runtime_tun(true);
+        for source in [
+            "tun:\n  enable: true\n",
+            "tun: true\n",
+            "mixed-port: 7890\n",
+        ] {
+            let yaml = store
+                .render_runtime(source, "127.0.0.1:9090".parse().unwrap(), "test")
+                .unwrap();
+            let value: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+            assert_eq!(value["tun"]["enable"], serde_yaml::Value::Bool(false));
+        }
+        store.set_merge_yaml("rules:\n  - key: tun\n    op: override\n    value: {enable: true, auto-route: true}\n").unwrap();
+        let yaml = store
+            .render_runtime(
+                "mixed-port: 7890\n",
+                "127.0.0.1:9090".parse().unwrap(),
+                "test",
+            )
+            .unwrap();
+        let value: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(value["tun"]["enable"], serde_yaml::Value::Bool(false));
+    }
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;

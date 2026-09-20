@@ -80,12 +80,27 @@ cd verge
 make dev
 ```
 
-`make dev` 会先检查 Mihomo。文件不存在或摘要与
-`assets/mihomo/manifest.json` 不一致时，脚本会根据当前平台下载对应资源，
-校验压缩包和可执行文件的 SHA-256，再安装到仓库内的
-`.cache/mihomo/<target>/mihomo`。启动应用时，脚本通过 `VERGE_MIHOMO_BIN`
-传入该路径，不会把开发依赖写入用户的应用数据目录。`.cache/` 已被 Git 忽略。
-目前开发脚本支持 Apple Silicon macOS。
+`make dev` 会构建并打开 `dist/Verge Dev.app`，应用标识为
+`com.zzzgydi.verge.dev`，图标带 DEV 标记。数据保存在
+`~/Library/Application Support/Verge Dev`，配置、日志、socket、锁和 Keychain
+服务都与正式版分开。脚本自动准备固定版本的 Mihomo，校验 SHA-256 后放进 Dev
+应用包；下载缓存位于 `.cache/mihomo/`。目前支持 Apple Silicon macOS。
+
+编译和签名校验成功后，脚本只退出旧 Dev daemon，再启动新版本；编译失败时保留
+旧 Dev。`make dev-stop` 会停止开发版的后台、内核和窗口；`make dev-build` 替换
+开发包并退出旧 Dev，但不打开新窗口。使用自定义 `VERGE_DATA_DIR` 时，停止命令
+也要传入同一个值。测试性能可运行 `VERGE_DEV_PROFILE=release make dev`，优化
+编译后仍是 Dev 身份。
+
+开发版可以与 `/Applications/Verge.app` 同时运行。Dev 后台禁止修改系统代理和
+PAC、开启 TUN、安装或卸载 helper、注册登录项和全局快捷键，以及替换应用；导入
+Profile 或 Merge 也无法开启 TUN。日常开发可测试界面、规则、连接、配置和 AI，
+系统网络接管功能需另行安排测试。端口由你手动错开，除了 mixed-port，还要检查
+DNS、HTTP/SOCKS/redir/tproxy 和外部控制器等监听项。测试流量显式发往 Dev 的
+代理端口；正式版的 TUN、系统 DNS 仍可能影响开发版的出站流量。
+
+Dev 首次使用新数据目录，按需导入配置，不要整目录复制正式版数据或密钥引用。
+Dev 会拒绝正式版默认数据目录及其父子路径，也会检查符号链接。
 
 只准备 Mihomo，不启动应用：
 
@@ -107,7 +122,8 @@ make dev
 
 | 变量 | 用途 |
 |---|---|
-| `VERGE_DATA_DIR` | 覆盖默认的 `~/Library/Application Support/Verge` |
+| `VERGE_DATA_DIR` | 自定义绝对路径；Dev 默认 `~/Library/Application Support/Verge Dev`，正式版默认 `~/Library/Application Support/Verge` |
+| `VERGE_DEV_PROFILE` | `dev`（默认）或 `release` 优化编译，均保留 Dev 身份 |
 | `VERGE_MIHOMO_BIN` | 指定 Mihomo 可执行文件 |
 | `VERGE_MIHOMO_CACHE_DIR` | 覆盖 `make dev` 使用的仓库 Mihomo 缓存目录 |
 | `VERGE_MIHOMO_MANIFEST` | 指定 sidecar manifest |
@@ -152,9 +168,9 @@ make release-run
 VERGE_DATA_DIR=/tmp/verge-release-test make release-run
 ```
 
-使用同一数据目录切换 Debug 和 Release 前，请从 Verge 菜单栏选择“退出”，
-确保旧 daemon 结束。只关窗口会继续使用旧程序，内存对比也会失真。默认数据目录
-与 `make dev` 相同，都是 `~/Library/Application Support/Verge`。
+`make release-run` 使用正式版身份和数据目录。测试 `dist` 中的正式包前，先从
+菜单栏退出已有正式 daemon；仅关闭窗口不会结束后台。同时开发或测试性能时，
+使用 `make dev` 或 `VERGE_DEV_PROFILE=release make dev`。
 `make release-run` 在 GUI 退出后返回终端，daemon 仍需通过菜单栏“退出”结束。
 
 对比运行内存时，应使用相同配置、页面、流量和观察时长。在“活动监视器”中同时

@@ -757,6 +757,9 @@ impl Render for MainView {
                 .min_h_0()
                 .overflow_hidden()
                 .p(px(crate::appearance::metrics::PAGE_INSET))
+                .when(crate::identity::AppChannel::current().is_dev(), |view| {
+                    view.child(div().text_xs().pb_2().child(tr(self.lang(), "dev.notice")))
+                })
                 .child(content)
                 .into_any_element()
         } else {
@@ -766,6 +769,9 @@ impl Render for MainView {
                 .min_h_0()
                 .overflow_y_scrollbar()
                 .p(px(crate::appearance::metrics::PAGE_INSET))
+                .when(crate::identity::AppChannel::current().is_dev(), |view| {
+                    view.child(div().text_xs().pb_2().child(tr(self.lang(), "dev.notice")))
+                })
                 .child(content)
                 .into_any_element()
         };

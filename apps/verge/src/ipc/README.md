@@ -8,6 +8,18 @@ constant or accept arbitrary older versions.
 The GUI and daemon run separately. A window can reconnect to a daemon left running
 by an earlier build. Compatibility therefore needs to work in both directions.
 
+`Hello.channel` is optional; omission means `stable`. New daemons reject a
+different channel before claiming or activating the primary window. Dev also
+requires `dev_instance_v1` in the welcome snapshot, so an older stable daemon
+cannot silently serve a Dev GUI. This is build identity, independent of debug
+or release optimization.
+
+`Hello.maintenance` defaults to false. Dev accepts a maintenance connection
+alongside its primary GUI and limits it to `QuitApplication`. `make dev-stop`
+checks the Dev capability before sending that request, then waits for graceful
+shutdown, socket removal and release of the instance lock. Stable daemons reject
+maintenance connections. The protocol generation remains 6.
+
 | Change | Handling |
 | --- | --- |
 | UI, timeout, implementation, or bug fix | Keep the version. |

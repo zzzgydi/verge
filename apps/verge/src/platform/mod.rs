@@ -421,6 +421,7 @@ impl CommandRunner for ProcessRunner {
 
 pub struct MacSystemProxy<R> {
     runner: R,
+    read_only: bool,
     recovery_path: PathBuf,
 }
 
@@ -448,7 +449,12 @@ impl<R: sysproxy::macos::CommandRunner> MacSystemProxy<R> {
         Self {
             runner,
             recovery_path: recovery_path.into(),
+            read_only: false,
         }
+    }
+
+    pub fn set_read_only(&mut self) {
+        self.read_only = true;
     }
 
     pub fn state(&mut self, services: &[String]) -> Result<SystemProxyState, AppError> {
@@ -459,12 +465,12 @@ impl<R: sysproxy::macos::CommandRunner> MacSystemProxy<R> {
         }
         Ok(SystemProxyState {
             services: states,
-            recovery_pending: self.recovery_path.is_file(),
+            recovery_pending: self.recovery_pending(),
         })
     }
 
     pub fn recovery_pending(&self) -> bool {
-        self.recovery_path.is_file()
+        !self.read_only && self.recovery_path.is_file()
     }
 
     pub fn list_network_services(&mut self) -> Result<Vec<String>, AppError> {
@@ -542,6 +548,9 @@ impl<R: sysproxy::macos::CommandRunner> MacSystemProxy<R> {
     }
 
     pub fn recover_pending(&mut self) -> Result<SystemProxyState, AppError> {
+        if self.read_only {
+            return Err(crate::identity::dev_restriction());
+        }
         let previous = read_recovery(&self.recovery_path)?;
         let mut restored = self.restore_services(&previous.services)?;
         remove_recovery(&self.recovery_path)?;
@@ -673,6 +682,9 @@ impl<R: sysproxy::macos::CommandRunner> MacSystemProxy<R> {
         mut apply: impl FnMut(&mut Self, &str) -> Result<(), AppError>,
         verify: impl FnOnce(&SystemProxyState) -> Result<(), AppError>,
     ) -> Result<SystemProxyState, AppError> {
+        if self.read_only {
+            return Err(crate::identity::dev_restriction());
+        }
         validate_services(services)?;
         let previous = self.state(services)?;
         let created_record = !self.recovery_path.exists();
@@ -809,6 +821,9 @@ impl<R: sysproxy::macos::CommandRunner> MacSystemProxy<R> {
         &mut self,
         states: &[SystemProxyServiceState],
     ) -> Result<SystemProxyState, AppError> {
+        if self.read_only {
+            return Err(crate::identity::dev_restriction());
+        }
         validate_services(
             &states
                 .iter()
@@ -1077,6 +1092,38 @@ fn storage_error(error: impl std::fmt::Display) -> AppError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn read_only_proxy_never_writes_or_restores_copied_recovery() {
+        let dir = TestDir::new();
+        let recovery = dir.0.join("recovery.json");
+        fs::write(&recovery, "copied production recovery").unwrap();
+        let mut proxy = MacSystemProxy::new(FakeRunner::default(), &recovery);
+        proxy.set_read_only();
+        assert!(!proxy.recovery_pending());
+        assert_eq!(
+            proxy.recover_pending().unwrap_err().code,
+            ErrorCode::PermissionDenied
+        );
+        assert_eq!(
+            proxy.disable(&["Wi-Fi".into()]).unwrap_err().code,
+            ErrorCode::PermissionDenied
+        );
+        assert_eq!(
+            proxy
+                .enable(
+                    &["Wi-Fi".into()],
+                    &ProxyEndpoint::new("127.0.0.1", 7890).unwrap()
+                )
+                .unwrap_err()
+                .code,
+            ErrorCode::PermissionDenied
+        );
+        assert!(proxy.runner.calls.is_empty());
+        assert_eq!(
+            fs::read_to_string(recovery).unwrap(),
+            "copied production recovery"
+        );
+    }
     use std::{
         collections::VecDeque,
         sync::atomic::{AtomicU64, Ordering},

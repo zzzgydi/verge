@@ -24,6 +24,16 @@ impl Lang {
 
 /// 文案表：`(key, zh-CN, en)`。key 按页面/用途命名。
 const ENTRIES: &[(&str, &str, &str)] = &[
+    (
+        "dev.system_read_only",
+        "开发版只读取系统代理状态，由正式版管理系统网络。",
+        "Verge Dev only reads system proxy status. The installed app manages system networking.",
+    ),
+    (
+        "dev.notice",
+        "Verge Dev · 独立开发数据 · 系统代理与 TUN 操作已禁用",
+        "Verge Dev · Separate development data · System proxy and TUN controls disabled",
+    ),
     ("filters.all", "全部", "All"),
     ("filters.clear", "清空", "Clear"),
     ("filters.empty", "没有匹配结果", "No matching results"),

@@ -35,6 +35,10 @@ pub enum DaemonMessage {
     Hello {
         protocol_version: u32,
         app_version: String,
+        #[serde(default)]
+        maintenance: bool,
+        #[serde(default)]
+        channel: Option<String>,
     },
     /// 常规请求，语义与单进程时代 `UiRequestEnvelope` 完全一致。
     /// 实时订阅复用 `RuntimeCommand::StartRealtime` / `StopRealtime`，

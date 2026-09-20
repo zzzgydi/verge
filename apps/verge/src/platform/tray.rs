@@ -151,7 +151,11 @@ fn menu_entries(state: &TrayMenuState) -> Vec<Entry> {
     };
     vec![
         Entry::action(
-            tr("显示 Verge", "Show Verge"),
+            if crate::identity::AppChannel::current().is_dev() {
+                "Verge Dev"
+            } else {
+                tr("显示 Verge", "Show Verge")
+            },
             TrayCommand::ShowMainWindow,
             true,
         ),
@@ -182,7 +186,8 @@ fn menu_entries(state: &TrayMenuState) -> Vec<Entry> {
             tr("系统代理", "System Proxy"),
             TrayCommand::ToggleSystemProxy,
             state.system_proxy_enabled,
-            state.system_proxy_enabled || state.can_enable_system_proxy,
+            !crate::identity::AppChannel::current().is_dev()
+                && (state.system_proxy_enabled || state.can_enable_system_proxy),
         ),
         Entry::Separator,
         Entry::Submenu(
@@ -301,7 +306,7 @@ impl TrayService {
             }
         }));
         let tray = TrayIconBuilder::new()
-            .with_tooltip("Verge")
+            .with_tooltip(crate::identity::AppChannel::current().name())
             .with_icon(load_icon()?)
             .with_icon_as_template(true)
             .build()
@@ -313,6 +318,9 @@ impl TrayService {
             checks: RefCell::new(Vec::new()),
             clicked,
         };
+        if crate::identity::AppChannel::current().is_dev() {
+            service.tray.set_title(Some("Dev"));
+        }
         service.update(&TraySnapshot::default())?;
         Ok(service)
     }
@@ -341,7 +349,8 @@ impl TrayService {
         }
         self.tray
             .set_tooltip(Some(format!(
-                "Verge · ↑ {}/s   ↓ {}/s",
+                "{} · ↑ {}/s   ↓ {}/s",
+                crate::identity::AppChannel::current().name(),
                 format_bytes(snapshot.upload_bytes_per_second),
                 format_bytes(snapshot.download_bytes_per_second)
             )))
@@ -427,10 +436,10 @@ mod tests {
         assert!(matches!(
             &menu_entries(&state)[7],
             Entry::Item {
-                enabled: true,
+                enabled,
                 checked: Some(true),
                 ..
-            }
+            } if *enabled == !crate::identity::AppChannel::current().is_dev()
         ));
         assert_eq!(format_bytes(2048), "2.0 KiB");
     }

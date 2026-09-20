@@ -79,30 +79,36 @@ pub(super) struct SavedConfig {
     pub credential: Option<String>,
 }
 
-const SERVICE: &str = "com.zzzgydi.verge.ai";
-
 pub(super) trait Credentials {
     fn set(&self, account: &str, key: &str) -> Result<(), AppError>;
     fn get(&self, account: &str) -> Result<Secret, AppError>;
     fn delete(&self, account: &str) -> Result<(), AppError>;
 }
 
-pub(super) struct Keychain;
+pub(super) struct Keychain(pub(crate) crate::identity::AppChannel);
 impl Credentials for Keychain {
     fn set(&self, account: &str, key: &str) -> Result<(), AppError> {
-        security_framework::passwords::set_generic_password(SERVICE, account, key.as_bytes())
-            .map_err(|_| error("Unable to save AI key in Keychain"))
+        security_framework::passwords::set_generic_password(
+            self.0.ai_service(),
+            account,
+            key.as_bytes(),
+        )
+        .map_err(|_| error("Unable to save AI key in Keychain"))
     }
     fn get(&self, account: &str) -> Result<Secret, AppError> {
-        let bytes = security_framework::passwords::get_generic_password(SERVICE, account).map_err(
-            |_| error("Unable to read AI key from Keychain; unlock Keychain or save the key again"),
-        )?;
+        let bytes = security_framework::passwords::get_generic_password(
+            self.0.ai_service(),
+            account,
+        )
+        .map_err(|_| {
+            error("Unable to read AI key from Keychain; unlock Keychain or save the key again")
+        })?;
         String::from_utf8(bytes)
             .map(Secret)
             .map_err(|_| error("Invalid AI key encoding"))
     }
     fn delete(&self, account: &str) -> Result<(), AppError> {
-        security_framework::passwords::delete_generic_password(SERVICE, account)
+        security_framework::passwords::delete_generic_password(self.0.ai_service(), account)
             .map_err(|_| error("Unable to remove previous AI key from Keychain"))
     }
 }

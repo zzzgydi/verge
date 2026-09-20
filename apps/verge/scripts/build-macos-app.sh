@@ -21,7 +21,7 @@ if [ "$actual" != "$expected" ]; then
     exit 1
 fi
 
-cargo +1.97.1 build --manifest-path "$repo_dir/Cargo.toml" -p verge --bin verge-gpui --release --locked
+VERGE_BUILD_CHANNEL=stable cargo +1.97.1 build --manifest-path "$repo_dir/Cargo.toml" -p verge --bin verge-gpui --release --locked
 cargo +1.97.1 build --manifest-path "$repo_dir/Cargo.toml" -p verge-helper --release --locked
 # Resolve Cargo's actual output directory, including CARGO_TARGET_DIR overrides.
 target_dir=$(cargo +1.97.1 metadata --manifest-path "$repo_dir/Cargo.toml" --no-deps --format-version 1 | jq -r '.target_directory')

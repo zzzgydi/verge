@@ -47,7 +47,7 @@ actions!(
 
 fn set_app_menus(lang: Lang, cx: &mut App) {
     cx.set_menus([
-        Menu::new("Verge").items([
+        Menu::new(crate::identity::AppChannel::current().name()).items([
             MenuItem::action(tr(lang, "menu.about"), AboutVerge),
             MenuItem::separator(),
             MenuItem::os_submenu(tr(lang, "menu.services"), SystemMenuType::Services),
@@ -83,7 +83,7 @@ fn set_app_menus(lang: Lang, cx: &mut App) {
     ]);
 }
 
-fn quit_request() -> crate::ui::UiRequestEnvelope {
+pub(crate) fn quit_request() -> crate::ui::UiRequestEnvelope {
     crate::ui::UiRequestEnvelope {
         request_id: 0,
         operation_id: 0,
@@ -100,6 +100,13 @@ fn quit_request() -> crate::ui::UiRequestEnvelope {
 }
 
 pub fn run() {
+    if std::env::args().any(|arg| arg == "--dev-stop") {
+        if let Err(error) = crate::daemon::stop_dev_daemon() {
+            eprintln!("{}", error.message);
+            std::process::exit(1);
+        }
+        return;
+    }
     // 守护进程分叉：同一可执行文件以 --daemon 参数启动，由 GUI 进程拉起或登录项调用。
     if std::env::args().any(|argument| argument == "--daemon") {
         return crate::daemon::run_daemon();
@@ -153,7 +160,7 @@ pub fn run() {
                 let _ = handle.update(cx, |_, window, cx| {
                     let answer = window.prompt(
                         PromptLevel::Info,
-                        "Verge",
+                        crate::identity::AppChannel::current().name(),
                         Some(concat!("Version ", env!("CARGO_PKG_VERSION"))),
                         &[PromptButton::ok("OK")],
                         cx,
@@ -195,7 +202,7 @@ pub fn run() {
             ..TitleBar::window_options()
         };
         cx.open_window(window_options, |window, cx| {
-            window.set_window_title("Verge");
+            window.set_window_title(crate::identity::AppChannel::current().name());
             let view = cx.new(|cx| MainView::new(request_tx, window, cx));
             view.update(cx, |view, cx| {
                 // 启动时先按系统外观设置一次主题。
@@ -313,6 +320,7 @@ pub fn run() {
                                 });
                             }
                             if let Some((title, body)) = os_notification {
+                                let title = if crate::identity::AppChannel::current().is_dev() { "Verge Dev" } else { title };
                                 let _ = notifier.notify(title, body);
                             }
                         }
