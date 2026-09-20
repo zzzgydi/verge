@@ -10,7 +10,7 @@ use gpui_kit::component::{
     dialog::DialogButtonProps,
     form::{field, v_form},
     h_flex,
-    input::{Input, Textarea},
+    input::{Input, InputState, Textarea},
     notification::Notification,
 };
 use gpui_kit::*;
@@ -83,9 +83,10 @@ impl MainView {
     pub fn set_update_interval(
         &mut self,
         id: ProfileId,
+        value: &str,
         cx: &mut Context<Self>,
     ) -> Result<(), AppError> {
-        match self.profile_interval.read(cx).value().parse::<u64>() {
+        match value.parse::<u64>() {
             Ok(seconds) if seconds > 0 => {
                 self.dispatch(
                     UiAction::SetProfileUpdatePolicy {
@@ -205,7 +206,7 @@ impl MainView {
         });
     }
 
-    /// “设置间隔”对话框：复用更新间隔输入框，保存到指定配置。
+    /// “设置间隔”对话框：从目标配置初始化，独立于导入表单。
     pub fn open_interval_dialog(
         &mut self,
         id: ProfileId,
@@ -215,10 +216,21 @@ impl MainView {
     ) {
         let lang = self.lang();
         let view = cx.entity();
-        let interval_input = self.profile_interval.clone();
+        let value = self
+            .state
+            .profiles
+            .iter()
+            .find(|profile| profile.id == id)
+            .and_then(|profile| match profile.update_policy {
+                UpdatePolicy::Interval { seconds } => Some(seconds.to_string()),
+                UpdatePolicy::Manual => None,
+            })
+            .unwrap_or_default();
+        let interval_input = cx.new(|cx| InputState::new(window, cx).default_value(value));
         window.open_dialog(cx, move |dialog, window, _| {
             let view = view.clone();
             let id = id.clone();
+            let interval_input = interval_input.clone();
             dialog
                 .title(i18n::fmt_titled(lang, "dialog.interval.title", &name))
                 .width(rems(26.).to_pixels(window.rem_size()))
@@ -237,7 +249,10 @@ impl MainView {
                         .show_cancel(true),
                 )
                 .on_ok(move |_, window, cx| {
-                    match view.update(cx, |this, cx| this.set_update_interval(id.clone(), cx)) {
+                    let value = interval_input.read(cx).value();
+                    match view.update(cx, |this, cx| {
+                        this.set_update_interval(id.clone(), &value, cx)
+                    }) {
                         Ok(()) => true,
                         Err(error) => {
                             window.push_notification(

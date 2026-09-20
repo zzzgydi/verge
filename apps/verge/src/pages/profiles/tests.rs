@@ -7,7 +7,10 @@ use gpui_kit::component::{
 use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
 
 use crate::{
-    domain::{AppCommand, AppCommandOutput, AppCommandResult, AppError, ErrorCode, ProfileId},
+    domain::{
+        AppCommand, AppCommandOutput, AppCommandResult, AppError, ErrorCode, Profile, ProfileId,
+        ProfileSource, UpdatePolicy,
+    },
     ui::{UiRequest, UiRequestEnvelope, UiResponse, UiResponseEnvelope},
     view::MainView,
 };
@@ -287,6 +290,57 @@ fn merged_result_rejects_keyboard_edits(cx: &mut TestAppContext) {
             "mode: rule\n"
         )
     });
+}
+
+#[gpui_kit::test]
+fn interval_dialog_saves_target_policy_without_changing_import_draft(cx: &mut TestAppContext) {
+    let (view, rx, cx) = setup(cx);
+    let id = ProfileId::parse("daily").unwrap();
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state.profiles = vec![
+                Profile::new(
+                    id.clone(),
+                    "Daily",
+                    ProfileSource::Remote {
+                        url: "https://example.invalid/profile".into(),
+                    },
+                    UpdatePolicy::Interval { seconds: 86400 },
+                    0,
+                    None,
+                )
+                .unwrap(),
+            ];
+            view.profile_interval
+                .update(cx, |input, cx| input.set_value("7200", window, cx));
+            view.open_interval_dialog(id.clone(), "Daily".into(), window, cx);
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.dispatch_action(Box::new(Confirm { secondary: false }), cx));
+    cx.run_until_parked();
+    assert!(
+        matches!(rx.try_recv().unwrap().request, UiRequest::Profile(AppCommand::SetProfileUpdatePolicy { id: actual, update_policy: UpdatePolicy::Interval { seconds: 86400 } }) if actual == id)
+    );
+    cx.update(|_, cx| {
+        assert_eq!(
+            view.read(cx).profile_interval.read(cx).value().as_str(),
+            "7200"
+        )
+    });
+    // Manual updates must not silently turn into an interval on an unchanged save.
+    while rx.try_recv().is_ok() {}
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state.profiles[0].update_policy = UpdatePolicy::Manual;
+            view.open_interval_dialog(id, "Daily".into(), window, cx);
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.dispatch_action(Box::new(Confirm { secondary: false }), cx));
+    cx.run_until_parked();
+    assert!(rx.try_recv().is_err());
+    cx.update(|window, cx| assert!(window.has_active_dialog(cx)));
 }
 
 #[gpui_kit::test]
