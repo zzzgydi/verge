@@ -17,6 +17,7 @@ use gpui_kit::*;
 
 impl MainView {
     pub fn open_yaml_sheet(&mut self, id: ProfileId, window: &mut Window, cx: &mut Context<Self>) {
+        self.script_editor = None;
         let lang = self.lang();
         self.sheet_state.update(cx, |state, _| {
             *state = SheetState {
@@ -234,6 +235,7 @@ impl MainView {
 
     /// 点击后立即打开 Merge 配置 Sheet；匹配的响应到达后填入编辑器。
     pub fn open_merge_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.script_editor = None;
         let lang = self.lang();
         self.sheet_state.update(cx, |state, _| {
             *state = SheetState {
@@ -395,6 +397,7 @@ impl MainView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.script_editor = None;
         let lang = self.lang();
         self.sheet_state.update(cx, |state, _| {
             *state = SheetState {

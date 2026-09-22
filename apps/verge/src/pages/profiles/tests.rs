@@ -394,3 +394,245 @@ fn failed_yaml_save_keeps_sheet_and_draft_for_retry(cx: &mut TestAppContext) {
         })
     });
 }
+
+#[gpui_kit::test]
+fn script_entries_dispatch_and_stale_load_cannot_replace_new_draft(cx: &mut TestAppContext) {
+    let (view, rx, cx) = setup(cx);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state
+                .daemon_capabilities
+                .push(crate::script::CAPABILITY.into());
+            view.state.page = crate::ui::Page::Profiles;
+            view.state.profiles = vec![
+                Profile::new(
+                    ProfileId::parse("demo").unwrap(),
+                    "Demo",
+                    ProfileSource::Local,
+                    UpdatePolicy::Manual,
+                    0,
+                    None,
+                )
+                .unwrap(),
+            ];
+            cx.notify();
+            view.open_script_sheet(None, window, cx);
+            let old = rx.try_recv().unwrap();
+            window.close_sheet(cx);
+            view.open_script_sheet(Some(ProfileId::parse("demo").unwrap()), window, cx);
+            let current = rx.try_recv().unwrap();
+            view.script_response(
+                &response(
+                    &old,
+                    Ok(AppCommandOutput::ProfileScript(
+                        crate::script::ProfileScript {
+                            draft: "old".into(),
+                            active: None,
+                        },
+                    )),
+                ),
+                window,
+                cx,
+            );
+            view.submit_script("save", cx);
+            assert!(rx.try_recv().is_err());
+            view.script_response(
+                &response(
+                    &current,
+                    Ok(AppCommandOutput::ProfileScript(
+                        crate::script::ProfileScript {
+                            draft: "fresh draft".into(),
+                            active: None,
+                        },
+                    )),
+                ),
+                window,
+                cx,
+            );
+        })
+    });
+    cx.run_until_parked();
+    let save = cx.debug_bounds("save-script-draft").unwrap();
+    cx.simulate_click(save.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    let request = rx.try_recv().unwrap();
+    assert!(
+        matches!(&request.request, UiRequest::Profile(AppCommand::SaveScriptDraft{source,..}) if source=="fresh draft")
+    );
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.script_response(
+                &response(
+                    &request,
+                    Err(AppError::new(ErrorCode::StorageFailed, "disk full")),
+                ),
+                window,
+                cx,
+            );
+            view.submit_script("save", cx);
+        })
+    });
+    assert!(
+        matches!(rx.try_recv().unwrap().request,UiRequest::Profile(AppCommand::SaveScriptDraft{source,..}) if source=="fresh draft")
+    );
+    cx.update(|window, cx| window.close_sheet(cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("open-global-script").is_some());
+    assert!(cx.debug_bounds("edit-profile-script").is_some());
+    assert!(cx.debug_bounds("edit-profile-details").is_some());
+}
+
+#[gpui_kit::test]
+fn profile_details_load_existing_fields_and_keep_failed_form(cx: &mut TestAppContext) {
+    let (view, rx, cx) = setup(cx);
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(960.), gpui_kit::px(640.)));
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state
+                .daemon_capabilities
+                .push(crate::script::CAPABILITY.into());
+            let profile = Profile::new(
+                ProfileId::parse("demo").unwrap(),
+                "Saved name",
+                ProfileSource::Remote {
+                    url: "https://example.invalid/sub".into(),
+                },
+                UpdatePolicy::Manual,
+                0,
+                Some("Verge-Test".into()),
+            )
+            .unwrap();
+            view.state.profiles = vec![profile.clone()];
+            view.open_profile_details(profile, window, cx);
+        })
+    });
+    cx.run_until_parked();
+    for _ in 0..25 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(16));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    }
+    let save = cx.debug_bounds("profile-details-save").unwrap();
+    cx.simulate_click(save.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    let request = rx.try_recv().unwrap();
+    assert!(
+        matches!(&request.request,UiRequest::Profile(AppCommand::UpdateProfileDetails{name,source:ProfileSource::Remote{url},update_policy:UpdatePolicy::Manual,user_agent:Some(ua),..}) if name=="Saved name" && url=="https://example.invalid/sub" && ua=="Verge-Test")
+    );
+    while rx.try_recv().is_ok() {}
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.details_response(
+                &response(
+                    &request,
+                    Err(AppError::new(ErrorCode::StorageFailed, "disk full")),
+                ),
+                window,
+                cx,
+            );
+        })
+    });
+    cx.update(|window, cx| assert!(window.has_active_dialog(cx)));
+    cx.update(|window, cx| window.dispatch_action(Box::new(Confirm { secondary: false }), cx));
+    cx.run_until_parked();
+    let retry = rx.try_recv().unwrap();
+    assert_eq!(request.request, retry.request);
+}
+
+#[gpui_kit::test]
+fn profile_details_lock_edits_while_saving_and_unlock_after_failure(cx: &mut TestAppContext) {
+    let (view, rx, cx) = setup(cx);
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(960.), gpui_kit::px(640.)));
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state
+                .daemon_capabilities
+                .push(crate::script::CAPABILITY.into());
+            let profile = Profile::new(
+                ProfileId::parse("demo").unwrap(),
+                "Saved name",
+                ProfileSource::Local,
+                UpdatePolicy::Manual,
+                0,
+                None,
+            )
+            .unwrap();
+            view.state.profiles = vec![profile.clone()];
+            view.open_profile_details(profile, window, cx);
+        });
+    });
+    cx.run_until_parked();
+    for _ in 0..25 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(16));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    }
+    let click = |selector, cx: &mut VisualTestContext| {
+        let center = cx.debug_bounds(selector).unwrap().center();
+        cx.simulate_click(center, gpui_kit::Modifiers::default());
+        cx.run_until_parked();
+    };
+    click("profile-details-save", cx);
+    let request = rx.try_recv().unwrap();
+    while rx.try_recv().is_ok() {}
+    click("profile-details-name", cx);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("Must not replace saved name");
+    cx.run_until_parked();
+    click("profile-details-save", cx);
+    cx.update(|window, cx| window.dispatch_action(Box::new(Confirm { secondary: false }), cx));
+    cx.run_until_parked();
+    assert!(rx.try_recv().is_err());
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.details_response(
+                &response(
+                    &request,
+                    Err(AppError::new(ErrorCode::StorageFailed, "retry")),
+                ),
+                window,
+                cx,
+            )
+        });
+    });
+    cx.run_until_parked();
+    click("profile-details-save", cx);
+    let retry = rx.try_recv().unwrap();
+    assert_eq!(
+        retry.request, request.request,
+        "pending input must not change the saved fields"
+    );
+    while rx.try_recv().is_ok() {}
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| view.daemon_disconnected(window, cx));
+    });
+    cx.run_until_parked();
+    click("profile-details-name", cx);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("Revised name");
+    cx.run_until_parked();
+    cx.update(|_, cx| view.update(cx, |view, _| view.state.connection_notice = None));
+    click("profile-details-save", cx);
+    let revised = rx.try_recv().unwrap();
+    assert!(
+        matches!(&revised.request, UiRequest::Profile(AppCommand::UpdateProfileDetails {name, ..}) if name=="Revised name")
+    );
+    while rx.try_recv().is_ok() {}
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.details_response(&response(&retry, Ok(AppCommandOutput::None)), window, cx)
+        });
+        assert!(
+            window.has_active_dialog(cx),
+            "a pre-disconnect response must not close the current form"
+        );
+    });
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.details_response(&response(&revised, Ok(AppCommandOutput::None)), window, cx)
+        });
+    });
+    cx.update(|window, cx| assert!(!window.has_active_dialog(cx)));
+}

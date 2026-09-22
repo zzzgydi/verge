@@ -24,6 +24,55 @@ impl Lang {
 
 /// 文案表：`(key, zh-CN, en)`。key 按页面/用途命名。
 const ENTRIES: &[(&str, &str, &str)] = &[
+    ("profiles.edit_details", "编辑资料…", "Edit details…"),
+    ("profiles.script", "配置脚本…", "Profile script…"),
+    ("profiles.global_script", "全局脚本…", "Global script…"),
+    (
+        "script.desc",
+        "按 Merge → 全局脚本 → 配置脚本的顺序处理，最后应用网络设置。返回修改后的 config；支持 console.log，不支持异步、网络和文件访问。",
+        "Runs after Merge: global script, then profile script, followed by Network settings. Return config. console.log is supported; async, network and file access are unavailable.",
+    ),
+    ("script.preview", "预览结果", "Preview result"),
+    ("script.save", "保存草稿", "Save draft"),
+    ("script.enable", "保存并启用", "Save and enable"),
+    ("script.disable", "停用", "Disable"),
+    (
+        "script.enabled",
+        "已启用 · 草稿修改后需重新启用",
+        "Enabled · Enable again to apply draft edits",
+    ),
+    (
+        "script.disabled",
+        "未启用 · 保存草稿不会影响运行配置",
+        "Disabled · Saving a draft does not change the running configuration",
+    ),
+    ("script.saved", "草稿已保存", "Draft saved"),
+    (
+        "script.applied",
+        "脚本设置已应用",
+        "Script settings applied",
+    ),
+    ("script.preview_target", "预览配置：", "Preview profile: "),
+    (
+        "script.no_profile",
+        "导入配置后即可预览或启用脚本。",
+        "Import a profile to preview or enable the script.",
+    ),
+    (
+        "profile.details.desc",
+        "修改名称或订阅资料。订阅地址保存后，从下次更新开始使用。",
+        "Edit the name or subscription details. A new subscription URL is used on the next update.",
+    ),
+    (
+        "profile.interval_optional",
+        "留空为手动更新；填写大于 0 的秒数。",
+        "Leave blank for manual updates, or enter a positive interval in seconds.",
+    ),
+    (
+        "profile.local_edit_desc",
+        "编辑名称。配置内容通过卡片上的“编辑 YAML”修改。",
+        "Edit the name. Use Edit YAML on the profile card to change its contents.",
+    ),
     (
         "dev.system_read_only",
         "开发版只读取系统代理状态，由正式版管理系统网络。",
@@ -666,7 +715,7 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("profiles.source.remote", "远程", "Remote"),
     ("profiles.selected", "已启用", "Active"),
     ("profiles.select", "启用", "Activate"),
-    ("profiles.view_yaml", "查看 YAML…", "View YAML…"),
+    ("profiles.view_yaml", "编辑 YAML…", "Edit YAML…"),
     ("profiles.merged", "合并结果…", "Merged Result…"),
     ("profiles.set_interval", "设置间隔…", "Set Interval…"),
     ("profiles.delete_menu", "删除配置…", "Delete Profile…"),

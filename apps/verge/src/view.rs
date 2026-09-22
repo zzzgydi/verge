@@ -63,6 +63,8 @@ pub struct MainView {
     pub telemetry: Entity<pages::home::telemetry::Telemetry>,
     pub requests: mpsc::SyncSender<UiRequestEnvelope>,
     pub sheet_state: Entity<SheetState>,
+    pub script_editor: Option<Entity<pages::profiles::scripts::ScriptEditor>>,
+    pub details_request: Entity<Option<u64>>,
     /// 当前设置分类。
     pub settings_category: pages::settings::SettingsCategory,
     pub network_form: pages::settings::network::NetworkForm,
@@ -240,6 +242,8 @@ impl MainView {
             filters: pages::filters::PageFilters::new(window, cx),
             pending_settings_import: None,
             sheet_state: cx.new(|_| SheetState::default()),
+            script_editor: None,
+            details_request: cx.new(|_| None),
             settings_category: pages::settings::SettingsCategory::General,
             focus_handle,
             sidebar_collapsed: false,
@@ -409,6 +413,22 @@ impl MainView {
             return false;
         }
         if self.state.connection_notice.is_some() {
+            cx.notify();
+            return false;
+        }
+        if matches!(
+            action,
+            UiAction::ProfileScript(_) | UiAction::UpdateProfileDetails { .. }
+        ) && !self
+            .state
+            .daemon_capabilities
+            .iter()
+            .any(|c| c == crate::script::CAPABILITY)
+        {
+            self.state.set_error(crate::domain::AppError::new(
+                crate::domain::ErrorCode::Conflict,
+                tr(self.lang(), "connection.incompatible"),
+            ));
             cx.notify();
             return false;
         }
@@ -589,6 +609,11 @@ impl MainView {
 
     pub(crate) fn daemon_disconnected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.ai_form.disconnected();
+        self.script_disconnected(cx);
+        self.details_request.update(cx, |request, cx| {
+            *request = None;
+            cx.notify();
+        });
         self.state
             .disconnect(tr(self.lang(), "connection.reconnecting").into());
         let sheet = self.sheet_state.read(cx);

@@ -306,6 +306,14 @@ pub enum UiAction {
         id: ProfileId,
         yaml: String,
     },
+    ProfileScript(AppCommand),
+    UpdateProfileDetails {
+        id: ProfileId,
+        name: String,
+        source: ProfileSource,
+        update_policy: UpdatePolicy,
+        user_agent: Option<String>,
+    },
     LoadMergeConfig,
     SaveMergeConfig {
         yaml: String,
@@ -509,6 +517,23 @@ impl UiAction {
             ],
             Self::UpdateProfileYaml { id, yaml } => vec![
                 UiRequest::Profile(AppCommand::UpdateProfileYaml { id, yaml }),
+                UiRequest::Profile(AppCommand::ListProfiles),
+            ],
+            Self::ProfileScript(command) => vec![UiRequest::Profile(command)],
+            Self::UpdateProfileDetails {
+                id,
+                name,
+                source,
+                update_policy,
+                user_agent,
+            } => vec![
+                UiRequest::Profile(AppCommand::UpdateProfileDetails {
+                    id,
+                    name,
+                    source,
+                    update_policy,
+                    user_agent,
+                }),
                 UiRequest::Profile(AppCommand::ListProfiles),
             ],
             Self::LoadMergeConfig => vec![UiRequest::Profile(AppCommand::GetMergeConfig)],

@@ -225,6 +225,7 @@ pub fn run() {
                                     window.push_notification(Notification::info(tr(view.lang(), "connection.recovered")).autohide(false), cx);
                                 }
                                 view.state.daemon_capabilities = initial.capabilities;
+                                view.script_reconnected(cx);
                                 view.state.ai.revision = 0;
                                 view.ai_form.reset_sync();
                                 view.state.profiles = initial.profiles;
@@ -268,6 +269,8 @@ pub fn run() {
                                     let toast = toast_for(lang, &envelope.response);
                                     let refresh_settings = matches!(&envelope.response, UiResponse::Profile { request: AppCommand::ImportApplicationSettings { .. } | AppCommand::ResetApplicationSettingsScope { .. }, result: Ok(_) });
                                     view.ai_response(&envelope.response, window, cx);
+                                    view.script_response(&envelope, window, cx);
+                                    view.details_response(&envelope, window, cx);
                                     view.profile_sheet_response(&envelope, window, cx);
                                     view.state.apply_response_envelope(envelope);
                                     view.finish_ai_save(window, cx);
@@ -542,7 +545,9 @@ fn toast_for(lang: Lang, response: &UiResponse) -> Option<Notification> {
                     Some(tr(lang, "toast.profile_imported"))
                 }
                 AppCommand::SelectProfile { .. } => Some(tr(lang, "toast.profile_selected")),
-                AppCommand::UpdateProfileYaml { .. } => Some(tr(lang, "toast.yaml_saved")),
+                AppCommand::UpdateProfileYaml { .. } | AppCommand::UpdateProfileDetails { .. } => {
+                    Some(tr(lang, "toast.yaml_saved"))
+                }
                 AppCommand::UpdateMergeConfig { .. } => Some(tr(lang, "toast.merge_saved")),
                 AppCommand::UpdateCoreNetworkSettings { .. } => Some(tr(lang, "network.saved")),
                 AppCommand::UpdateRemoteProfile { .. } => Some(tr(lang, "toast.remote_updated")),

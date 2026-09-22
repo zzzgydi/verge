@@ -1,4 +1,6 @@
 mod actions;
+mod details;
+pub(crate) mod scripts;
 mod sheets;
 #[cfg(test)]
 mod tests;
@@ -80,6 +82,33 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         );
         let actions = h_flex()
             .gap_2()
+            .flex_wrap()
+            .child(
+                Button::new(format!("edit-details-{}", id.as_str()))
+                    .debug_selector(|| "edit-profile-details".into())
+                    .label(tr(lang, "profiles.edit_details"))
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener({
+                        let profile = profile.clone();
+                        move |this, _, window, cx| {
+                            this.open_profile_details(profile.clone(), window, cx)
+                        }
+                    })),
+            )
+            .child(
+                Button::new(format!("edit-script-{}", id.as_str()))
+                    .debug_selector(|| "edit-profile-script".into())
+                    .label(tr(lang, "profiles.script"))
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener({
+                        let id = id.clone();
+                        move |this, _, window, cx| {
+                            this.open_script_sheet(Some(id.clone()), window, cx)
+                        }
+                    })),
+            )
             .child(
                 Button::new(format!("load-profile-{}", id.as_str()))
                     .label(tr(lang, "profiles.view_yaml"))
@@ -326,6 +355,16 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                             .loading(refreshing)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.dispatch(UiAction::RefreshProfiles, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("open-global-script")
+                            .debug_selector(|| "open-global-script".into())
+                            .label(tr(lang, "profiles.global_script"))
+                            .small()
+                            .outline()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_script_sheet(None, window, cx)
                             })),
                     )
                     .child(
