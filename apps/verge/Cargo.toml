@@ -14,6 +14,7 @@ name = "verge-gpui"
 path = "src/main.rs"
 
 [dependencies]
+boa_engine = "=0.22.0"
 flate2 = "1.1"
 fs2 = "0.4"
 futures = "0.3"
