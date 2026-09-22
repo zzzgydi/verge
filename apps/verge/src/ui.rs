@@ -823,6 +823,7 @@ impl UiState {
             AppCommandOutput::ProfileYaml { id, yaml } => {
                 self.profile_yaml = Some((id, yaml));
             }
+            AppCommandOutput::ProfileScript(_) | AppCommandOutput::ScriptPreview(_) => {}
             AppCommandOutput::MergeConfigYaml { yaml } => {
                 self.merge_yaml = Some(yaml);
             }
@@ -1033,6 +1034,13 @@ fn request_key(request: &UiRequest) -> &'static str {
         }
         UiRequest::Profile(AppCommand::ListProfiles) => "profiles",
         UiRequest::Profile(AppCommand::GetProfileYaml { .. }) => "profile_yaml",
+        UiRequest::Profile(
+            AppCommand::GetProfileScript { .. }
+            | AppCommand::SaveScriptDraft { .. }
+            | AppCommand::PreviewProfileScript { .. }
+            | AppCommand::SetProfileScript { .. },
+        ) => "profile_script",
+        UiRequest::Profile(AppCommand::UpdateProfileDetails { .. }) => "profile_write",
         UiRequest::Profile(AppCommand::GetMergeConfig) => "merge_config",
         UiRequest::Profile(
             AppCommand::GetMergedProfileYaml { .. } | AppCommand::PreviewMergeConfig { .. },

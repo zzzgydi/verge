@@ -172,6 +172,7 @@ fn current_app_version() -> Option<String> {
 }
 
 mod dev;
+mod scripts;
 mod system_proxy;
 pub use dev::stop_dev_daemon;
 mod tray;
@@ -506,6 +507,13 @@ impl Backend {
                 | AppCommand::UpdateRemoteProfile { .. }
         );
         match &command {
+            AppCommand::GetProfileScript { .. }
+            | AppCommand::SaveScriptDraft { .. }
+            | AppCommand::PreviewProfileScript { .. }
+            | AppCommand::SetProfileScript { .. }
+            | AppCommand::UpdateProfileDetails { .. } => {
+                return self.execute_script_command(command, now);
+            }
             AppCommand::MoveProfile { id, up } => {
                 self.profiles.move_profile(id, *up)?;
                 return Ok(AppCommandResult {
@@ -782,14 +790,36 @@ impl Backend {
                     return Err(error);
                 }
             }
-            AppCommand::UpdateProfileYaml { .. } if self.engine.is_none() => {
-                return Err(self.runtime_unavailable());
+            AppCommand::UpdateProfileYaml { id, yaml } if self.engine.is_none() => {
+                self.validate_offline_yaml(id, yaml)?;
+                self.profiles.replace_yaml(id, yaml, now)?;
             }
-            AppCommand::UpdateMergeConfig { .. } if self.engine.is_none() => {
-                return Err(self.runtime_unavailable());
+            AppCommand::UpdateMergeConfig { yaml } if self.engine.is_none() => {
+                let previous = self.profiles.merge_yaml()?;
+                self.profiles.set_merge_yaml(yaml)?;
+                if let Err(error) = self.validate_profiles_offline() {
+                    self.profiles.set_merge_yaml(&previous)?;
+                    return Err(error);
+                }
             }
-            AppCommand::UpdateRemoteProfile { .. } if self.engine.is_none() => {
-                return Err(self.runtime_unavailable());
+            AppCommand::UpdateRemoteProfile { id } if self.engine.is_none() => {
+                let profile = self
+                    .profiles
+                    .list()
+                    .iter()
+                    .find(|p| &p.id == id)
+                    .ok_or_else(|| AppError::new(ErrorCode::NotFound, "Profile not found"))?;
+                let crate::domain::ProfileSource::Remote { url } = &profile.source else {
+                    return Err(AppError::new(
+                        ErrorCode::InvalidInput,
+                        "Not a subscription profile",
+                    ));
+                };
+                let yaml = self
+                    .profile_fetcher
+                    .fetch(url, profile.user_agent.as_deref())?;
+                self.validate_offline_yaml(id, &yaml)?;
+                self.profiles.replace_yaml(id, &yaml, now)?;
             }
             AppCommand::UpdateRemoteProfile { id } => {
                 let engine = self.engine.as_mut().expect("engine was checked above");
@@ -1471,6 +1501,7 @@ impl Backend {
                 crate::ipc::protocol::GEO_DATA_UPDATE.into(),
                 crate::ipc::protocol::PROFILE_ORDER.into(),
                 crate::ipc::protocol::MERGE_PREVIEW.into(),
+                crate::script::CAPABILITY.into(),
                 crate::ai::CAPABILITY.into(),
                 crate::ai::UX_CAPABILITY.into(),
             ],

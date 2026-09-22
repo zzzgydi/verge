@@ -167,6 +167,29 @@ pub enum AppCommand {
         id: ProfileId,
         yaml: String,
     },
+    UpdateProfileDetails {
+        id: ProfileId,
+        name: String,
+        source: ProfileSource,
+        update_policy: UpdatePolicy,
+        user_agent: Option<String>,
+    },
+    GetProfileScript {
+        id: Option<ProfileId>,
+    },
+    SaveScriptDraft {
+        id: Option<ProfileId>,
+        source: String,
+    },
+    PreviewProfileScript {
+        id: Option<ProfileId>,
+        profile: ProfileId,
+        source: String,
+    },
+    SetProfileScript {
+        id: Option<ProfileId>,
+        source: Option<String>,
+    },
     GetMergeConfig,
     UpdateMergeConfig {
         yaml: String,
@@ -307,6 +330,8 @@ pub enum AppCommandOutput {
         id: ProfileId,
         yaml: String,
     },
+    ProfileScript(crate::script::ProfileScript),
+    ScriptPreview(crate::script::ScriptPreview),
     MergeConfigYaml {
         yaml: String,
     },
@@ -959,6 +984,8 @@ impl AppCommand {
             | Self::PreviewApplicationSettingsImport { .. }
             | Self::ListProfiles
             | Self::GetProfileYaml { .. }
+            | Self::GetProfileScript { .. }
+            | Self::PreviewProfileScript { .. }
             | Self::GetMergeConfig
             | Self::PreviewMergeConfig { .. }
             | Self::GetMergedProfileYaml { .. }
@@ -967,6 +994,9 @@ impl AppCommand {
             | Self::ImportProfile { .. }
             | Self::ImportRemoteProfile { .. }
             | Self::SelectProfile { .. }
+            | Self::UpdateProfileDetails { .. }
+            | Self::SaveScriptDraft { .. }
+            | Self::SetProfileScript { .. }
             | Self::UpdateProfileYaml { .. }
             | Self::UpdateMergeConfig { .. }
             | Self::UpdateRemoteProfile { .. }

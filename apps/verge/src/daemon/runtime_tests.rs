@@ -127,6 +127,145 @@ fn isolated_queries_and_delay_use_unix_transport() {
 
 #[test]
 #[ignore = "requires MIHOMO_BIN pointing to the pinned sidecar"]
+fn script_failures_only_restore_the_core_after_application() {
+    let (_dir, mut config) = fixture();
+    config.channel = crate::identity::AppChannel::Dev;
+    config.binary = env::var_os("MIHOMO_BIN").expect("MIHOMO_BIN").into();
+    let mut backend = Backend::new(config).unwrap();
+    let active = ProfileId::parse("active").unwrap();
+    let inactive = ProfileId::parse("inactive").unwrap();
+    let source = "function main(c,n){if(n==='Broken')c.rules=['BAD-RULE'];return c}";
+    for id in [&active, &inactive] {
+        backend.profiles.import(
+            Profile::new(id.clone(), "Original", ProfileSource::Local, UpdatePolicy::Manual, 0, None).unwrap(),
+            "mixed-port: 0\nmode: rule\nlog-level: warning\nrules: ['MATCH,DIRECT']\ndns:\n  enable: false\n",
+        ).unwrap();
+        backend
+            .execute_profile(AppCommand::SetProfileScript {
+                id: Some(id.clone()),
+                source: Some(source.into()),
+            })
+            .unwrap();
+    }
+    backend
+        .execute_profile(AppCommand::SelectProfile { id: active.clone() })
+        .unwrap();
+    let mode = |backend: &mut Backend, command| {
+        let response = backend.execute(UiRequest::Runtime(command));
+        assert!(response_succeeded(&response), "{response:?}");
+        response
+    };
+    mode(
+        &mut backend,
+        RuntimeCommand::SetMode {
+            mode: RunMode::Global,
+        },
+    );
+    let state = backend.engine.as_ref().unwrap().supervisor.state().clone();
+    let runtime_path = backend.config.data_dir.join("profiles/runtime-config.yaml");
+    let runtime = fs::read(&runtime_path).unwrap();
+    for scope in [Some(active.clone()), Some(inactive.clone()), None] {
+        assert!(
+            backend
+                .execute_profile(AppCommand::SetProfileScript {
+                    id: scope,
+                    source: Some("function main(c){c.rules=['BAD-RULE'];return c}".into()),
+                })
+                .is_err()
+        );
+        assert_eq!(backend.engine.as_ref().unwrap().supervisor.state(), &state);
+        assert_eq!(fs::read(&runtime_path).unwrap(), runtime);
+    }
+    for id in [&active, &inactive] {
+        assert!(
+            backend
+                .execute_profile(AppCommand::UpdateProfileDetails {
+                    id: id.clone(),
+                    name: "Broken".into(),
+                    source: ProfileSource::Local,
+                    update_policy: UpdatePolicy::Manual,
+                    user_agent: None,
+                })
+                .is_err()
+        );
+        assert_eq!(
+            backend
+                .profiles
+                .list()
+                .iter()
+                .find(|p| &p.id == id)
+                .unwrap()
+                .name,
+            "Original"
+        );
+        assert_eq!(backend.engine.as_ref().unwrap().supervisor.state(), &state);
+        assert_eq!(fs::read(&runtime_path).unwrap(), runtime);
+    }
+    assert!(matches!(
+        mode(&mut backend, RuntimeCommand::GetMode),
+        UiResponse::Runtime {
+            result: Ok(crate::domain::RuntimeCommandResult {
+                output: RuntimeCommandOutput::Mode(RunMode::Global),
+                ..
+            }),
+            ..
+        }
+    ));
+    // Make the candidate use a different private socket: YAML validation succeeds,
+    // but the supervisor's original health endpoint becomes unavailable after apply.
+    backend
+        .profiles
+        .set_internal_socket(backend.config.data_dir.join("control/candidate.sock"));
+    for command in [
+        AppCommand::SetProfileScript {
+            id: Some(active.clone()),
+            source: Some("function main(c){c.mode='direct';return c}".into()),
+        },
+        AppCommand::UpdateProfileDetails {
+            id: active.clone(),
+            name: "Renamed".into(),
+            source: ProfileSource::Local,
+            update_policy: UpdatePolicy::Manual,
+            user_agent: None,
+        },
+    ] {
+        assert!(backend.execute_profile(command).is_err());
+        assert_eq!(fs::read(&runtime_path).unwrap(), runtime);
+        assert_eq!(
+            backend
+                .profiles
+                .script(Some(&active))
+                .unwrap()
+                .active
+                .as_deref(),
+            Some(source)
+        );
+        assert_eq!(
+            backend
+                .profiles
+                .list()
+                .iter()
+                .find(|p| p.id == active)
+                .unwrap()
+                .name,
+            "Original"
+        );
+        backend
+            .engine
+            .as_ref()
+            .unwrap()
+            .supervisor
+            .health(Duration::from_secs(1))
+            .unwrap();
+    }
+    backend
+        .profiles
+        .set_internal_socket(backend.config.internal_socket());
+    backend.shutdown();
+}
+
+#[test]
+#[ignore = "requires MIHOMO_BIN pointing to the pinned sidecar"]
 fn daemon_queries_use_internal_socket_with_external_controller_disabled() {
     let (dir, mut config) = fixture();
     config.binary = env::var_os("MIHOMO_BIN").expect("MIHOMO_BIN").into();

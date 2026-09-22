@@ -177,13 +177,28 @@ impl FileProfileStore {
         Ok(value)
     }
 
+    #[cfg(test)]
     pub(super) fn render_runtime(
         &self,
         source: &str,
         controller: SocketAddr,
         secret: &str,
     ) -> Result<String, AppError> {
-        let yaml = render_runtime_yaml(source, &self.merge, controller, secret)?;
+        let source = apply_merge(
+            &serde_yaml::from_str(source).map_err(storage_error)?,
+            &self.merge,
+        )?;
+        self.render_compiled_runtime(&source, controller, secret)
+    }
+
+    pub(super) fn render_compiled_runtime(
+        &self,
+        value: &Value,
+        controller: SocketAddr,
+        secret: &str,
+    ) -> Result<String, AppError> {
+        let source = serde_yaml::to_string(value).map_err(storage_error)?;
+        let yaml = render_runtime_yaml(&source, &MergeConfig::default(), controller, secret)?;
         let mut value = self.apply_network(serde_yaml::from_str(&yaml).map_err(storage_error)?)?;
         if let Some(enabled) = self.dev_mode.then_some(false).or(self.runtime_tun) {
             let mapping = value.as_mapping_mut().expect("validated runtime mapping");

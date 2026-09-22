@@ -1,6 +1,8 @@
 mod transfer;
 pub use transfer::{export_portable_settings, parse_portable_settings, portable_settings_preview};
 mod network;
+mod scripts;
+use scripts::CompileMode;
 use std::{
     collections::HashSet,
     fs,
@@ -14,6 +16,9 @@ use crate::domain::{
     SettingsImportPreview,
 };
 pub use crate::domain::{Profile, ProfileSource, UpdatePolicy};
+pub(crate) fn restore_runtime_artifact(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
+    atomic_write_private(path, bytes).map_err(storage_error)
+}
 use serde::{Deserialize, Serialize};
 
 const MANIFEST_VERSION: u32 = 1;
@@ -487,6 +492,9 @@ impl FileProfileStore {
         };
         merge.validate()?;
         let bytes = serde_yaml::to_string(&merge).map_err(storage_error)?;
+        for profile in self.list() {
+            self.protect_compilation(&profile.id)?;
+        }
         let previous = std::mem::replace(&mut self.merge, merge);
         if let Err(error) = atomic_write(&self.root.join("merge.yaml"), bytes.as_bytes()) {
             self.merge = previous;
@@ -508,9 +516,10 @@ impl FileProfileStore {
             serde_yaml::from_str(yaml)
                 .map_err(|_| AppError::new(ErrorCode::ValidationFailed, "invalid Merge YAML"))?
         };
-        let source: serde_yaml::Value =
-            serde_yaml::from_str(&self.yaml(id)?).map_err(storage_error)?;
-        let value = self.apply_network(apply_merge(&source, &merge)?)?;
+        let value = self.apply_network(
+            self.compile(id, &self.yaml(id)?, &merge, CompileMode::MergePreview)?
+                .0,
+        )?;
         serde_yaml::to_string(&value).map_err(storage_error)
     }
 
@@ -545,16 +554,13 @@ impl FileProfileStore {
         })
     }
 
-    /// 源配置经 merge 增强后的结构化值。
+    /// Source → Merge → enabled scripts → network overrides.
     fn effective_value(&self, id: &ProfileId) -> Result<serde_yaml::Value, AppError> {
         let source = self.yaml(id)?;
-        let value: serde_yaml::Value = serde_yaml::from_str(&source).map_err(|error| {
-            AppError::new(
-                ErrorCode::ValidationFailed,
-                format!("invalid YAML: {error}"),
-            )
-        })?;
-        self.apply_network(apply_merge(&value, &self.merge)?)
+        self.apply_network(
+            self.compile(id, &source, &self.merge, CompileMode::Runtime)?
+                .0,
+        )
     }
 
     pub fn materialize_runtime(
@@ -564,7 +570,10 @@ impl FileProfileStore {
         secret: &str,
     ) -> Result<PathBuf, AppError> {
         let source = self.yaml(id)?;
-        let runtime = self.render_runtime(&source, controller, secret)?;
+        let compiled = self
+            .compile(id, &source, &self.merge, CompileMode::Runtime)?
+            .0;
+        let runtime = self.render_compiled_runtime(&compiled, controller, secret)?;
         let path = self.root.join("runtime-config.yaml");
         atomic_write_private(&path, runtime.as_bytes()).map_err(storage_error)?;
         Ok(path)
@@ -652,7 +661,9 @@ impl FileProfileStore {
         secret: &str,
     ) -> Result<CandidateConfig, AppError> {
         self.require_profile(id)?;
-        let runtime = self.render_runtime(yaml, controller, secret)?;
+        self.protect_compilation(id)?;
+        let compiled = self.compile(id, yaml, &self.merge, CompileMode::Runtime)?.0;
+        let runtime = self.render_compiled_runtime(&compiled, controller, secret)?;
         let path = self
             .root
             .join("candidates")
@@ -671,6 +682,7 @@ impl FileProfileStore {
     ) -> Result<CandidateConfig, AppError> {
         self.require_profile(id)?;
         validate_yaml(yaml)?;
+        self.protect_compilation(id)?;
         let path = self
             .root
             .join("candidates")
@@ -809,6 +821,12 @@ impl FileProfileStore {
         }
         let _ = fs::remove_file(deleted_path);
         let _ = fs::remove_file(self.snapshot_path(id));
+        let _ = fs::remove_file(
+            self.root
+                .join("scripts")
+                .join(format!("profile-{}.json", id.as_str())),
+        );
+        let _ = fs::remove_dir_all(self.root.join("compiled").join(id.as_str()));
         Ok(())
     }
 
@@ -1186,7 +1204,7 @@ fn storage_error(error: impl fmt::Display) -> AppError {
 use std::fmt;
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     #[test]
     fn dev_disables_tun_after_profile_merge_and_runtime_overrides() {
         let dir = TestDir::new("dev-tun");
@@ -1219,10 +1237,10 @@ mod tests {
 
     use super::*;
 
-    pub(super) struct TestDir(pub(super) PathBuf);
+    pub(crate) struct TestDir(pub(crate) PathBuf);
 
     impl TestDir {
-        pub(super) fn new(name: &str) -> Self {
+        pub(crate) fn new(name: &str) -> Self {
             let nonce = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()

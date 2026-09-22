@@ -1567,7 +1567,12 @@ impl<'a, C: CoreControl> ProfileCommandHandler<'a, C> {
         now: i64,
     ) -> Result<AppCommandResult, CommandFailure> {
         let output = match command {
-            AppCommand::GetCoreNetworkSettings
+            AppCommand::GetProfileScript { .. }
+            | AppCommand::SaveScriptDraft { .. }
+            | AppCommand::PreviewProfileScript { .. }
+            | AppCommand::SetProfileScript { .. }
+            | AppCommand::UpdateProfileDetails { .. }
+            | AppCommand::GetCoreNetworkSettings
             | AppCommand::UpdateCoreNetworkSettings { .. }
             | AppCommand::GetRuntimeSettings
             | AppCommand::GetApplicationSettings
@@ -1960,6 +1965,58 @@ mod tests {
             );
             assert_eq!(fs::read_to_string(original).unwrap(), before);
         }
+    }
+
+    #[test]
+    fn script_candidates_validate_apply_and_rollback_without_rerunning_js() {
+        let directory = TestDir::new("script-rollback");
+        let (mut store, first, _) = store_with_profiles(&directory.0);
+        let script = "function main(c){c.random=Math.random();return c}";
+        store
+            .set_script(
+                Some(&first),
+                &crate::script::ProfileScript {
+                    draft: script.into(),
+                    active: Some(script.into()),
+                },
+            )
+            .unwrap();
+        let credentials = RuntimeCredentials {
+            controller: "127.0.0.1:9090".parse().unwrap(),
+            secret: "test".into(),
+        };
+        let runtime = store
+            .materialize_runtime(&first, credentials.controller, &credentials.secret)
+            .unwrap();
+        let previous = fs::read_to_string(&runtime).unwrap();
+        let mut core = FakeCore::default();
+        core.health.push_back(Err(failure("health failed")));
+        let result = ConfigCommandHandler::with_runtime_credentials(
+            &mut store,
+            &mut core,
+            credentials.clone(),
+        )
+        .update_profile_yaml(&first, "mode: global\n", 1);
+        assert!(result.is_err());
+        assert_eq!(core.validated_yaml[0], core.applied_yaml[0]);
+        assert_eq!(core.applied_yaml[1], previous);
+        // Many rejected source candidates must not evict the old runtime artifact.
+        for i in 0..8 {
+            core.validation.push_back(Err(failure("reject")));
+            assert!(
+                ConfigCommandHandler::with_runtime_credentials(
+                    &mut store,
+                    &mut core,
+                    credentials.clone()
+                )
+                .update_profile_yaml(&first, &format!("mode: rule\nprobe: {i}\n"), 2)
+                .is_err()
+            );
+        }
+        let after = store
+            .materialize_runtime(&first, credentials.controller, &credentials.secret)
+            .unwrap();
+        assert_eq!(fs::read_to_string(after).unwrap(), previous);
     }
 
     #[test]
