@@ -64,7 +64,8 @@ impl MainView {
                             .ghost()
                             .w_full()
                             .h(px(40.))
-                            .px(px(15.))
+                            // 48px collapsed width leaves 18px for the icon after padding and borders.
+                            .px(px(14.))
                             .rounded_lg()
                             .border_1()
                             .border_color(gpui_kit::transparent_black())
