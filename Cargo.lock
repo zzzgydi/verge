@@ -8984,9 +8984,11 @@ dependencies = [
 name = "verge-helper"
 version = "0.1.0"
 dependencies = [
+ "core-foundation 0.9.4",
  "libc",
  "serde",
  "serde_json",
+ "system-configuration-sys 0.6.0",
  "verge-helper-protocol",
 ]
 
@@ -8994,6 +8996,7 @@ dependencies = [
 name = "verge-helper-protocol"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
 ]

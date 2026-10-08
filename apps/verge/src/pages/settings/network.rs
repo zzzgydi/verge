@@ -261,23 +261,26 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
     );
     if let Some(network) = &view.state.network_settings {
         rows = rows.child(
-            field().label(tr(lang, "settings.network.tun")).child(
-                h_flex().justify_end().child(
-                    Switch::new("switch-tun")
-                        .checked(network.tun_enabled)
-                        .disabled(
-                            crate::identity::AppChannel::current().is_dev()
-                                || busy
-                                || view.is_pending(&["network_settings_write"]),
-                        )
-                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                            if let Some(mut settings) = this.state.network_settings.clone() {
-                                settings.tun_enabled = *checked;
-                                this.dispatch(UiAction::UpdateNetworkSettings(settings), cx);
-                            }
-                        })),
+            field()
+                .label(tr(lang, "settings.network.tun"))
+                .description(tr(lang, "settings.network.tun.desc"))
+                .child(
+                    h_flex().justify_end().child(
+                        Switch::new("switch-tun")
+                            .checked(network.tun_enabled)
+                            .disabled(
+                                crate::identity::AppChannel::current().is_dev()
+                                    || busy
+                                    || view.is_pending(&["network_settings_write"]),
+                            )
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                if let Some(mut settings) = this.state.network_settings.clone() {
+                                    settings.tun_enabled = *checked;
+                                    this.dispatch(UiAction::UpdateNetworkSettings(settings), cx);
+                                }
+                            })),
+                    ),
                 ),
-            ),
         );
     }
     section = section.child(rows);

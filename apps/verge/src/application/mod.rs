@@ -375,6 +375,10 @@ impl<T: ControllerTransport> MihomoRuntime<T> {
         self.controller = crate::mihomo::ControllerEndpoint::Unix(path);
     }
 
+    pub(crate) fn verify_tun(&mut self, device: &str) -> Result<(), AppError> {
+        self.client.verify_tun(device)
+    }
+
     pub fn set_sensitive_values(&mut self, values: impl IntoIterator<Item = String>) {
         self.sensitive_values = std::env::var("HOME")
             .into_iter()

@@ -54,6 +54,7 @@ impl FileProfileStore {
                 &self.network,
                 &self.internal_socket,
                 self.runtime_tun,
+                &self.tun_device,
                 self.dev_mode,
             ))
             .map_err(storage_error)?,

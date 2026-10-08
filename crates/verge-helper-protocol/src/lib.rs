@@ -1,3 +1,5 @@
+pub mod descriptor;
+
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -39,6 +41,10 @@ pub enum HelperRequest {
         protocol_version: u32,
     },
     GetCapabilities,
+    /// A connection-owned device; the descriptor is sent through SCM_RIGHTS.
+    LeaseTun {
+        ipv6: bool,
+    },
     EnableTun {
         config: TunConfig,
     },
@@ -57,6 +63,8 @@ pub enum HelperResponse {
     Capabilities {
         protocol_version: u32,
         tun_lifecycle: bool,
+        #[serde(default)]
+        tun_fd_lease: bool,
     },
     /// TUN 已就绪，返回实际设备名（如 `utun4`）。
     TunEnabled {

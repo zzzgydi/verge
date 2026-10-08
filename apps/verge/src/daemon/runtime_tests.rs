@@ -764,3 +764,68 @@ fn proxy_groups_follow_merged_config_order() {
         ["Z", "A", "GLOBAL"]
     );
 }
+
+#[test]
+fn tun_cleanup_does_not_require_a_profile_or_running_controller() {
+    use std::{
+        os::{
+            fd::AsFd,
+            unix::net::{UnixListener, UnixStream},
+        },
+        sync::{Arc, Mutex},
+    };
+    struct Fake {
+        fd: std::os::fd::OwnedFd,
+        calls: Arc<Mutex<Vec<&'static str>>>,
+    }
+    impl verge_helper::TunBackend for Fake {
+        fn tun_lifecycle_supported(&self) -> bool {
+            true
+        }
+        fn tun_fd_lease_supported(&self) -> bool {
+            true
+        }
+        fn descriptor(&self, _: &str) -> Result<std::os::fd::OwnedFd, verge_helper::HelperFailure> {
+            Ok(self.fd.as_fd().try_clone_to_owned().unwrap())
+        }
+        fn enable_tun(
+            &mut self,
+            _: &verge_helper::ValidatedTun,
+        ) -> Result<String, verge_helper::HelperFailure> {
+            self.calls.lock().unwrap().push("prepare");
+            Ok("utun6".into())
+        }
+        fn activate(&mut self, _: &str, _: bool) -> Result<(), verge_helper::HelperFailure> {
+            self.calls.lock().unwrap().push("activate");
+            Ok(())
+        }
+        fn disable_tun(&mut self, _: Option<&str>) -> Result<(), verge_helper::HelperFailure> {
+            self.calls.lock().unwrap().push("release");
+            Ok(())
+        }
+    }
+    let (_directory, config) = fixture();
+    let mut backend = Backend::new(config).unwrap();
+    let listener = UnixListener::bind(&backend.config.helper_socket).unwrap();
+    let calls = Arc::new(Mutex::new(vec![]));
+    let (fd, _peer) = UnixStream::pair().unwrap();
+    let helper = verge_helper::shared_tun_backend(Fake {
+        fd: fd.into(),
+        calls: calls.clone(),
+    });
+    let worker = std::thread::spawn(move || {
+        for _ in 0..2 {
+            let (stream, _) = listener.accept().unwrap();
+            verge_helper::serve_connection(stream, verge_helper::current_uid(), &helper).unwrap();
+        }
+    });
+    let mut lease =
+        crate::platform::TunLease::prepare(&backend.config.helper_socket, false).unwrap();
+    lease.activate().unwrap();
+    backend.tun_lease = Some(lease);
+    assert!(backend.engine.is_none());
+    backend.stop_tun_after_failure().unwrap();
+    assert!(backend.tun_lease.is_none());
+    worker.join().unwrap();
+    assert_eq!(*calls.lock().unwrap(), ["prepare", "activate", "release"]);
+}

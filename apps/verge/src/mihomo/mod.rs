@@ -1,3 +1,4 @@
+mod watchdog;
 use std::{
     collections::VecDeque,
     io::{self, BufRead, BufReader, Read},
@@ -8,6 +9,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+pub(crate) use watchdog::run as core_watch_main;
 
 use crate::domain::{AppError, ErrorCode};
 
@@ -81,24 +83,63 @@ pub fn validate_config_file(
     working_dir: &Path,
     candidate: &Path,
 ) -> Result<(), AppError> {
+    validate_config_file_with_timeout(binary, working_dir, candidate, Duration::from_secs(10))
+}
+
+fn validate_config_file_with_timeout(
+    binary: &Path,
+    working_dir: &Path,
+    candidate: &Path,
+    timeout: Duration,
+) -> Result<(), AppError> {
+    use std::os::unix::process::CommandExt;
     if !candidate.is_file() {
         return Err(AppError::new(
             ErrorCode::InvalidInput,
             format!("candidate config does not exist: {}", candidate.display()),
         ));
     }
-    let output = Command::new(binary)
+    let mut child = Command::new(binary)
         .args(["-t", "-d"])
         .arg(working_dir)
         .arg("-f")
         .arg(candidate)
         .stdin(Stdio::null())
-        .output()
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
         .map_err(core_io_error)?;
-    if output.status.success() {
+    let mut stderr = child.stderr.take().expect("piped validation stderr");
+    let reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stderr.by_ref().take(64 * 1024).read_to_end(&mut bytes);
+        let _ = io::copy(&mut stderr, &mut io::sink());
+        bytes
+    });
+    let deadline = Instant::now() + timeout;
+    let observed = loop {
+        match watchdog::exited(&child) {
+            Ok(true) => break Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => break Err(core_io_error(error)),
+            Ok(false) => {}
+        }
+        if Instant::now() >= deadline {
+            break Err(core_error("Mihomo configuration validation timed out"));
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    // Kill descendants before reaping the leader or joining its output reader.
+    let cleanup = watchdog::kill_group(&child).map_err(core_io_error);
+    let status = child.wait().map_err(core_io_error);
+    let stderr = reader.join().unwrap_or_default();
+    observed?;
+    cleanup?;
+    if status?.success() {
         return Ok(());
     }
-    let message = String::from_utf8_lossy(&output.stderr);
+    let message = String::from_utf8_lossy(&stderr);
     Err(AppError::new(
         ErrorCode::CoreRejectedConfig,
         format!("Mihomo rejected candidate config: {}", message.trim()),
@@ -213,6 +254,9 @@ pub struct CoreSupervisor {
     config_path: PathBuf,
     internal_socket: Option<PathBuf>,
     child: Option<Child>,
+    tun_fd: Option<std::os::fd::OwnedFd>,
+    lifeline: Option<std::os::unix::net::UnixStream>,
+    leased_child: bool,
     state: SupervisorState,
     restart_attempts: u32,
     events: VecDeque<SupervisorEvent>,
@@ -235,6 +279,9 @@ impl CoreSupervisor {
             config_path,
             internal_socket: None,
             child: None,
+            tun_fd: None,
+            lifeline: None,
+            leased_child: false,
             state: SupervisorState::Stopped,
             restart_attempts: 0,
             events: VecDeque::new(),
@@ -245,6 +292,10 @@ impl CoreSupervisor {
 
     pub fn set_internal_socket(&mut self, path: PathBuf) {
         self.internal_socket = Some(path);
+    }
+
+    pub(crate) fn set_tun_fd(&mut self, fd: Option<std::os::fd::OwnedFd>) {
+        self.tun_fd = fd;
     }
 
     pub fn state(&self) -> &SupervisorState {
@@ -314,6 +365,15 @@ impl CoreSupervisor {
                     return Err(core_error("external controller health check failed"));
                 }
             }
+            if let Some(device) = value
+                .get("tun")
+                .filter(|tun| tun["enable"].as_bool() == Some(true))
+                .and_then(|tun| tun.get("device"))
+                .and_then(serde_yaml::Value::as_str)
+            {
+                let transport = TcpControllerTransport::unix(path.clone(), timeout)?;
+                MihomoClient::new(transport).verify_tun(device)?;
+            }
             return Ok(health);
         }
         probe_health(self.config.controller, &self.config.secret, timeout)
@@ -326,7 +386,15 @@ impl CoreSupervisor {
                 "Mihomo is already running",
             ));
         }
-        let mut child = Command::new(&self.config.binary)
+        let mut command = if let Some(fd) = &self.tun_fd {
+            let (command, lifeline) =
+                watchdog::command(&self.config.binary, fd).map_err(core_io_error)?;
+            self.lifeline = Some(lifeline);
+            command
+        } else {
+            Command::new(&self.config.binary)
+        };
+        let mut child = command
             .arg("-d")
             .arg(&self.config.working_dir)
             .arg("-f")
@@ -345,6 +413,7 @@ impl CoreSupervisor {
                 .push(self.logs.attach(stderr, LogStream::Stderr));
         }
         let pid = child.id();
+        self.leased_child = self.tun_fd.is_some();
         self.child = Some(child);
         self.state = SupervisorState::Running { pid };
         self.events.push_back(SupervisorEvent::Started { pid });
@@ -361,16 +430,38 @@ impl CoreSupervisor {
         let Some(child) = self.child.as_mut() else {
             return Ok(());
         };
+        if self.leased_child {
+            if !watchdog::exited(child).map_err(core_io_error)? {
+                return Ok(());
+            }
+            watchdog::kill_group(child).map_err(core_io_error)?;
+        }
         let Some(status) = child.try_wait().map_err(core_io_error)? else {
             return Ok(());
         };
         self.child = None;
+        self.leased_child = false;
+        self.lifeline = None;
         self.finish_log_readers();
         self.handle_exit(status, now);
         Ok(())
     }
 
     pub fn stop(&mut self) -> Result<(), AppError> {
+        self.lifeline = None;
+        if self.leased_child {
+            let result = self
+                .child
+                .as_mut()
+                .map(|child| watchdog::stop_group(child, self.config.stop_timeout))
+                .transpose()
+                .map_err(core_io_error);
+            result?;
+            self.child = None;
+            self.leased_child = false;
+            self.finish_stop();
+            return Ok(());
+        }
         if let Some(mut child) = self.child.take()
             && child.try_wait().map_err(core_io_error)?.is_none()
         {
@@ -400,6 +491,7 @@ impl CoreSupervisor {
     }
 
     fn finish_stop(&mut self) {
+        self.lifeline = None;
         self.finish_log_readers();
         self.restart_attempts = 0;
         self.state = SupervisorState::Stopped;
@@ -532,6 +624,111 @@ mod tests {
         let error = validate_config_file(Path::new("/usr/bin/false"), &directory.0, &candidate)
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::CoreRejectedConfig);
+    }
+
+    #[test]
+    fn validation_timeout_reaps_child_and_closes_inherited_output() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = TestDir::new("validation-timeout");
+        let candidate = directory.0.join("config.yaml");
+        fs::write(&candidate, "mode: rule\n").unwrap();
+        let script = directory.0.join("validator.sh");
+        let pid_file = directory.0.join("pid");
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' $$ > '{}'\n/bin/sleep 60 &\nwait\n",
+                pid_file.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let start = Instant::now();
+        let error = validate_config_file_with_timeout(
+            &script,
+            &directory.0,
+            &candidate,
+            Duration::from_secs(2),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("timed out"));
+        assert!(start.elapsed() < Duration::from_secs(5));
+        let pid: i32 = fs::read_to_string(pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+    }
+
+    #[test]
+    fn supervisor_recovers_when_leased_watchdog_is_killed_or_stuck() {
+        use std::os::{
+            fd::AsRawFd,
+            unix::{net::UnixStream, process::CommandExt},
+        };
+        for crash in [true, false] {
+            let directory = TestDir::new("watchdog-failure");
+            let candidate = directory.0.join("config.yaml");
+            fs::write(&candidate, "mode: rule\n").unwrap();
+            let ready = directory.0.join("ready");
+            let (source, mut peer) = UnixStream::pair().unwrap();
+            peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut command = Command::new("/bin/sh");
+            command
+                .args([
+                    "-c",
+                    "/bin/sleep 60 & printf ready > \"$1\"; wait",
+                    "watchdog",
+                ])
+                .arg(&ready)
+                .process_group(0)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            unsafe {
+                command.pre_exec(move || {
+                    if libc::dup2(source.as_raw_fd(), 3) < 0 || libc::fcntl(3, libc::F_SETFD, 0) < 0
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let mut child = command.spawn().unwrap();
+            drop(command);
+            let mut supervisor = CoreSupervisor::new(config(&directory.0), candidate).unwrap();
+            supervisor.log_readers.push(
+                supervisor
+                    .logs
+                    .attach(child.stdout.take().unwrap(), LogStream::Stdout),
+            );
+            supervisor.leased_child = true;
+            supervisor.state = SupervisorState::Running { pid: child.id() };
+            supervisor.child = Some(child);
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !ready.exists() {
+                assert!(Instant::now() < deadline);
+                thread::sleep(Duration::from_millis(10));
+            }
+            let pid = supervisor.child.as_ref().unwrap().id() as i32;
+            assert_eq!(
+                unsafe { libc::kill(pid, if crash { libc::SIGKILL } else { libc::SIGSTOP }) },
+                0
+            );
+            let start = Instant::now();
+            if crash {
+                while matches!(supervisor.state(), SupervisorState::Running { .. }) {
+                    supervisor.poll(Instant::now()).unwrap();
+                    assert!(start.elapsed() < Duration::from_secs(3));
+                    thread::sleep(Duration::from_millis(10));
+                }
+            } else {
+                supervisor.stop().unwrap();
+            }
+            assert_eq!(peer.read(&mut [0]).unwrap(), 0, "orphan retained device");
+            assert!(start.elapsed() < Duration::from_secs(3));
+            assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        }
     }
 
     #[test]

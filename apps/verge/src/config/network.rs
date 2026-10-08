@@ -35,6 +35,10 @@ pub(super) fn load(
 }
 
 impl FileProfileStore {
+    pub(crate) fn set_tun_device(&mut self, device: Option<(String, bool)>) {
+        self.runtime_tun = Some(device.is_some());
+        self.tun_device = device;
+    }
     pub fn preserve_runtime_tun(&mut self, enabled: bool) {
         self.runtime_tun = Some(enabled);
     }
@@ -212,6 +216,66 @@ impl FileProfileStore {
                 tun.insert(Value::String("enable".into()), Value::Bool(enabled));
             }
         }
+        if self.internal_socket.is_some() || self.dev_mode {
+            let mapping = value.as_mapping_mut().expect("validated runtime mapping");
+            if let Some((_, ipv6)) = self.tun_device.as_ref().filter(|_| !self.dev_mode) {
+                // Validate the final compiler result on every profile/script/Merge reload.
+                // A running lease cannot silently change its routed address families.
+                if mapping.get("ipv6").and_then(Value::as_bool).unwrap_or(true) != *ipv6 {
+                    return Err(AppError::new(
+                        ErrorCode::Conflict,
+                        "Disable TUN before changing IPv6 routing",
+                    ));
+                }
+                let dns = mapping.get("dns");
+                if dns.and_then(|v| v.get("enable")).and_then(Value::as_bool) != Some(true) {
+                    return Err(AppError::new(
+                        ErrorCode::ValidationFailed,
+                        "Enable DNS before using TUN",
+                    ));
+                }
+                if dns
+                    .and_then(|v| v.get("fake-ip-range"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|v| v != "198.18.0.1/16")
+                {
+                    return Err(AppError::new(
+                        ErrorCode::ValidationFailed,
+                        "TUN requires fake-ip-range 198.18.0.1/16",
+                    ));
+                }
+            }
+            // The app owns the device and descriptor. Source, Merge and scripts
+            // cannot inject another descriptor or activate a TUN without a lease.
+            let tun = mapping
+                .entry(Value::String("tun".into()))
+                .or_insert_with(|| Value::Mapping(Default::default()));
+            if !tun.is_mapping() {
+                *tun = Value::Mapping(Default::default());
+            }
+            let tun = tun.as_mapping_mut().unwrap();
+            tun.remove(Value::String("file-descriptor".into()));
+            if let Some((device, _)) = self.tun_device.as_ref().filter(|_| !self.dev_mode) {
+                for (key, value) in [
+                    ("enable", Value::Bool(true)),
+                    ("device", Value::String(device.clone())),
+                    ("file-descriptor", Value::Number(3.into())),
+                    ("mtu", Value::Number(9000.into())),
+                    ("auto-route", Value::Bool(false)),
+                    ("auto-redirect", Value::Bool(false)),
+                    ("auto-detect-interface", Value::Bool(true)),
+                    ("dns-hijack", serde_yaml::to_value(["any:53"]).unwrap()),
+                    (
+                        "inet6-address",
+                        serde_yaml::to_value(["fdfe:dcba:9876::1/126"]).unwrap(),
+                    ),
+                ] {
+                    tun.insert(Value::String(key.into()), value);
+                }
+            } else {
+                tun.insert(Value::String("enable".into()), Value::Bool(false));
+            }
+        }
         if let Some(socket) = &self.internal_socket {
             let mapping = value.as_mapping_mut().expect("runtime root was validated");
             // Subscription files cannot add a second unprotected control listener.
@@ -253,6 +317,46 @@ impl FileProfileStore {
 mod tests {
     use super::*;
     use crate::config::tests::{TestDir, profile};
+
+    #[test]
+    fn private_tun_overrides_cannot_be_changed_by_source_merge_or_scripts() {
+        let directory = TestDir::new("leased-tun");
+        let mut store = FileProfileStore::open(&directory.0).unwrap();
+        store.set_internal_socket(directory.0.join("controller.sock"));
+        let id = ProfileId::parse("daily").unwrap();
+        let source = "ipv6: false\ndns: {enable: true, nameserver: [1.1.1.1]}\ntun: {enable: true, file-descriptor: 88, auto-route: true}\n";
+        store
+            .import(profile("daily", UpdatePolicy::Manual), source)
+            .unwrap();
+        let controller = "127.0.0.1:9090".parse().unwrap();
+        let read = |store: &FileProfileStore| -> Value {
+            let path = store.materialize_runtime(&id, controller, "test").unwrap();
+            serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+        };
+        let value = read(&store);
+        assert_eq!(value["tun"]["enable"], false);
+        assert!(value["tun"].get("file-descriptor").is_none());
+        store.set_tun_device(Some(("utun9".into(), false)));
+        let mut script = store.script(None).unwrap();
+        script.active=Some("function main(c){c.tun={enable:false,'file-descriptor':77,'auto-route':true};return c}".into());
+        store.set_script(None, &script).unwrap();
+        let value = read(&store);
+        assert_eq!(value["tun"]["enable"], true);
+        assert_eq!(value["tun"]["file-descriptor"], 3);
+        assert_eq!(value["tun"]["device"], "utun9");
+        assert_eq!(value["tun"]["auto-route"], false);
+        assert_eq!(value["tun"]["auto-detect-interface"], true);
+        assert_eq!(store.yaml(&id).unwrap(), source);
+        for mutation in [
+            "c.ipv6=true",
+            "c.dns.enable=false",
+            "c.dns['fake-ip-range']='10.0.0.1/8'",
+        ] {
+            script.active = Some(format!("function main(c){{{mutation};return c}}"));
+            store.set_script(None, &script).unwrap();
+            assert!(store.materialize_runtime(&id, controller, "test").is_err());
+        }
+    }
 
     #[test]
     fn network_overrides_merge_after_rules_and_preserve_source() {

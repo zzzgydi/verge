@@ -1,3 +1,5 @@
+mod tun;
+pub(crate) use tun::TunLease;
 mod pac;
 #[cfg(unix)]
 mod rotating_log;
@@ -132,9 +134,11 @@ impl MacHelperClient {
             Ok(HelperResponse::Capabilities {
                 protocol_version,
                 tun_lifecycle,
+                tun_fd_lease,
             }) => Ok(HelperCapabilities {
                 protocol_version,
                 tun_lifecycle,
+                tun_fd_lease,
             }),
             Ok(HelperResponse::Error { code, message }) => Err(helper_call_error(&code, &message)),
             Ok(response) => Err(platform_error(format!(
@@ -190,6 +194,7 @@ impl MacHelperClient {
 pub struct HelperCapabilities {
     pub protocol_version: u32,
     pub tun_lifecycle: bool,
+    pub tun_fd_lease: bool,
 }
 
 /// 应用层面对的 helper 抽象：状态、能力、TUN 生命周期。

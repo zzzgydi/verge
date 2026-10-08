@@ -177,6 +177,7 @@ mod scripts;
 mod system_proxy;
 pub use dev::stop_dev_daemon;
 mod tray;
+mod tun;
 
 struct Engine {
     supervisor: CoreSupervisor,
@@ -185,6 +186,7 @@ struct Engine {
 
 struct Backend {
     geo_job_running: bool,
+    tun_lease: Option<crate::platform::TunLease>,
     ai: crate::ai::AiService,
     ai_connections: std::collections::HashMap<u64, u64>,
     ai_connections_sample: Option<crate::domain::ConnectionSnapshot>,
@@ -251,6 +253,7 @@ impl Backend {
         }
         let mut backend = Self {
             geo_job_running: false,
+            tun_lease: None,
             ai: crate::ai::AiService::for_channel(config.data_dir.clone(), config.channel),
             ai_connections: Default::default(),
             ai_connections_sample: None,
@@ -373,6 +376,12 @@ impl Backend {
                 ApplicationLifecycle::new(&mut core, &mut engine.runtime, &mut self.system_proxy)
                     .shutdown();
         }
+        self.profiles.set_tun_device(None);
+        if let Some(lease) = self.tun_lease.take()
+            && let Err(error) = lease.release()
+        {
+            self.log_app("error", error.message);
+        }
     }
 
     fn fail_runtime(&mut self, error: AppError) {
@@ -381,8 +390,33 @@ impl Backend {
     }
 
     fn poll(&mut self) -> Result<(), AppError> {
+        if self
+            .tun_lease
+            .as_ref()
+            .is_some_and(|lease| !lease.connected())
+        {
+            self.stop_tun_after_failure()?;
+        }
         if let Some(engine) = &mut self.engine {
             engine.supervisor.poll(Instant::now())?;
+        }
+        if self.tun_lease.is_some()
+            && self.engine.as_ref().is_none_or(|e| {
+                !matches!(
+                    e.supervisor.state(),
+                    crate::mihomo::SupervisorState::Running { .. }
+                )
+            })
+        {
+            self.stop_tun_after_failure()?;
+        }
+        if let Some(lease) = &self.tun_lease
+            && self
+                .engine
+                .as_mut()
+                .is_none_or(|engine| engine.runtime.verify_tun(&lease.device).is_err())
+        {
+            self.stop_tun_after_failure()?;
         }
         if self.engine.is_some()
             && (self.last_update_poll.elapsed() >= Duration::from_secs(60)
@@ -463,25 +497,17 @@ impl Backend {
                 UiResponse::Profile { request, result }
             }
             UiRequest::Runtime(request) => {
+                if let RuntimeCommand::SetNetworkSettings { settings } = &request {
+                    let result = self.set_tun_network(settings);
+                    return UiResponse::Runtime { request, result };
+                }
                 let unavailable = self.runtime_unavailable();
                 let result = match &mut self.engine {
                     Some(engine) => {
-                        // TUN 开关需要 helper 协调时由 handler 经 HelperControl 完成。
-                        let helper = MacHelperClient::new(&self.config.helper_socket);
-                        if self.config.channel.is_dev() {
-                            RuntimeCommandHandler::new(&mut engine.runtime).execute(request.clone())
-                        } else {
-                            RuntimeCommandHandler::with_helper(&mut engine.runtime, &helper)
-                                .execute(request.clone())
-                        }
+                        RuntimeCommandHandler::new(&mut engine.runtime).execute(request.clone())
                     }
                     None => Err(unavailable),
                 };
-                if result.is_ok()
-                    && let RuntimeCommand::SetNetworkSettings { settings } = &request
-                {
-                    self.profiles.preserve_runtime_tun(settings.tun_enabled);
-                }
                 UiResponse::Runtime { request, result }
             }
             UiRequest::SystemProxy(request) => {
@@ -981,7 +1007,21 @@ impl Backend {
     }
 
     fn helper_status(&self) -> crate::domain::HelperStatus {
-        MacHelperClient::new(&self.config.helper_socket).status()
+        let client = MacHelperClient::new(&self.config.helper_socket);
+        match client.status() {
+            status @ crate::domain::HelperStatus::Ready { .. } => match client.capabilities() {
+                Ok(c)
+                    if c.protocol_version == verge_helper_protocol::PROTOCOL_VERSION
+                        && c.tun_fd_lease =>
+                {
+                    status
+                }
+                _ => crate::domain::HelperStatus::Incompatible {
+                    message: "Repair the helper to enable TUN descriptor leases".into(),
+                },
+            },
+            status => status,
+        }
     }
 
     /// 安装/修复特权 helper：只在非就绪状态时执行；非 .app 运行给可读错误。
@@ -1009,6 +1049,9 @@ impl Backend {
 
     /// 卸载特权 helper：移除 LaunchDaemon 与二进制（提权脚本在 installer 内）。
     fn uninstall_helper(&mut self) -> Result<crate::domain::HelperStatus, AppError> {
+        if self.tun_lease.is_some() {
+            self.stop_tun_after_failure()?;
+        }
         let mut installer = MacHelperInstaller::new(
             ProcessRunner,
             HelperInstallLayout::system(),

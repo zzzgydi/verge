@@ -182,6 +182,18 @@ impl<T: ControllerTransport> MihomoClient<T> {
         self.empty("PATCH", "/configs", Some(body))
     }
 
+    pub(crate) fn verify_tun(&mut self, device: &str) -> Result<(), AppError> {
+        let response: serde_json::Value = self.json("GET", "/configs", None)?;
+        let tun = &response["tun"];
+        if tun["enable"] == true && tun["device"] == device && tun["file-descriptor"] == 3 {
+            Ok(())
+        } else {
+            Err(controller_error(
+                "Mihomo did not start the leased TUN listener",
+            ))
+        }
+    }
+
     pub fn network_settings(&mut self) -> Result<NetworkSettings, AppError> {
         let response: serde_json::Value = self.json("GET", "/configs", None)?;
         Ok(NetworkSettings {

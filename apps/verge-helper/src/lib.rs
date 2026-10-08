@@ -1,3 +1,7 @@
+#[cfg(target_os = "macos")]
+mod dns;
+mod lease;
+
 use std::{
     collections::HashMap,
     fs,
@@ -33,6 +37,24 @@ impl HelperFailure {
 pub trait TunBackend: Send {
     /// 当前进程是否真的能执行 TUN 特权操作（用于如实上报 Capabilities）。
     fn tun_lifecycle_supported(&self) -> bool;
+    fn tun_fd_lease_supported(&self) -> bool {
+        false
+    }
+    fn descriptor(&self, _device: &str) -> Result<std::os::fd::OwnedFd, HelperFailure> {
+        Err(HelperFailure::new(
+            "tun_unsupported",
+            "Descriptor leases unavailable",
+        ))
+    }
+    fn dns_session(&self, _device: &str) -> Result<Box<dyn std::any::Any>, HelperFailure> {
+        Ok(Box::new(()))
+    }
+    fn activate(&mut self, _device: &str, _ipv6: bool) -> Result<(), HelperFailure> {
+        Err(HelperFailure::new(
+            "tun_unsupported",
+            "Descriptor leases unavailable",
+        ))
+    }
     /// 创建并配置 utun 设备，返回实际设备名（如 `utun4`）。
     /// 入参已在校验入口完成逐字段校验。
     fn enable_tun(&mut self, config: &ValidatedTun) -> Result<String, HelperFailure>;
@@ -51,6 +73,8 @@ pub fn serve_connection(
     allowed_uid: u32,
     tun: &SharedTunBackend,
 ) -> std::io::Result<()> {
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(15)))?;
+    stream.set_write_timeout(Some(std::time::Duration::from_secs(3)))?;
     let peer_uid = peer_uid(&stream)?;
     if peer_uid != allowed_uid && peer_uid != 0 {
         return write_response(
@@ -62,7 +86,7 @@ pub fn serve_connection(
         );
     }
     let mut line = String::new();
-    BufReader::new(stream.try_clone()?)
+    BufReader::with_capacity(1, stream.try_clone()?)
         .take(MAX_REQUEST_BYTES)
         .read_line(&mut line)?;
     let request = match serde_json::from_str::<HelperRequest>(&line) {
@@ -77,6 +101,9 @@ pub fn serve_connection(
             );
         }
     };
+    if let HelperRequest::LeaseTun { ipv6 } = request {
+        return lease::serve(stream, tun, ipv6);
+    }
     let response = handle_request(request, tun);
     write_response(&mut stream, &response)
 }
@@ -90,10 +117,15 @@ fn handle_request(request: HelperRequest, tun: &SharedTunBackend) -> HelperRespo
             code: "protocol_mismatch".into(),
             message: format!("helper protocol version is {PROTOCOL_VERSION}"),
         },
-        HelperRequest::GetCapabilities => HelperResponse::Capabilities {
-            protocol_version: PROTOCOL_VERSION,
-            tun_lifecycle: lock_tun(tun).tun_lifecycle_supported(),
-        },
+        HelperRequest::GetCapabilities => {
+            let backend = lock_tun(tun);
+            HelperResponse::Capabilities {
+                protocol_version: PROTOCOL_VERSION,
+                tun_lifecycle: backend.tun_lifecycle_supported(),
+                tun_fd_lease: backend.tun_fd_lease_supported(),
+            }
+        }
+        HelperRequest::LeaseTun { .. } => unreachable!("handled by lease connection"),
         HelperRequest::EnableTun { config } => {
             match validate_tun_config(&config)
                 .map_err(validated_failure)
@@ -229,6 +261,7 @@ pub struct MacTun {
 
 struct TunDevice {
     fd: i32,
+    routes: Vec<(String, bool)>,
 }
 
 impl Drop for TunDevice {
@@ -239,12 +272,21 @@ impl Drop for TunDevice {
 }
 
 impl TunBackend for MacTun {
+    fn tun_fd_lease_supported(&self) -> bool {
+        self.tun_lifecycle_supported()
+    }
     fn tun_lifecycle_supported(&self) -> bool {
         // utun 创建需要 root；非 root 运行时如实上报不支持。
         cfg!(target_os = "macos") && current_uid() == 0
     }
 
     fn enable_tun(&mut self, config: &ValidatedTun) -> Result<String, HelperFailure> {
+        if !self.devices.is_empty() {
+            return Err(HelperFailure::new(
+                "tun_conflict",
+                "A Verge TUN device is already active",
+            ));
+        }
         let created = create_utun(config.unit)?;
         if self.devices.contains_key(&created.name) {
             return Err(HelperFailure::new(
@@ -265,20 +307,57 @@ impl TunBackend for MacTun {
         Ok(name)
     }
 
+    fn dns_session(&self, device: &str) -> Result<Box<dyn std::any::Any>, HelperFailure> {
+        #[cfg(target_os = "macos")]
+        {
+            Ok(Box::new(dns::DnsLease::activate(device)?))
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = device;
+            Err(HelperFailure::new("tun_unsupported", "macOS only"))
+        }
+    }
+    fn descriptor(&self, device: &str) -> Result<std::os::fd::OwnedFd, HelperFailure> {
+        use std::os::fd::BorrowedFd;
+        let device = self
+            .devices
+            .get(device)
+            .ok_or_else(|| HelperFailure::new("tun_not_managed", "Unknown lease"))?;
+        // SAFETY: the stored device owns this descriptor throughout cloning.
+        unsafe { BorrowedFd::borrow_raw(device.fd) }
+            .try_clone_to_owned()
+            .map_err(|_| HelperFailure::new("tun_fd_failed", "Cannot duplicate TUN descriptor"))
+    }
+    fn activate(&mut self, device: &str, ipv6: bool) -> Result<(), HelperFailure> {
+        let state = self
+            .devices
+            .get_mut(device)
+            .ok_or_else(|| HelperFailure::new("tun_not_managed", "Unknown lease"))?;
+        lease::activate(device, ipv6, &mut state.routes)
+    }
     fn disable_tun(&mut self, device: Option<&str>) -> Result<(), HelperFailure> {
         match device {
-            Some(device) => {
-                if self.devices.remove(device).is_none() {
-                    return Err(HelperFailure::new(
-                        "tun_not_managed",
-                        format!("device '{device}' is not managed by this helper"),
-                    ));
-                }
-                Ok(())
+            Some(name) => {
+                let device = self.devices.remove(name).ok_or_else(|| {
+                    HelperFailure::new("tun_not_managed", "Device is not managed by this helper")
+                })?;
+                // Always close our descriptor, even if bringing the interface down fails.
+                // Interface routes disappear when its last descriptor closes. Never issue
+                // a destination-only delete which could remove another VPN's route.
+                let result = lease::deactivate(name);
+                drop(device);
+                result
             }
             None => {
-                self.devices.clear();
-                Ok(())
+                let names = self.devices.keys().cloned().collect::<Vec<_>>();
+                let mut failure = None;
+                for name in names {
+                    if let Err(error) = self.disable_tun(Some(&name)) {
+                        failure = Some(error);
+                    }
+                }
+                failure.map_or(Ok(()), Err)
             }
         }
     }
@@ -291,7 +370,10 @@ struct CreatedUtun {
 
 impl CreatedUtun {
     fn into_device(self) -> TunDevice {
-        TunDevice { fd: self.fd }
+        TunDevice {
+            fd: self.fd,
+            routes: Vec::new(),
+        }
     }
 }
 
@@ -331,6 +413,14 @@ fn create_utun(unit: Option<u32>) -> Result<CreatedUtun, HelperFailure> {
                 "utun control socket failed: {}",
                 std::io::Error::last_os_error()
             ),
+        ));
+    }
+    // SAFETY: fd is owned and valid. Child commands must not retain this device.
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+        unsafe { libc::close(fd) };
+        return Err(HelperFailure::new(
+            "tun_create_failed",
+            "Cannot protect TUN descriptor",
         ));
     }
     let cleanup = |fd: i32| {
@@ -481,22 +571,37 @@ fn configure_utun(_device: &str, _config: &ValidatedTun) -> Result<(), HelperFai
 
 #[cfg(target_os = "macos")]
 fn run_fixed(program: &'static str, args: &[String]) -> Result<(), HelperFailure> {
-    let output = std::process::Command::new(program)
+    use std::{
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+    let mut child = std::process::Command::new(program)
         .args(args)
-        .output()
-        .map_err(|error| {
-            HelperFailure::new("tun_configure_failed", format!("{program}: {error}"))
-        })?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(HelperFailure::new(
-            "tun_configure_failed",
-            format!(
-                "{program} {args:?} failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ),
-        ))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| HelperFailure::new("tun_configure_failed", "Cannot start network command"))?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(_)) => {
+                return Err(HelperFailure::new(
+                    "tun_configure_failed",
+                    format!("{program} failed"),
+                ));
+            }
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(HelperFailure::new(
+                    "tun_configure_failed",
+                    "Network command timed out or could not be reaped",
+                ));
+            }
+        }
     }
 }
 
@@ -668,6 +773,7 @@ mod tests {
             HelperResponse::Capabilities {
                 protocol_version: PROTOCOL_VERSION,
                 tun_lifecycle: false,
+                tun_fd_lease: false,
             }
         );
         assert_eq!(
@@ -675,6 +781,7 @@ mod tests {
             HelperResponse::Capabilities {
                 protocol_version: PROTOCOL_VERSION,
                 tun_lifecycle: true,
+                tun_fd_lease: false,
             }
         );
     }

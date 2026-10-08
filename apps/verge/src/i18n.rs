@@ -864,6 +864,11 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("settings.scope.system", "系统", "System"),
     ("settings.network.tun", "TUN 模式", "TUN Mode"),
     (
+        "settings.network.tun.desc",
+        "使用当前 DNS 与 IPv6 设置；关闭后恢复解析器，应用重启后默认关闭。",
+        "Uses current DNS and IPv6 settings. Restores the resolver when off; stays off after app restart.",
+    ),
+    (
         "settings.network.not_loaded",
         "网络设置尚未加载。",
         "Network settings not loaded yet.",

@@ -387,6 +387,7 @@ pub struct FileProfileStore {
     internal_socket: Option<PathBuf>,
     keychain_service: Option<String>,
     runtime_tun: Option<bool>,
+    tun_device: Option<(String, bool)>,
     dev_mode: bool,
 }
 
@@ -450,6 +451,7 @@ impl FileProfileStore {
             internal_socket: None,
             keychain_service,
             runtime_tun: None,
+            tun_device: None,
             dev_mode: false,
         })
     }

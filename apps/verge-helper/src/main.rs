@@ -27,7 +27,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     prepare_socket_path(&socket)?;
     let listener = UnixListener::bind(&socket)?;
     restrict_socket(&socket)?;
-    // TUN 设备状态跨连接共享（fd 由 helper 进程持有，连接关闭不销毁设备）。
+    // The daemon runs as the configured user. Retain 0600 access and authenticate
+    // each connection by peer UID instead of exposing the socket to all users.
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let path = CString::new(socket.as_os_str().as_bytes())?;
+    // SAFETY: path is NUL-terminated; chown does not retain the pointer.
+    if unsafe { libc::chown(path.as_ptr(), allowed_uid, u32::MAX) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // Active leases hold their connection open and release the device on disconnect.
     let tun = shared_tun_backend(MacTun::default());
     for stream in listener.incoming() {
         match stream {
