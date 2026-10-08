@@ -21,8 +21,8 @@ enum RuleRow {
 impl RuleRow {
     fn height(self) -> Pixels {
         px(match self {
-            Self::Providers | Self::Rules => 40.,
-            Self::Provider(_) => 56.,
+            Self::Providers | Self::Rules => 48.,
+            Self::Provider(_) => 64.,
             _ => ROW_HEIGHT,
         })
     }
@@ -99,50 +99,65 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                             let provider = &this.state.providers[ix];
                             let name = provider.name.clone();
                             let kind = provider.kind;
-                            base.rounded_lg()
-                                .bg(cx.theme().accent.opacity(0.35))
-                                .justify_between()
+                            div()
+                                .h(row.height())
+                                .pb_2()
                                 .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .gap_1()
-                                        .child(div().text_sm().truncate().child(name.clone()))
+                                    base.h(px(56.))
+                                        .rounded_lg()
+                                        .bg(cx.theme().accent.opacity(0.35))
+                                        .justify_between()
                                         .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .truncate()
-                                                .child(format!(
-                                                    "{} · {} · {} · {}",
-                                                    match kind {
-                                                        ProviderKind::Rule =>
-                                                            tr(lang, "rules.provider_kind.rule"),
-                                                        ProviderKind::Proxy =>
-                                                            tr(lang, "rules.provider_kind.proxy"),
-                                                    },
-                                                    provider.vehicle,
-                                                    provider.item_count,
-                                                    provider.updated_at
-                                                )),
+                                            v_flex()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .gap_1()
+                                                .child(
+                                                    div().text_sm().truncate().child(name.clone()),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(cx.theme().muted_foreground)
+                                                        .truncate()
+                                                        .child(format!(
+                                                            "{} · {} · {} · {}",
+                                                            match kind {
+                                                                ProviderKind::Rule => tr(
+                                                                    lang,
+                                                                    "rules.provider_kind.rule"
+                                                                ),
+                                                                ProviderKind::Proxy => tr(
+                                                                    lang,
+                                                                    "rules.provider_kind.proxy"
+                                                                ),
+                                                            },
+                                                            provider.vehicle,
+                                                            provider.item_count,
+                                                            crate::format::provider_updated_at(
+                                                                lang,
+                                                                &provider.updated_at
+                                                            )
+                                                        )),
+                                                ),
+                                        )
+                                        .child(
+                                            Button::new(format!("update-provider-{kind:?}-{name}"))
+                                                .label(tr(lang, "rules.update"))
+                                                .small()
+                                                .h(px(crate::appearance::metrics::COMPACT_CONTROL))
+                                                .outline()
+                                                .loading(this.is_pending(&["provider_write"]))
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.dispatch(
+                                                        UiAction::UpdateProvider {
+                                                            kind,
+                                                            name: name.clone(),
+                                                        },
+                                                        cx,
+                                                    )
+                                                })),
                                         ),
-                                )
-                                .child(
-                                    Button::new(format!("update-provider-{kind:?}-{name}"))
-                                        .label(tr(lang, "rules.update"))
-                                        .small()
-                                        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
-                                        .outline()
-                                        .loading(this.is_pending(&["provider_write"]))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.dispatch(
-                                                UiAction::UpdateProvider {
-                                                    kind,
-                                                    name: name.clone(),
-                                                },
-                                                cx,
-                                            )
-                                        })),
                                 )
                                 .into_any_element()
                         }

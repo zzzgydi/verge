@@ -24,9 +24,9 @@ impl Lang {
 
 /// 文案表：`(key, zh-CN, en)`。key 按页面/用途命名。
 const ENTRIES: &[(&str, &str, &str)] = &[
-    ("profiles.edit_details", "编辑资料…", "Edit details…"),
-    ("profiles.script", "配置脚本…", "Profile script…"),
-    ("profiles.global_script", "全局脚本…", "Global script…"),
+    ("profiles.edit_details", "编辑资料", "Edit details"),
+    ("profiles.script", "配置脚本", "Profile script"),
+    ("profiles.global_script", "全局脚本", "Global script"),
     (
         "script.desc",
         "按 Merge → 全局脚本 → 配置脚本的顺序处理，最后应用网络设置。返回修改后的 config；支持 console.log，不支持异步、网络和文件访问。",
@@ -607,7 +607,7 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("common.enable", "启用", "Enable"),
     ("common.disable", "关闭", "Disable"),
     ("common.update_now", "立即更新", "Update Now"),
-    ("common.more", "更多…", "More…"),
+    ("common.more", "更多", "More"),
     ("common.unknown", "未知", "Unknown"),
     // ---- macOS 应用菜单 ----
     ("menu.about", "关于 Verge", "About Verge"),
@@ -786,6 +786,8 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ),
     ("logs.clear_filter", "清除过滤", "Clear Filter"),
     // ---- 配置页 ----
+    ("profiles.updated_at", "上次更新", "Last updated"),
+    ("profiles.never_updated", "尚未更新", "Not updated yet"),
     ("profiles.policy.manual", "手动更新", "Manual update"),
     ("profiles.policy.unscheduled", "未安排", "not scheduled"),
     ("profiles.policy.next", "下次更新", "next update"),
@@ -798,13 +800,13 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("profiles.source.remote", "远程", "Remote"),
     ("profiles.selected", "已启用", "Active"),
     ("profiles.select", "启用", "Activate"),
-    ("profiles.view_yaml", "编辑 YAML…", "Edit YAML…"),
-    ("profiles.merged", "合并结果…", "Merged Result…"),
-    ("profiles.set_interval", "设置间隔…", "Set Interval…"),
-    ("profiles.delete_menu", "删除配置…", "Delete Profile…"),
+    ("profiles.view_yaml", "查看 YAML", "View YAML"),
+    ("profiles.merged", "合并结果", "Merged Result"),
+    ("profiles.set_interval", "设置间隔", "Set Interval"),
+    ("profiles.delete_menu", "删除配置", "Delete Profile"),
     ("profiles.current", "当前", "Current"),
-    ("profiles.merge_config", "Merge 配置…", "Merge Config…"),
-    ("profiles.import", "导入配置…", "Import Profile…"),
+    ("profiles.merge_config", "Merge 配置", "Merge Config"),
+    ("profiles.import", "导入配置", "Import Profile"),
     ("profiles.empty.title", "暂无配置", "No Profiles"),
     (
         "profiles.empty.desc",
@@ -1445,8 +1447,8 @@ mod tests {
     fn tr_looks_up_both_languages() {
         assert_eq!(tr(Lang::ZhCn, "home.title"), "概览");
         assert_eq!(tr(Lang::En, "home.title"), "Overview");
-        assert_eq!(tr(Lang::ZhCn, "profiles.import"), "导入配置…");
-        assert_eq!(tr(Lang::En, "profiles.import"), "Import Profile…");
+        assert_eq!(tr(Lang::ZhCn, "profiles.import"), "导入配置");
+        assert_eq!(tr(Lang::En, "profiles.import"), "Import Profile");
     }
 
     #[test]

@@ -9,7 +9,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     dialog::DialogButtonProps,
     h_flex,
-    input::Textarea,
+    input::Editor,
     notification::Notification,
     v_flex,
 };
@@ -54,7 +54,7 @@ impl MainView {
                         .min_h_0()
                         .font_family(mono)
                         .text_xs()
-                        .child(Textarea::new(&editor).h_full()),
+                        .child(Editor::new(&editor).h_full()),
                 )
                 .footer(
                     h_flex()
@@ -283,7 +283,7 @@ impl MainView {
                                 .min_h_0()
                                 .font_family(mono)
                                 .text_xs()
-                                .child(Textarea::new(&editor).h_full()),
+                                .child(Editor::new(&editor).h_full()),
                         ),
                 )
                 .footer(
@@ -432,7 +432,7 @@ impl MainView {
                         .min_h_0()
                         .font_family(mono)
                         .text_xs()
-                        .child(Textarea::new(&editor).readonly(true).h_full()),
+                        .child(Editor::new(&editor).readonly(true).h_full()),
                 )
                 .footer(
                     h_flex().gap_2().justify_end().child(
@@ -474,7 +474,7 @@ impl MainView {
                     .child(
                         div()
                             .h(px(340.))
-                            .child(Textarea::new(&editor).readonly(true).h_full()),
+                            .child(Editor::new(&editor).readonly(true).h_full()),
                     )
             });
         }

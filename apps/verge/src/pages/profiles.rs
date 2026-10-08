@@ -22,24 +22,26 @@ use gpui_kit::component::{
 use gpui_kit::{prelude::FluentBuilder as _, *};
 
 fn policy_summary(lang: Lang, profile: &Profile) -> String {
-    match &profile.update_policy {
+    let policy = match profile.update_policy {
         UpdatePolicy::Manual => tr(lang, "profiles.policy.manual").to_owned(),
-        UpdatePolicy::Interval { seconds } => format!(
-            "{} · {} {} · {} {}{}",
-            format::interval(lang, *seconds),
-            tr(lang, "profiles.policy.next"),
-            profile.next_update_at.map_or_else(
-                || tr(lang, "profiles.policy.unscheduled").into(),
-                |at| at.to_string()
-            ),
+        UpdatePolicy::Interval { seconds } => format::interval(lang, seconds),
+    };
+    let mut summary = format!(
+        "{policy} · {} {}",
+        tr(lang, "profiles.updated_at"),
+        format::updated_at(lang, profile.updated_at)
+    );
+    if profile.consecutive_failures > 0 {
+        summary.push_str(&format!(
+            " · {} {}",
             tr(lang, "profiles.policy.failures"),
-            profile.consecutive_failures,
-            profile
-                .last_error
-                .as_ref()
-                .map_or_else(String::new, |error| format!(" · {error}"))
-        ),
+            profile.consecutive_failures
+        ));
     }
+    if let Some(error) = &profile.last_error {
+        summary.push_str(&format!(" · {error}"));
+    }
+    summary
 }
 
 pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
@@ -83,32 +85,6 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         let actions = h_flex()
             .gap_2()
             .flex_wrap()
-            .child(
-                Button::new(format!("edit-details-{}", id.as_str()))
-                    .debug_selector(|| "edit-profile-details".into())
-                    .label(tr(lang, "profiles.edit_details"))
-                    .small()
-                    .ghost()
-                    .on_click(cx.listener({
-                        let profile = profile.clone();
-                        move |this, _, window, cx| {
-                            this.open_profile_details(profile.clone(), window, cx)
-                        }
-                    })),
-            )
-            .child(
-                Button::new(format!("edit-script-{}", id.as_str()))
-                    .debug_selector(|| "edit-profile-script".into())
-                    .label(tr(lang, "profiles.script"))
-                    .small()
-                    .ghost()
-                    .on_click(cx.listener({
-                        let id = id.clone();
-                        move |this, _, window, cx| {
-                            this.open_script_sheet(Some(id.clone()), window, cx)
-                        }
-                    })),
-            )
             .child(
                 Button::new(format!("load-profile-{}", id.as_str()))
                     .label(tr(lang, "profiles.view_yaml"))
@@ -158,6 +134,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
             )
             .child(
                 Button::new(format!("profile-more-{}", id.as_str()))
+                    .debug_selector(|| "profile-more".into())
                     .icon(IconName::Ellipsis)
                     .small()
                     .h(px(crate::appearance::metrics::COMPACT_CONTROL))
@@ -167,6 +144,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                         let entity = cx.entity().downgrade();
                         let id = id.clone();
                         let name = profile.name.clone();
+                        let profile = profile.clone();
                         let can_up = profile_index > 0;
                         let can_down = profile_index + 1 < view.state.profiles.len();
                         move |menu, _, _| {
@@ -182,7 +160,32 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                             let up_id = id.clone();
                             let down_entity = entity.clone();
                             let down_id = id.clone();
-                            menu.when(can_up, |menu| {
+                            let details_entity = entity.clone();
+                            let details_profile = profile.clone();
+                            let script_entity = entity.clone();
+                            let script_id = id.clone();
+                            menu.item(
+                                PopupMenuItem::new(tr(lang, "profiles.edit_details")).on_click(
+                                    move |_, window, cx| {
+                                        let _ = details_entity.update(cx, |this, cx| {
+                                            this.open_profile_details(
+                                                details_profile.clone(),
+                                                window,
+                                                cx,
+                                            )
+                                        });
+                                    },
+                                ),
+                            )
+                            .item(PopupMenuItem::new(tr(lang, "profiles.script")).on_click(
+                                move |_, window, cx| {
+                                    let _ = script_entity.update(cx, |this, cx| {
+                                        this.open_script_sheet(Some(script_id.clone()), window, cx)
+                                    });
+                                },
+                            ))
+                            .separator()
+                            .when(can_up, |menu| {
                                 menu.item(
                                     PopupMenuItem::new(tr(lang, "profiles.move_up")).on_click(
                                         move |_, _, cx| {
@@ -347,7 +350,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                     .gap_2()
                     .child(
                         Button::new("refresh-profiles")
-                            .icon(IconName::Redo)
+                            .icon(gpui_kit::assets::IconName::RefreshCw)
                             .tooltip(tr(lang, "common.refresh"))
                             .small()
                             .h(px(crate::appearance::metrics::COMPACT_CONTROL))

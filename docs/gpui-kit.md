@@ -12,7 +12,7 @@ The application has one UI dependency:
 
 ```toml
 [dependencies]
-gpui-kit = "0.6.1"
+gpui-kit = { version = "0.6.1", features = ["tree-sitter-yaml", "tree-sitter-javascript"] }
 
 [dev-dependencies]
 gpui-kit = { version = "0.6.1", features = ["test-support"] }
@@ -36,9 +36,11 @@ The Kit dependency selects compatible GPUI types. The lockfile still contains
 macros inside GPUI Kit, both at 0.6.1, not leftover application dependencies.
 
 Default features include components and the standard icon assets. Verge's custom
-asset source adds its logo and falls back to `gpui_kit::assets::Assets`; it does
+asset source adds its logo and the selected `RefreshCw` icon, then falls back to `gpui_kit::assets::Assets`; it does
 not register the complete `AllAssets` icon catalog. `test-support` is enabled only
-for development tests. No JavaScript shell or webview is enabled.
+for development tests. YAML and JavaScript grammars enable syntax highlighting in
+`EditorState`; declaring a language without its grammar feature renders plain text.
+No JavaScript shell or webview is enabled.
 
 ## Window and state ownership
 

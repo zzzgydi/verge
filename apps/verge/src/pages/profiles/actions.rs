@@ -10,7 +10,7 @@ use gpui_kit::component::{
     dialog::DialogButtonProps,
     form::{field, v_form},
     h_flex,
-    input::{Input, InputState, Textarea},
+    input::{Editor, Input, InputState},
     notification::Notification,
 };
 use gpui_kit::*;
@@ -159,7 +159,7 @@ impl MainView {
                         .child(
                             field()
                                 .label(tr(lang, "dialog.import.yaml"))
-                                .child(Textarea::new(&yaml_input).h_32()),
+                                .child(Editor::new(&yaml_input).h_32()),
                         ),
                 )
                 .footer(

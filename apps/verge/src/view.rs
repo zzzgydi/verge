@@ -11,7 +11,7 @@ use gpui_kit::component::{
     alert::Alert,
     button::{Button, ButtonVariants as _},
     h_flex,
-    input::{InputEvent, InputState, TextareaState},
+    input::{EditorState, InputEvent, InputState},
     scroll::ScrollableElement as _,
     status_bar::StatusBar,
     table::TableState,
@@ -82,13 +82,13 @@ pub struct MainView {
     /// 设置页的全局快捷键输入框。
     pub global_hotkey: Entity<InputState>,
     /// 导入对话框的 YAML 表单。
-    pub profile_yaml: Entity<TextareaState>,
+    pub profile_yaml: Entity<EditorState>,
     /// YAML 抽屉的编辑器，与导入表单分开，互不覆盖草稿。
-    pub yaml_editor: Entity<TextareaState>,
+    pub yaml_editor: Entity<EditorState>,
     /// Merge 配置抽屉的编辑器。
-    pub merge_editor: Entity<TextareaState>,
+    pub merge_editor: Entity<EditorState>,
     /// 合并结果抽屉的只读编辑器。
-    pub merged_editor: Entity<TextareaState>,
+    pub merged_editor: Entity<EditorState>,
     pub connections_table: Entity<TableState<ConnectionsDelegate>>,
     /// 日志页虚拟列表滚动位置。
     pub log_scroll: VirtualListScrollHandle,
@@ -227,13 +227,13 @@ impl MainView {
                 InputState::new(window, cx).placeholder(tr(lang, "placeholder.global_hotkey"))
             }),
             profile_yaml: cx.new(|cx| {
-                TextareaState::new(window, cx).default_value(
+                EditorState::new(window, cx).language("yaml").default_value(
                     "mode: rule\nmixed-port: 7890\nproxies: []\nproxy-groups: []\nrules: []\n",
                 )
             }),
-            yaml_editor: cx.new(|cx| TextareaState::new(window, cx)),
-            merge_editor: cx.new(|cx| TextareaState::new(window, cx)),
-            merged_editor: cx.new(|cx| TextareaState::new(window, cx)),
+            yaml_editor: cx.new(|cx| EditorState::new(window, cx).language("yaml")),
+            merge_editor: cx.new(|cx| EditorState::new(window, cx).language("yaml")),
+            merged_editor: cx.new(|cx| EditorState::new(window, cx).language("yaml")),
             connections_table,
             log_scroll: VirtualListScrollHandle::new(),
             log_layout: pages::logs::LogLayout::default(),

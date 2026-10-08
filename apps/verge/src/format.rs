@@ -49,6 +49,27 @@ pub fn interval(lang: Lang, seconds: u64) -> String {
     }
 }
 
+/// Profile update time in the user's local timezone; absent dates stay explicit.
+pub fn updated_at(lang: Lang, timestamp: i64) -> String {
+    if timestamp <= 0 {
+        return crate::i18n::tr(lang, "profiles.never_updated").into();
+    }
+    chrono::DateTime::from_timestamp(timestamp, 0)
+        .map(|time| {
+            time.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|| "—".into())
+}
+
+pub fn provider_updated_at(lang: Lang, value: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|time| updated_at(lang, time.timestamp()))
+        .unwrap_or_else(|| crate::i18n::tr(lang, "profiles.never_updated").into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

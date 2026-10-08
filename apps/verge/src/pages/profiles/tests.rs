@@ -397,6 +397,7 @@ fn failed_yaml_save_keeps_sheet_and_draft_for_retry(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn script_entries_dispatch_and_stale_load_cannot_replace_new_draft(cx: &mut TestAppContext) {
+    cx.update(|cx| cx.set_reduce_motion(true));
     let (view, rx, cx) = setup(cx);
     cx.update(|window, cx| {
         view.update(cx, |view, cx| {
@@ -478,8 +479,17 @@ fn script_entries_dispatch_and_stale_load_cannot_replace_new_draft(cx: &mut Test
     cx.update(|window, cx| window.close_sheet(cx));
     cx.run_until_parked();
     assert!(cx.debug_bounds("open-global-script").is_some());
-    assert!(cx.debug_bounds("edit-profile-script").is_some());
-    assert!(cx.debug_bounds("edit-profile-details").is_some());
+    assert!(cx.debug_bounds("edit-profile-script").is_none());
+    assert!(cx.debug_bounds("edit-profile-details").is_none());
+    let more = cx.debug_bounds("profile-more").unwrap();
+    cx.simulate_click(more.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down down enter");
+    cx.run_until_parked();
+    assert!(rx.try_iter().any(|r| matches!(
+        r.request,
+        UiRequest::Profile(AppCommand::GetProfileScript { .. })
+    )));
 }
 
 #[gpui_kit::test]
@@ -635,4 +645,16 @@ fn profile_details_lock_edits_while_saving_and_unlock_after_failure(cx: &mut Tes
         });
     });
     cx.update(|window, cx| assert!(!window.has_active_dialog(cx)));
+}
+
+#[test]
+fn profile_editors_ship_yaml_and_javascript_grammars() {
+    let registry = gpui_kit::component::highlighter::LanguageRegistry::singleton();
+    for language in ["yaml", "javascript"] {
+        assert!(
+            registry
+                .language(language)
+                .is_some_and(|grammar| grammar.has_grammar())
+        );
+    }
 }

@@ -8,7 +8,7 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
-    input::{Textarea, TextareaState},
+    input::{Editor, EditorState, Textarea, TextareaState},
     menu::{DropdownMenu as _, PopupMenuItem},
     notification::Notification,
     v_flex,
@@ -18,7 +18,7 @@ use gpui_kit::{prelude::FluentBuilder as _, *};
 pub(crate) struct ScriptEditor {
     scope: Option<ProfileId>,
     profile: Option<ProfileId>,
-    source: Entity<TextareaState>,
+    source: Entity<EditorState>,
     request: Option<u64>,
     loaded: bool,
     enabled: bool,
@@ -41,7 +41,7 @@ impl MainView {
             .clone()
             .or_else(|| self.state.selected_profile.clone())
             .or_else(|| self.state.profiles.first().map(|p| p.id.clone()));
-        let source = cx.new(|cx| TextareaState::new(window, cx));
+        let source = cx.new(|cx| EditorState::new(window, cx).language("javascript"));
         let editor = cx.new(|_| ScriptEditor {
             scope: scope.clone(),
             profile,
@@ -146,7 +146,7 @@ impl MainView {
                                 .flex_1()
                                 .min_h_0()
                                 .font_family(cx.theme().mono_font_family.clone())
-                                .child(Textarea::new(&source).readonly(!loaded || busy).h_full()),
+                                .child(Editor::new(&source).readonly(!loaded || busy).h_full()),
                         ),
                 )
                 .footer(
@@ -346,7 +346,9 @@ impl MainView {
                         }
                         AppCommandOutput::ScriptPreview(preview) => {
                             let result = cx.new(|cx| {
-                                TextareaState::new(window, cx).default_value(preview.yaml.clone())
+                                EditorState::new(window, cx)
+                                    .language("yaml")
+                                    .default_value(preview.yaml.clone())
                             });
                             let logs = preview.logs.join("\n");
                             let log_editor =
@@ -359,7 +361,7 @@ impl MainView {
                                     .child(
                                         div()
                                             .h(px(if has_logs { 220. } else { 340. }))
-                                            .child(Textarea::new(&result).readonly(true).h_full()),
+                                            .child(Editor::new(&result).readonly(true).h_full()),
                                     )
                                     .when(has_logs, |dialog| {
                                         dialog.child(div().h(px(100.)).child(

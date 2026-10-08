@@ -1,6 +1,8 @@
 use gpui_kit::{AssetSource, SharedString};
 use std::borrow::Cow;
 
+gpui_kit::assets::icon_assets!(ExtraIcons, [RefreshCw]);
+
 pub struct Assets;
 
 impl AssetSource for Assets {
@@ -9,6 +11,9 @@ impl AssetSource for Assets {
             return Ok(Some(Cow::Borrowed(include_bytes!(
                 "../../../assets/branding/logo.svg"
             ))));
+        }
+        if let Some(icon) = ExtraIcons.load(path)? {
+            return Ok(Some(icon));
         }
         gpui_kit::assets::Assets.load(path)
     }

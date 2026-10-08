@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 boa_engine = "=0.22.0"
+chrono = "0.4"
 flate2 = "1.1"
 fs2 = "0.4"
 futures = "0.3"
@@ -27,7 +28,7 @@ serde_json = "1.0"
 serde_yaml = "0.9"
 sha2 = "0.10"
 tungstenite = "0.30"
-gpui-kit = "0.6.1"
+gpui-kit = { version = "0.6.1", features = ["tree-sitter-yaml", "tree-sitter-javascript"] }
 verge-helper-protocol = { path = "../../crates/verge-helper-protocol" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
