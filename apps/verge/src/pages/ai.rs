@@ -1,5 +1,6 @@
 //! Conversation and provider drafts stay separate from daemon snapshots.
 mod presentation;
+mod proposals;
 mod settings;
 
 use super::components::{PageHeader, panel};
@@ -33,9 +34,11 @@ pub struct AiForm {
     pub evidence_open: Option<usize>,
     pub clear_key: bool,
     pub confirm_clear: bool,
+    pub confirm_proposal: Option<String>,
     pub local_error: Option<String>,
     pub copied: Option<usize>,
     pub error_details: bool,
+    pub data_scope_open: bool,
     pub scroll: ScrollHandle,
     pending_prompt: Option<String>,
     save_requested: bool,
@@ -79,9 +82,11 @@ impl AiForm {
             evidence_open: None,
             clear_key: false,
             confirm_clear: false,
+            confirm_proposal: None,
             local_error: None,
             copied: None,
             error_details: false,
+            data_scope_open: false,
             scroll: ScrollHandle::new(),
             pending_prompt: None,
             save_requested: false,
@@ -112,6 +117,7 @@ impl AiForm {
         self.disconnected();
     }
     pub fn disconnected(&mut self) {
+        self.confirm_proposal = None;
         self.pending_prompt = None;
         self.pending_save = None;
         self.save_requested = false;
@@ -450,8 +456,11 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
             block.px_1().into_any_element()
         });
     }
-    let chat_operation = matches!(ai.operation, Some(AiOperation::Start | AiOperation::Retry))
-        || ai.operation.is_none();
+    content = content.child(proposals::render(view, cx));
+    let chat_operation = matches!(
+        ai.operation,
+        Some(AiOperation::Start | AiOperation::Retry | AiOperation::Approve | AiOperation::Dismiss)
+    ) || ai.operation.is_none();
     if chat_operation && ai.busy {
         content = content.child(
             div()
@@ -587,13 +596,26 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 .child(footer),
         );
     }
-    page.child(
-        div()
-            .text_xs()
-            .text_color(cx.theme().muted_foreground)
-            .child(tr(lang, "ai.privacy_short")),
-    )
-    .into_any_element()
+    let mut privacy = v_flex().gap_1().flex_shrink_0().child(
+        Button::new("ai-data-scope")
+            .label(tr(lang, "ai.data_scope"))
+            .ghost()
+            .small()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.ai_form.data_scope_open = !this.ai_form.data_scope_open;
+                cx.notify();
+            })),
+    );
+    if form.data_scope_open {
+        privacy = privacy.child(
+            div()
+                .text_xs()
+                .whitespace_normal()
+                .text_color(cx.theme().muted_foreground)
+                .child(tr(lang, "ai.data_scope_detail")),
+        );
+    }
+    page.child(privacy).into_any_element()
 }
 
 fn error_details(view: &MainView, cx: &mut Context<MainView>) -> Div {

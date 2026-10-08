@@ -37,9 +37,9 @@ pub struct ToolContext {
     pub services: Vec<String>,
     pub recovery_path: PathBuf,
     pub config_selected: bool,
-    pub config_merge_valid: bool,
     pub connections: Option<ConnectionSnapshot>,
     pub errors: VecDeque<LogEvent>,
+    pub config: Option<super::diagnostics::ConfigContext>,
 }
 
 pub fn schema() -> Value {
@@ -62,7 +62,7 @@ pub fn execute(name: &str, arguments: &str, evidence: &[Evidence]) -> Result<Evi
 }
 
 /// Names may contain URLs or pasted tokens. Omit those names entirely, cap remaining text.
-fn label(value: &str) -> String {
+pub(super) fn label(value: &str) -> String {
     let lower = value.to_ascii_lowercase();
     if [
         "://",
@@ -137,7 +137,7 @@ pub fn collect(context: ToolContext, cancelled: &std::sync::atomic::AtomicBool) 
                 json!({"source":"recent daemon events", "error_count":context.errors.iter().filter(|e| e.level=="error").count(),"warning_count":context.errors.iter().filter(|e| e.level=="warn").count(),"log_content_omitted":true}),
             ),
             "config_check" => Ok(
-                json!({"selected":context.config_selected,"merge_compilation_succeeded":context.config_merge_valid,"scope":"source + saved Merge + network overrides; no new Mihomo validation performed","config_content_omitted":true}),
+                json!({"selected":context.config_selected,"checked":false,"scope":"call config_check to run fresh local Mihomo validation","config_content_omitted":true}),
             ),
             _ => unreachable!(),
         })();

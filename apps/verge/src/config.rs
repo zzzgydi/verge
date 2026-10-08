@@ -1,7 +1,10 @@
 mod transfer;
 pub use transfer::{export_portable_settings, parse_portable_settings, portable_settings_preview};
 mod network;
+mod preview;
 mod scripts;
+pub use preview::ConfigPreview;
+pub(crate) use preview::read_bounded;
 use scripts::CompileMode;
 use std::{
     collections::HashSet,
@@ -375,7 +378,7 @@ impl Default for Manifest {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct FileProfileStore {
     root: PathBuf,
     manifest: Manifest,

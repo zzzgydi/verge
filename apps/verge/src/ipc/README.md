@@ -70,3 +70,17 @@ a second user question. New GUIs gate this command. `AiSnapshot.operation` and
 per-message evidence are additive, defaulted fields; old snapshots remain readable.
 Provider tests retain chat evidence. Drafts are consumed only after an accepted
 command response; saving and testing are sequenced after successful persistence.
+
+
+`ai_actions_v1` adds `Approve { id, digest }` and `Dismiss { id }` on generation 6.
+`AiSnapshot.proposals` is additive and defaults to an empty list. The GUI gates
+both commands; the dispatcher rejects confirmation from non-UI actors. Only a
+locally created proposal can be consumed. Its random ID and digest bind the
+operation, parameters, exact candidate, captured state and five-minute expiry;
+consumption is single-use. The provider tool schema exposes proposal preparation,
+never confirmation. Clear, retry, a new turn, provider changes and failed/cancelled
+turns invalidate pending proposals. Reconnection queries their state without
+replaying writes. Diagnostic IO, script compilation and validation run on AI
+workers; confirmed writes use the daemon's serialized config/runtime transaction
+path and report applied, rejected, restored or recovery-failed outcomes. Raw
+compiler/controller errors are not sent to the model or proposal UI.

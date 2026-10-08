@@ -171,6 +171,7 @@ fn current_app_version() -> Option<String> {
     current_app_bundle().and_then(|bundle| bundle_short_version(&bundle).ok())
 }
 
+mod ai;
 mod dev;
 mod scripts;
 mod system_proxy;
@@ -431,6 +432,9 @@ impl Backend {
         }
         match request {
             UiRequest::Ai(command) => {
+                if let crate::ai::AiCommand::Approve { id, digest } = command {
+                    return self.approve_ai(id, digest);
+                }
                 let operation = command.operation();
                 let context = matches!(
                     command,
@@ -441,10 +445,13 @@ impl Backend {
                     services: self.config.services.clone(),
                     recovery_path: self.config.recovery_path.clone(),
                     config_selected: self.profiles.selected().is_some(),
-                    config_merge_valid: self
-                        .profiles
-                        .selected()
-                        .is_some_and(|id| self.profiles.merged_yaml(id).is_ok()),
+                    config: Some(crate::ai::diagnostics::ConfigContext {
+                        profiles: self.profiles.clone(),
+                        binary: self.config.binary.clone(),
+                        working_dir: self.config.data_dir.join("mihomo"),
+                        controller: self.config.controller,
+                        secret: self.config.secret.clone(),
+                    }),
                     connections: self.ai_connections_sample.clone(),
                     errors: self.ai_recent_errors.clone(),
                 });
@@ -1504,6 +1511,7 @@ impl Backend {
                 crate::script::CAPABILITY.into(),
                 crate::ai::CAPABILITY.into(),
                 crate::ai::UX_CAPABILITY.into(),
+                crate::ai::ACTIONS_CAPABILITY.into(),
             ],
             profiles: self.profiles.list().to_vec(),
             selected_profile: self.profiles.selected().cloned(),
@@ -2008,6 +2016,21 @@ fn handle_daemon_request(
         return;
     }
     let request = envelope.request.clone();
+    if matches!(
+        request,
+        UiRequest::Ai(crate::ai::AiCommand::Approve { .. } | crate::ai::AiCommand::Dismiss { .. })
+    ) && envelope.context.actor != crate::domain::CommandActor::UserInterface
+    {
+        let response = failed_response(
+            request,
+            crate::ai::error("Only the user interface can confirm a proposal"),
+        );
+        let _ = server.send(
+            conn_id,
+            ClientMessage::Response(UiResponseEnvelope::for_request(&envelope, response)),
+        );
+        return;
+    }
     if matches!(request, UiRequest::Ai(_)) {
         backend.ai_connections.entry(conn_id).or_insert(u64::MAX);
     }

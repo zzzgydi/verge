@@ -446,6 +446,24 @@ impl MainView {
             cx.notify();
             return false;
         }
+        if matches!(
+            action,
+            UiAction::Ai(
+                crate::ai::AiCommand::Approve { .. } | crate::ai::AiCommand::Dismiss { .. }
+            )
+        ) && !self
+            .state
+            .daemon_capabilities
+            .iter()
+            .any(|c| c == crate::ai::ACTIONS_CAPABILITY)
+        {
+            self.state.set_error(crate::domain::AppError::new(
+                crate::domain::ErrorCode::Conflict,
+                tr(self.lang(), "connection.incompatible"),
+            ));
+            cx.notify();
+            return false;
+        }
         if matches!(action, UiAction::Ai(crate::ai::AiCommand::Retry))
             && !self
                 .state

@@ -17,6 +17,7 @@ pub struct AiService {
     cancelled: Arc<AtomicBool>,
     directory: PathBuf,
     loaded: bool,
+    proposals: Arc<Mutex<proposals::Proposals>>,
     channel: crate::identity::AppChannel,
 }
 
@@ -31,7 +32,33 @@ impl AiService {
             cancelled: Arc::new(AtomicBool::new(false)),
             directory,
             loaded: false,
+            proposals: Arc::new(Mutex::new(proposals::Proposals::default())),
         }
+    }
+    pub(crate) fn take_proposal(
+        &mut self,
+        id: &str,
+        digest: &str,
+    ) -> Result<proposals::Pending, AppError> {
+        if self.snapshot().busy {
+            return Err(error("Wait for the AI operation to finish"));
+        }
+        self.proposals.lock().unwrap().consume(id, digest)
+    }
+    #[cfg(test)]
+    pub(crate) fn proposal_store(&self) -> Arc<Mutex<proposals::Proposals>> {
+        self.proposals.clone()
+    }
+    pub(crate) fn finish_proposal(&mut self, id: &str, status: &str, result: &str) -> AiSnapshot {
+        let mut state = self.state.lock().unwrap();
+        if let Some(proposal) = state.proposals.iter_mut().find(|p| p.id == id)
+            && proposal.status == "pending"
+        {
+            proposal.status = status.into();
+            proposal.result = Some(result.into());
+        }
+        state.revision += 1;
+        state.clone()
     }
     pub fn snapshot(&self) -> AiSnapshot {
         self.state.lock().unwrap().clone()
@@ -48,6 +75,13 @@ impl AiService {
         command: AiCommand,
         context: Option<ToolContext>,
     ) -> Result<AiSnapshot, AppError> {
+        if let AiCommand::Dismiss { id } = &command {
+            self.proposals.lock().unwrap().dismiss(id);
+            return Ok(self.finish_proposal(id, "dismissed", "No changes applied"));
+        }
+        if matches!(command, AiCommand::Approve { .. }) {
+            return Err(error("Confirmation must be handled by the application"));
+        }
         if matches!(command, AiCommand::Cancel) {
             self.cancel();
             return Ok(self.snapshot());
@@ -61,6 +95,8 @@ impl AiService {
                 return Err(error("An AI operation is already running"));
             }
             if matches!(command, AiCommand::Clear) {
+                self.proposals.lock().unwrap().clear();
+                state.proposals.clear();
                 state.messages.clear();
                 state.evidence.clear();
                 state.error = None;
@@ -88,8 +124,19 @@ impl AiService {
                     evidence: Vec::new(),
                 });
             }
-            if matches!(command, AiCommand::Start { .. } | AiCommand::Retry) {
+            if matches!(
+                command,
+                AiCommand::Start { .. } | AiCommand::Retry | AiCommand::SaveConfig { .. }
+            ) {
                 state.evidence.clear();
+                self.proposals.lock().unwrap().clear();
+                for p in &mut state.proposals {
+                    if p.status == "pending" {
+                        p.status = "expired".into();
+                    }
+                }
+                let excess = state.proposals.len().saturating_sub(24);
+                state.proposals.drain(..excess);
             }
             state.operation = Some(command.operation());
             state.busy = true;
@@ -104,6 +151,7 @@ impl AiService {
         let shared = self.state.clone();
         let directory = self.directory.clone();
         let credentials = Keychain(self.channel);
+        let proposals = self.proposals.clone();
         std::thread::spawn(move || {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                 || -> Result<(), AppError> {
@@ -151,7 +199,9 @@ impl AiService {
                         Vec::new()
                     } else {
                         tools::collect(
-                            context.ok_or_else(|| error("Diagnostic context unavailable"))?,
+                            context
+                                .clone()
+                                .ok_or_else(|| error("Diagnostic context unavailable"))?,
                             &cancel,
                         )
                     };
@@ -182,11 +232,20 @@ impl AiService {
                         state.revision += 1;
                         history
                     };
+                    let session = context.map(|context| {
+                        Arc::new(Mutex::new(diagnostics::Session::new(
+                            context,
+                            evidence.clone(),
+                            shared.lock().unwrap().run_id,
+                            proposals.clone(),
+                            cancel.clone(),
+                        )))
+                    });
                     let runtime = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()
                         .map_err(|_| error("Unable to start AI worker"))?;
-                    let result = runtime.block_on(provider::run(
+                    let result = runtime.block_on(provider::run_with_session(
                         config,
                         key,
                         history,
@@ -195,6 +254,18 @@ impl AiService {
                         cancel.clone(),
                         |text, activity| {
                             let mut state = shared.lock().unwrap();
+                            if let Some(session) = &session {
+                                let session = session.lock().unwrap();
+                                state.evidence = session.evidence.clone();
+                                if let Some(message) = state.messages.last_mut() {
+                                    message.evidence = session.evidence.clone();
+                                }
+                                for proposal in &session.views {
+                                    if !state.proposals.iter().any(|p| p.id == proposal.id) {
+                                        state.proposals.push(proposal.clone());
+                                    }
+                                }
+                            }
                             state.activity = activity;
                             if !test
                                 && !text.is_empty()
@@ -204,6 +275,7 @@ impl AiService {
                             }
                             state.revision += 1;
                         },
+                        session.clone(),
                     ))?;
                     let mut state = shared.lock().unwrap();
                     if test {
@@ -221,13 +293,16 @@ impl AiService {
                 .unwrap_or_else(|_| Err(error("AI worker failed; proxy operation is unaffected")));
             let mut state = shared.lock().unwrap_or_else(|p| p.into_inner());
             if let Err(error) = result {
-                state.error = Some(error.message);
-                state.activity = if cancel.load(Ordering::Relaxed) {
-                    "Cancelled"
-                } else {
-                    "Failed"
+                let was_cancelled = error.message == "Cancelled";
+                cancel.store(true, Ordering::Relaxed);
+                proposals.lock().unwrap().clear();
+                for p in &mut state.proposals {
+                    if p.status == "pending" {
+                        p.status = "expired".into();
+                    }
                 }
-                .into();
+                state.error = Some(error.message);
+                state.activity = if was_cancelled { "Cancelled" } else { "Failed" }.into();
             }
             state.busy = false;
             state.revision += 1;

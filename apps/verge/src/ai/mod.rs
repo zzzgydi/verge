@@ -1,4 +1,6 @@
-//! A bounded, read-only assistant. Network and Keychain work run off the daemon loop.
+//! A bounded diagnostic assistant with separately confirmed proposals. Network and Keychain work run off the daemon loop.
+pub mod diagnostics;
+pub mod proposals;
 mod provider;
 mod service;
 mod settings;
@@ -11,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 pub const CAPABILITY: &str = "ai_chat_v1";
 pub const UX_CAPABILITY: &str = "ai_chat_ux_v2";
+pub const ACTIONS_CAPABILITY: &str = "ai_actions_v1";
 pub const TEXT_LIMIT: usize = 32 * 1024;
 
 #[derive(Clone, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -38,6 +41,13 @@ pub enum AiCommand {
     },
     Cancel,
     Clear,
+    Approve {
+        id: String,
+        digest: String,
+    },
+    Dismiss {
+        id: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -49,6 +59,8 @@ pub enum AiOperation {
     Start,
     Cancel,
     Clear,
+    Approve,
+    Dismiss,
 }
 
 impl AiCommand {
@@ -61,6 +73,8 @@ impl AiCommand {
             Self::Start { .. } => AiOperation::Start,
             Self::Cancel => AiOperation::Cancel,
             Self::Clear => AiOperation::Clear,
+            Self::Approve { .. } => AiOperation::Approve,
+            Self::Dismiss { .. } => AiOperation::Dismiss,
         }
     }
 }
@@ -86,6 +100,8 @@ pub struct AiSnapshot {
     pub activity: String,
     pub error: Option<String>,
     pub evidence: Vec<tools::Evidence>,
+    #[serde(default)]
+    pub proposals: Vec<proposals::Proposal>,
 }
 
 pub(crate) fn error(message: &str) -> AppError {
@@ -108,6 +124,7 @@ mod compatibility_tests {
         let value = serde_json::json!({"revision":1,"run_id":1,"config":ProviderConfig::default(),"has_key":false,"busy":false,"messages":[{"role":"user","text":"question"}],"activity":"Completed","error":null,"evidence":[]});
         let state: AiSnapshot = serde_json::from_value(value).unwrap();
         assert_eq!(state.operation, None);
+        assert!(state.proposals.is_empty());
         assert!(state.messages[0].evidence.is_empty());
     }
 }

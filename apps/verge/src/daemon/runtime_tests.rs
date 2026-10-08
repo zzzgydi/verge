@@ -16,10 +16,11 @@ fn fixture() -> (TestDirectory, BackendConfig) {
     let dir = TestDirectory(PathBuf::from(format!(
         "/tmp/verge-worker-{}-{}",
         std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        {
+            let mut nonce = [0u8; 16];
+            getrandom::fill(&mut nonce).unwrap();
+            nonce.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        }
     )));
     let config = BackendConfig {
         channel: crate::identity::AppChannel::Stable,
@@ -35,6 +36,241 @@ fn fixture() -> (TestDirectory, BackendConfig) {
         helper_socket: dir.0.join("unused-helper.sock"),
     };
     (dir, config)
+}
+
+#[test]
+#[ignore = "requires MIHOMO_BIN pointing to the pinned sidecar"]
+fn ai_proposals_preview_confirm_verify_and_reject_stale_changes() {
+    use crate::ai::{
+        diagnostics::{ConfigContext, Session},
+        tools::ToolContext,
+    };
+    use std::sync::{Arc, atomic::AtomicBool};
+    let (_dir, mut config) = fixture();
+    config.channel = crate::identity::AppChannel::Dev;
+    config.binary = env::var_os("MIHOMO_BIN").expect("MIHOMO_BIN").into();
+    let mut backend = Backend::new(config).unwrap();
+    let id = ProfileId::parse("ai-test").unwrap();
+    backend.profiles.import(Profile::new(id.clone(),"Test",ProfileSource::Local,UpdatePolicy::Manual,0,None).unwrap(),
+        "mixed-port: 0\nmode: rule\nlog-level: warning\nproxy-groups:\n- name: Manual\n  type: select\n  proxies: [DIRECT, REJECT]\nrules: ['MATCH,DIRECT']\ndns:\n  enable: false\n").unwrap();
+    backend
+        .execute_profile(AppCommand::SelectProfile { id: id.clone() })
+        .unwrap();
+    let session = |backend: &Backend| {
+        Session::new(
+            ToolContext {
+                socket: backend.config.internal_socket(),
+                services: vec![],
+                recovery_path: backend.config.recovery_path.clone(),
+                config_selected: true,
+                connections: None,
+                errors: Default::default(),
+                config: Some(ConfigContext {
+                    profiles: backend.profiles.clone(),
+                    binary: backend.config.binary.clone(),
+                    working_dir: backend.config.data_dir.join("mihomo"),
+                    controller: backend.config.controller,
+                    secret: backend.config.secret.clone(),
+                }),
+            },
+            vec![],
+            1,
+            backend.ai.proposal_store(),
+            Arc::new(AtomicBool::new(false)),
+        )
+    };
+    let path = backend.config.data_dir.join("profiles/runtime-config.yaml");
+    let old = fs::read(&path).unwrap();
+    let old_merge = backend.profiles.merge_yaml().unwrap();
+    let mut diagnostics = session(&backend);
+    diagnostics.execute("config_check", "{}").unwrap();
+    diagnostics
+        .execute(
+            "preview_merge",
+            r#"{"merge":{"rules":[{"key":"log-level","op":"override","value":"debug"}]}}"#,
+        )
+        .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), old);
+    assert_eq!(backend.profiles.merge_yaml().unwrap(), old_merge);
+    let proposal = diagnostics.views.last().unwrap().clone();
+    assert!(matches!(
+        backend.approve_ai(proposal.id.clone(), "forged".into()),
+        UiResponse::Ai { result: Err(_), .. }
+    ));
+    let applied = backend.approve_ai(proposal.id.clone(), proposal.digest.clone());
+    assert!(
+        matches!(applied, UiResponse::Ai { result: Ok(_), .. }),
+        "{applied:?}"
+    );
+    assert!(
+        fs::read_to_string(&path)
+            .unwrap()
+            .contains("log-level: debug")
+    );
+    assert!(matches!(
+        backend.approve_ai(proposal.id, proposal.digest),
+        UiResponse::Ai { result: Err(_), .. }
+    ));
+    let mut diagnostics = session(&backend);
+    diagnostics
+        .execute("suggest_mode", r#"{"mode":"global"}"#)
+        .unwrap();
+    let proposal = diagnostics.views.last().unwrap().clone();
+    assert!(matches!(
+        backend.approve_ai(proposal.id, proposal.digest),
+        UiResponse::Ai { result: Ok(_), .. }
+    ));
+    use crate::application::RuntimeControl as _;
+    assert_eq!(
+        backend.engine.as_mut().unwrap().runtime.mode().unwrap(),
+        RunMode::Global
+    );
+    let mut diagnostics = session(&backend);
+    diagnostics
+        .execute("suggest_node", r#"{"group":"Manual","node":"REJECT"}"#)
+        .unwrap();
+    let proposal = diagnostics.views.last().unwrap().clone();
+    assert!(
+        backend
+            .engine
+            .as_mut()
+            .unwrap()
+            .runtime
+            .proxy_groups()
+            .unwrap()
+            .groups
+            .iter()
+            .any(|g| g.name == "Manual" && g.selected.as_deref() == Some("DIRECT"))
+    );
+    assert!(matches!(
+        backend.approve_ai(proposal.id, proposal.digest),
+        UiResponse::Ai { result: Ok(_), .. }
+    ));
+    assert!(
+        backend
+            .engine
+            .as_mut()
+            .unwrap()
+            .runtime
+            .proxy_groups()
+            .unwrap()
+            .groups
+            .iter()
+            .any(|g| g.name == "Manual" && g.selected.as_deref() == Some("REJECT"))
+    );
+    let mut diagnostics = session(&backend);
+    diagnostics
+        .execute(
+            "preview_merge",
+            r#"{"merge":{"rules":[{"key":"ipv6","op":"override","value":true}]}}"#,
+        )
+        .unwrap();
+    let proposal = diagnostics.views.last().unwrap().clone();
+    assert!(matches!(
+        backend.approve_ai(proposal.id, proposal.digest),
+        UiResponse::Ai { result: Ok(_), .. }
+    ));
+    assert_eq!(
+        backend.engine.as_mut().unwrap().runtime.mode().unwrap(),
+        RunMode::Global
+    );
+    assert!(
+        backend
+            .engine
+            .as_mut()
+            .unwrap()
+            .runtime
+            .network_settings()
+            .unwrap()
+            .ipv6_enabled
+    );
+    assert!(
+        backend
+            .engine
+            .as_mut()
+            .unwrap()
+            .runtime
+            .proxy_groups()
+            .unwrap()
+            .groups
+            .iter()
+            .any(|g| g.name == "Manual" && g.selected.as_deref() == Some("REJECT"))
+    );
+    let mut diagnostics = session(&backend);
+    diagnostics
+        .execute("suggest_mode", r#"{"mode":"direct"}"#)
+        .unwrap();
+    let proposal = diagnostics.views.last().unwrap().clone();
+    backend
+        .engine
+        .as_mut()
+        .unwrap()
+        .runtime
+        .set_mode(RunMode::Rule)
+        .unwrap();
+    assert!(matches!(
+        backend.approve_ai(proposal.id, proposal.digest),
+        UiResponse::Ai { result: Err(_), .. }
+    ));
+    let mut diagnostics = session(&backend);
+    diagnostics
+        .execute(
+            "preview_merge",
+            r#"{"merge":{"rules":[{"key":"log-level","op":"override","value":"info"}]}}"#,
+        )
+        .unwrap();
+    let proposal = diagnostics.views.last().unwrap().clone();
+    backend.profiles.set_merge_yaml("rules: []").unwrap();
+    assert!(matches!(
+        backend.approve_ai(proposal.id, proposal.digest),
+        UiResponse::Ai { result: Err(_), .. }
+    ));
+    // Validation can succeed while a later core restart fails its health check.
+    // Change only the isolated store's controller target, then require exact rollback.
+    backend
+        .profiles
+        .set_internal_socket(backend.config.data_dir.join("control/ai-candidate.sock"));
+    let old = fs::read(&path).unwrap();
+    let previous_merge = backend.profiles.merge_yaml().unwrap();
+    let mut diagnostics = session(&backend);
+    diagnostics
+        .execute(
+            "preview_merge",
+            r#"{"merge":{"rules":[{"key":"log-level","op":"override","value":"error"}]}}"#,
+        )
+        .unwrap();
+    let proposal = diagnostics.views.last().unwrap().clone();
+    let response = backend.approve_ai(proposal.id, proposal.digest);
+    let UiResponse::Ai {
+        result: Err(error), ..
+    } = response
+    else {
+        panic!("expected recovery")
+    };
+    assert!(
+        error.message.contains("restored and verified"),
+        "{}",
+        error.message
+    );
+    assert_eq!(fs::read(&path).unwrap(), old);
+    assert_eq!(backend.profiles.merge_yaml().unwrap(), previous_merge);
+    assert!(
+        backend
+            .engine
+            .as_mut()
+            .unwrap()
+            .runtime
+            .proxy_groups()
+            .unwrap()
+            .groups
+            .iter()
+            .any(|g| g.name == "Manual" && g.selected.as_deref() == Some("REJECT"))
+    );
+    backend
+        .profiles
+        .set_internal_socket(backend.config.internal_socket());
+    assert!(backend.config.data_dir.join("ai-actions.json").exists());
+    backend.shutdown();
 }
 
 #[test]
@@ -300,7 +536,26 @@ fn daemon_queries_use_internal_socket_with_external_controller_disabled() {
     );
     assert!(std::net::TcpStream::connect(backend.config.controller).is_err());
     backend.engine = Some(engine);
-    let (server, _) = IpcServer::bind(&dir.0.join("daemon.sock")).unwrap();
+    let socket = dir.0.join("daemon.sock");
+    let (server, events) = IpcServer::bind(&socket).unwrap();
+    server.spawn_accept();
+    let mut client = std::os::unix::net::UnixStream::connect(&socket).unwrap();
+    crate::ipc::frame::write_message(
+        &mut client,
+        &crate::ipc::protocol::DaemonMessage::Hello {
+            protocol_version: crate::ipc::protocol::PROTOCOL_VERSION,
+            app_version: "test".into(),
+            maintenance: false,
+            channel: None,
+        },
+    )
+    .unwrap();
+    let IpcServerEvent::Connected { conn_id, .. } =
+        events.recv_timeout(Duration::from_secs(2)).unwrap()
+    else {
+        panic!("expected connected client")
+    };
+    assert_eq!(conn_id, 1);
     // Tray commands use the same controller and validated profile lifecycle with no GUI.
     for mode in [RunMode::Global, RunMode::Direct, RunMode::Rule] {
         super::tray::execute_inner(&mut backend, &server, TrayCommand::SetMode(mode)).unwrap();

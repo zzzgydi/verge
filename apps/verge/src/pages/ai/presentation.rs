@@ -76,6 +76,12 @@ pub(super) fn error_text(lang: Lang, error: &str) -> String {
         "ai.error_timeout"
     } else if error == "AI connection failed" || error == "AI request failed" {
         "ai.error_network"
+    } else if error.starts_with("Application and recovery failed") {
+        "ai.recovery_failed"
+    } else if error.starts_with("Application failed; the previous state") {
+        "ai.restored"
+    } else if error.contains("Proposal") || error.starts_with("State changed or is unavailable") {
+        "ai.rejected"
     } else if error.contains("Conversation limit") {
         "ai.error_limit"
     } else if error.contains("8 KiB") {
@@ -145,14 +151,45 @@ fn summary(e: &Evidence, lang: Lang) -> String {
             tr(lang, "ai.warnings"),
             value(d, "warning_count")
         ),
-        "config_check" => format!(
-            "{}: {} · {}: {}\n{}",
-            tr(lang, "ai.selected"),
-            yes(lang, &d["selected"]),
-            tr(lang, "ai.merge_valid"),
-            yes(lang, &d["merge_compilation_succeeded"]),
-            tr(lang, "ai.config_scope")
+        "config_check" => tr(
+            lang,
+            if d["mihomo_validated"].as_bool() == Some(true) {
+                "ai.validated"
+            } else {
+                "ai.not_checked"
+            },
+        )
+        .into(),
+        "test_nodes" => d["results"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|r| {
+                format!(
+                    "{}: {}",
+                    value(r, "node"),
+                    r["delay_ms"]
+                        .as_u64()
+                        .map(|ms| format!("{ms} ms"))
+                        .unwrap_or_else(|| tr(lang, "ai.failed").into())
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        "explain_rules" => format!(
+            "{} · {}: {}",
+            value(d, "host"),
+            tr(lang, "ai.rules"),
+            d["matching_rules"].as_array().map_or(0, Vec::len)
         ),
+        "suggest_node" => format!(
+            "{}: {} → {}",
+            value(d, "group"),
+            value(d, "previous"),
+            value(d, "proposed")
+        ),
+        "suggest_mode" => format!("{} → {}", value(d, "previous"), value(d, "proposed")),
+        "preview_merge" => tr(lang, "ai.validated").into(),
         _ => tr(lang, "ai.evidence_unavailable").into(),
     }
 }
@@ -165,6 +202,8 @@ pub(super) fn evidence_cards(evidence: &[Evidence], lang: Lang, cx: &App) -> Div
     let mut list = v_flex().gap_2();
     for e in evidence {
         let key = match e.source.as_str() {
+            "test_nodes" => "ai.source_probe",
+            "explain_rules" => "ai.source_explain",
             "runtime_status" => "ai.source_runtime",
             "system_proxy_status" => "ai.source_proxy",
             "proxy_summary" => "ai.source_nodes",
@@ -257,6 +296,6 @@ mod tests {
             captured_at: 0,
             data: serde_json::json!({"selected":true,"merge_compilation_succeeded":true}),
         };
-        assert!(summary(&e, Lang::ZhCn).contains("未重新运行"));
+        assert!(summary(&e, Lang::ZhCn).contains("尚未运行"));
     }
 }

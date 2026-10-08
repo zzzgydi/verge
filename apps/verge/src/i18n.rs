@@ -113,6 +113,75 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ),
     ("logs.filter.level", "级别", "Level"),
     ("logs.level.problems", "警告及错误", "Warnings & errors"),
+    ("ai.proposal", "待审阅建议", "Proposal"),
+    ("ai.review_apply", "审阅并应用", "Review and apply"),
+    ("ai.confirm_apply", "确认应用此更改", "Confirm this change"),
+    ("ai.dismiss", "忽略", "Dismiss"),
+    ("ai.applied", "已应用并验证", "Applied and verified"),
+    (
+        "ai.merge_operations",
+        "新增 Merge 操作",
+        "Added Merge operations",
+    ),
+    (
+        "ai.recovery_failed",
+        "应用和恢复均未成功，请先检查内核和当前配置。",
+        "Application and recovery failed. Check the core and current configuration.",
+    ),
+    (
+        "ai.audit_failed",
+        " 操作结果未能保存到审计记录。",
+        " The audit result could not be saved.",
+    ),
+    (
+        "ai.restored",
+        "未应用，已恢复原状态",
+        "Not applied; previous state restored",
+    ),
+    (
+        "ai.rejected",
+        "状态已变化，请重新预览",
+        "State changed; preview again",
+    ),
+    (
+        "ai.apply_failed",
+        "未完成，请核对当前状态",
+        "Not completed; check current state",
+    ),
+    ("ai.dismissed", "已忽略", "Dismissed"),
+    ("ai.expired", "已过期，请重新预览", "Expired; preview again"),
+    (
+        "ai.awaiting_approval",
+        "等待确认 · 5 分钟内有效",
+        "Awaiting confirmation · valid for 5 minutes",
+    ),
+    (
+        "ai.confirm_impact",
+        "请核对上方目标和全部改动。确认后执行；若当前配置已变化，本次操作会被拒绝。",
+        "Check the target and every change above. Confirmation executes it; changed configuration invalidates this proposal.",
+    ),
+    (
+        "ai.merge_impact",
+        "更改全局 Merge，会影响所有配置并重载当前内核，可能中断连接。失败时尝试恢复上一份配置与运行选择。",
+        "Changes global Merge for all profiles and reloads the core, which may interrupt connections. Failure attempts to restore the previous configuration and runtime choices.",
+    ),
+    (
+        "ai.runtime_impact",
+        "更改当前流量的模式或出站节点。失败时尝试恢复原值；已有连接可能仍沿用原出站。",
+        "Changes the current mode or selected node. Failure attempts to restore the original value; existing connections may retain their outbound.",
+    ),
+    (
+        "ai.validated",
+        "Mihomo 校验通过",
+        "Mihomo validation passed",
+    ),
+    (
+        "ai.not_checked",
+        "尚未运行本轮 Mihomo 校验",
+        "Mihomo validation has not run for this turn",
+    ),
+    ("ai.source_probe", "节点测速", "Node probes"),
+    ("ai.source_explain", "规则解释", "Rule explanation"),
     ("ai.error_details", "技术详情", "Technical details"),
     (
         "ai.welcome",
@@ -160,7 +229,21 @@ const ENTRIES: &[(&str, &str, &str)] = &[
         "保存时移除密钥 · 点击撤销",
         "Remove key on save · click to undo",
     ),
-    ("ai.readonly", "只读诊断", "Read-only diagnostics"),
+    (
+        "ai.data_scope",
+        "发送的数据与操作范围",
+        "Data sent and available actions",
+    ),
+    (
+        "ai.data_scope_detail",
+        "模型会收到问题和对话、内核状态、代理组与节点名称及延迟、规则类型与出站、连接总数与流量、错误数量和配置校验结果。域名解释与 Merge 建议包含指定域名及修改内容。完整配置、订阅地址、密钥、连接目标和日志正文不会发送。测速每轮最多 6 个节点，访问固定 HTTPS 探测地址；选节点、改模式和应用 Merge 均需你确认。",
+        "Your model receives the question and conversation, core state, group/node names and delays, rule types and outbound names, connection totals and traffic, error counts and validation results. Domain explanations and Merge proposals include the requested domain and changes. Full configurations, subscription URLs, credentials, connection destinations and log text are omitted. Up to 6 nodes per turn use a fixed HTTPS probe. Node, mode and Merge changes require your confirmation.",
+    ),
+    (
+        "ai.readonly",
+        "诊断与建议 · 更改需确认",
+        "Diagnostics and proposals · changes need confirmation",
+    ),
     (
         "ai.starter_network",
         "为什么现在无法联网？",
@@ -184,8 +267,8 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("ai.prompt", "描述你遇到的问题", "Describe your problem"),
     (
         "ai.privacy_short",
-        "问题和必要的诊断摘要会发送给模型；AI 不会修改设置。对话仅保留至后台退出。",
-        "Questions and diagnostic summaries are sent to your model. AI cannot change settings. History lasts until the daemon quits.",
+        "问题和诊断摘要会发送给模型。测速最多检查 6 个节点；更改设置前需单独确认。",
+        "Questions and summaries go to your model. Tests probe up to 6 nodes; setting changes require separate confirmation.",
     ),
     (
         "ai.clear_confirm",

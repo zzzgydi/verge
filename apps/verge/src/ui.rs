@@ -1002,6 +1002,11 @@ fn response_request(response: &UiResponse) -> Option<UiRequest> {
             },
             crate::ai::AiOperation::Cancel => crate::ai::AiCommand::Cancel,
             crate::ai::AiOperation::Clear => crate::ai::AiCommand::Clear,
+            crate::ai::AiOperation::Approve => crate::ai::AiCommand::Approve {
+                id: String::new(),
+                digest: String::new(),
+            },
+            crate::ai::AiOperation::Dismiss => crate::ai::AiCommand::Dismiss { id: String::new() },
         })),
         UiResponse::Profile { request, .. } => Some(UiRequest::Profile(request.clone())),
         UiResponse::Runtime { request, .. } => Some(UiRequest::Runtime(request.clone())),

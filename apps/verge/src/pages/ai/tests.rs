@@ -25,6 +25,7 @@ fn setup(
             view.state.daemon_capabilities = vec![
                 crate::ai::CAPABILITY.into(),
                 crate::ai::UX_CAPABILITY.into(),
+                crate::ai::ACTIONS_CAPABILITY.into(),
             ];
             view.state.ai.config = ProviderConfig {
                 base_url: "https://example.test/v1".into(),
@@ -38,6 +39,43 @@ fn setup(
     });
     let view = holder.borrow().clone().unwrap();
     (view, rx, cx)
+}
+
+#[gpui_kit::test]
+fn proposal_requires_two_clicks_and_sends_only_bound_confirmation(cx: &mut TestAppContext) {
+    let (view, rx, cx) = setup(cx);
+    cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.state.ai.proposals = vec![crate::ai::proposals::Proposal {
+                id: "proposal-1".into(),
+                run_id: 1,
+                digest: "bound-digest".into(),
+                kind: "mode".into(),
+                target: "Direct".into(),
+                expires_at: crate::ai::proposals::now() + 300,
+                status: "pending".into(),
+                changes: vec![crate::ai::proposals::Change {
+                    path: "mode".into(),
+                    before: "Rule".into(),
+                    after: "Direct".into(),
+                }],
+                evidence_id: "R1-E8".into(),
+                result: None,
+            }];
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    let bounds = cx.debug_bounds("ai-proposal-apply-0").unwrap();
+    cx.simulate_click(bounds.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(rx.try_recv().is_err());
+    let bounds = cx.debug_bounds("ai-proposal-apply-0").unwrap();
+    cx.simulate_click(bounds.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+        matches!(rx.try_recv().unwrap().request,UiRequest::Ai(AiCommand::Approve {id,digest}) if id=="proposal-1" && digest=="bound-digest")
+    );
 }
 
 #[gpui_kit::test]
