@@ -403,12 +403,17 @@ fn connection_close_button_dispatches_immediately(cx: &mut TestAppContext) {
         })
     });
     cx.run_until_parked();
+    cx.update(|_, cx| {
+        let table = view.read(cx).connections_table.clone();
+        table.update(cx, |table, cx| table.scroll_to_col(8, cx));
+    });
+    cx.run_until_parked();
     let bounds = cx
         .debug_bounds("close-connection-0")
         .expect("close button must be visible");
     assert!(
         bounds.right() <= gpui_kit::px(936.),
-        "close action must fit at minimum width"
+        "last-column action must be reachable at minimum width"
     );
     cx.simulate_click(bounds.center(), gpui_kit::Modifiers::default());
     assert!(matches!(rx.try_recv().unwrap().request,

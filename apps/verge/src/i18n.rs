@@ -761,6 +761,8 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("connections.col.target", "目标", "Target"),
     ("connections.col.rule", "规则", "Rule"),
     ("connections.col.chains", "链路", "Chains"),
+    ("connections.col.upload_rate", "上传速率", "Upload rate"),
+    ("connections.col.download_rate", "下载速率", "Download rate"),
     ("connections.col.upload", "上传", "Upload"),
     ("connections.col.download", "下载", "Download"),
     ("connections.col.actions", "操作", "Actions"),

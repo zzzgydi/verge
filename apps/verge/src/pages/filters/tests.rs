@@ -166,6 +166,11 @@ fn search_keeps_connection_actions_bound_to_filtered_rows_and_live_updates(
             Some("TCP")
         )
     });
+    cx.update(|_, cx| {
+        let table = view.read(cx).connections_table.clone();
+        table.update(cx, |table, cx| table.scroll_to_col(8, cx));
+    });
+    cx.run_until_parked();
     let close = cx.debug_bounds("close-connection-0").unwrap();
     cx.simulate_click(close.center(), Modifiers::default());
     cx.run_until_parked();

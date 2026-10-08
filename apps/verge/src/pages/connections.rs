@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use crate::domain::{Connection, ConnectionSnapshot};
 use crate::ui::UiAction;
@@ -9,7 +9,7 @@ use gpui_kit::component::{
     h_flex,
     menu::{PopupMenu, PopupMenuItem},
     scroll::ScrollableElement as _,
-    table::{Column, DataTable, TableDelegate, TableState},
+    table::{Column, ColumnSort, DataTable, TableDelegate, TableState},
     tooltip::Tooltip,
     v_flex,
 };
@@ -27,13 +27,15 @@ use super::muted;
 use crate::ui::Page;
 
 /// 列名对应的 i18n key（与 columns 的声明顺序一致）。
-const COLUMN_KEYS: [&str; 7] = [
+const COLUMN_KEYS: [&str; 9] = [
     "connections.col.process",
     "connections.col.target",
     "connections.col.rule",
     "connections.col.chains",
     "connections.col.upload",
     "connections.col.download",
+    "connections.col.upload_rate",
+    "connections.col.download_rate",
     "connections.col.actions",
 ];
 
@@ -45,6 +47,9 @@ pub struct ConnectionsDelegate {
     columns: Vec<Column>,
     actions: WeakEntity<MainView>,
     language: Lang,
+    sampled_at: Option<Instant>,
+    rates: HashMap<String, (u64, u64)>,
+    sort: Option<(usize, ColumnSort)>,
 }
 
 impl ConnectionsDelegate {
@@ -55,22 +60,43 @@ impl ConnectionsDelegate {
             snapshot: None,
             filter: Default::default(),
             rows: Vec::new(),
-            // Keep all seven columns, including close actions, visible at 960px window width.
+            // Retain readable widths; the table scrolls horizontally in smaller windows.
             columns: vec![
-                Column::new("process", tr(language, COLUMN_KEYS[0])).width(80.),
-                Column::new("target", tr(language, COLUMN_KEYS[1])).width(160.),
-                Column::new("rule", tr(language, COLUMN_KEYS[2])).width(100.),
-                Column::new("chains", tr(language, COLUMN_KEYS[3])).width(100.),
+                Column::new("process", tr(language, COLUMN_KEYS[0]))
+                    .width(80.)
+                    .sortable(),
+                Column::new("target", tr(language, COLUMN_KEYS[1]))
+                    .width(160.)
+                    .sortable(),
+                Column::new("rule", tr(language, COLUMN_KEYS[2]))
+                    .width(100.)
+                    .sortable(),
+                Column::new("chains", tr(language, COLUMN_KEYS[3]))
+                    .width(100.)
+                    .sortable(),
                 Column::new("upload", tr(language, COLUMN_KEYS[4]))
                     .width(80.)
-                    .text_right(),
+                    .text_right()
+                    .sortable(),
                 Column::new("download", tr(language, COLUMN_KEYS[5]))
                     .width(80.)
-                    .text_right(),
-                Column::new("actions", tr(language, COLUMN_KEYS[6])).width(48.),
+                    .text_right()
+                    .sortable(),
+                Column::new("upload_rate", tr(language, COLUMN_KEYS[6]))
+                    .width(110.)
+                    .text_right()
+                    .sortable(),
+                Column::new("download_rate", tr(language, COLUMN_KEYS[7]))
+                    .width(110.)
+                    .text_right()
+                    .sortable(),
+                Column::new("actions", tr(language, COLUMN_KEYS[8])).width(56.),
             ],
             actions,
             language,
+            sampled_at: None,
+            rates: HashMap::new(),
+            sort: None,
         }
     }
 
@@ -79,6 +105,15 @@ impl ConnectionsDelegate {
         snapshot: Option<Arc<ConnectionSnapshot>>,
         filter: ConnectionFilter,
     ) -> bool {
+        self.sync_at(snapshot, filter, Instant::now())
+    }
+
+    fn sync_at(
+        &mut self,
+        snapshot: Option<Arc<ConnectionSnapshot>>,
+        filter: ConnectionFilter,
+        now: Instant,
+    ) -> bool {
         let same = match (&self.snapshot, &snapshot) {
             (Some(old), Some(new)) => Arc::ptr_eq(old, new),
             (None, None) => true,
@@ -86,6 +121,37 @@ impl ConnectionsDelegate {
         };
         if same && self.filter == filter {
             return false;
+        }
+        if !same {
+            let elapsed = self
+                .sampled_at
+                .map(|at| now.saturating_duration_since(at).as_secs_f64())
+                .unwrap_or(0.);
+            let previous: HashMap<_, _> = self
+                .snapshot
+                .as_ref()
+                .into_iter()
+                .flat_map(|s| &s.connections)
+                .map(|r| (r.id.as_str(), r))
+                .collect();
+            self.rates = snapshot
+                .as_ref()
+                .into_iter()
+                .flat_map(|s| &s.connections)
+                .map(|r| {
+                    let rate = previous
+                        .get(r.id.as_str())
+                        .filter(|old| old.start == r.start && elapsed > 0. && elapsed <= 10.)
+                        .map_or((0, 0), |old| {
+                            (
+                                (r.upload.saturating_sub(old.upload) as f64 / elapsed) as u64,
+                                (r.download.saturating_sub(old.download) as f64 / elapsed) as u64,
+                            )
+                        });
+                    (r.id.clone(), rate)
+                })
+                .collect();
+            self.sampled_at = snapshot.as_ref().map(|_| now);
         }
         self.rows = snapshot.as_ref().map_or_else(Vec::new, |s| {
             s.connections
@@ -97,7 +163,54 @@ impl ConnectionsDelegate {
         });
         self.snapshot = snapshot;
         self.filter = filter;
+        self.sort_rows();
         true
+    }
+
+    pub fn retain_widths(&mut self, widths: &[Pixels]) {
+        for (column, width) in self.columns.iter_mut().zip(widths) {
+            column.width = *width;
+        }
+    }
+
+    fn sort_rows(&mut self) {
+        let Some((column, direction)) = self.sort else {
+            return;
+        };
+        let Some(snapshot) = &self.snapshot else {
+            return;
+        };
+        let rates = &self.rates;
+        self.rows.sort_by(|&a, &b| {
+            let a = &snapshot.connections[a];
+            let b = &snapshot.connections[b];
+            let order = match column {
+                0 => a.process.cmp(&b.process),
+                1 => a.host.cmp(&b.host).then(a.destination.cmp(&b.destination)),
+                2 => a
+                    .rule
+                    .cmp(&b.rule)
+                    .then(a.rule_payload.cmp(&b.rule_payload)),
+                3 => a.chains.cmp(&b.chains),
+                4 => a.upload.cmp(&b.upload),
+                5 => a.download.cmp(&b.download),
+                6 => rates
+                    .get(&a.id)
+                    .map(|r| r.0)
+                    .cmp(&rates.get(&b.id).map(|r| r.0)),
+                7 => rates
+                    .get(&a.id)
+                    .map(|r| r.1)
+                    .cmp(&rates.get(&b.id).map(|r| r.1)),
+                _ => std::cmp::Ordering::Equal,
+            };
+            (if direction == ColumnSort::Descending {
+                order.reverse()
+            } else {
+                order
+            })
+            .then(a.id.cmp(&b.id))
+        });
     }
 
     /// 语言切换后重设列名；返回是否有变化（调用方据此 refresh 表格）。
@@ -124,6 +237,44 @@ impl TableDelegate for ConnectionsDelegate {
 
     fn column(&self, col_ix: usize, _cx: &App) -> Column {
         self.columns[col_ix].clone()
+    }
+
+    fn render_th(
+        &mut self,
+        col_ix: usize,
+        _: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        div()
+            .debug_selector(move || format!("connection-header-{col_ix}"))
+            .size_full()
+            .text_color(cx.theme().muted_foreground)
+            .child(self.columns[col_ix].name.clone())
+    }
+
+    fn perform_sort(
+        &mut self,
+        col_ix: usize,
+        sort: ColumnSort,
+        _: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) {
+        self.sort = (sort != ColumnSort::Default).then_some((col_ix, sort));
+        for (ix, col) in self
+            .columns
+            .iter_mut()
+            .enumerate()
+            .filter(|(_, col)| col.sort.is_some())
+        {
+            col.sort = Some(if ix == col_ix {
+                sort
+            } else {
+                ColumnSort::Default
+            });
+        }
+        self.rows.sort_unstable();
+        self.sort_rows();
+        cx.notify();
     }
 
     fn render_td(
@@ -199,7 +350,14 @@ impl TableDelegate for ConnectionsDelegate {
                 .text_color(cx.theme().muted_foreground)
                 .child(format::bytes(connection.download))
                 .into_any_element(),
-            6 => {
+            6 | 7 => {
+                let (up, down) = self.rates.get(&connection.id).copied().unwrap_or_default();
+                div()
+                    .text_sm()
+                    .child(format::rate(if col_ix == 6 { up } else { down }))
+                    .into_any_element()
+            }
+            8 => {
                 let id = connection.id.clone();
                 let actions = self.actions.clone();
                 div()
@@ -500,3 +658,6 @@ impl MainView {
         });
     }
 }
+
+#[cfg(test)]
+mod tests;

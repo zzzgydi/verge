@@ -161,6 +161,14 @@ impl MainView {
                 .col_selectable(false)
                 .col_movable(false)
         });
+        let column_subscription = cx.subscribe(
+            &connections_table,
+            |_, table, event: &gpui_kit::component::table::TableEvent, cx| {
+                if let gpui_kit::component::table::TableEvent::ColumnWidthsChanged(widths) = event {
+                    table.update(cx, |table, _| table.delegate_mut().retain_widths(widths));
+                }
+            },
+        );
         let focus_handle = cx.focus_handle();
         // 窗口级键盘路径（页面切换、刷新）挂在这个焦点上。
         focus_handle.focus(window, cx);
@@ -251,7 +259,7 @@ impl MainView {
             log_limit_applied: None,
             global_hotkey_applied: None,
             placeholders_lang: Some(lang),
-            _subscriptions: vec![log_limit_subscription],
+            _subscriptions: vec![log_limit_subscription, column_subscription],
             next_request_id: 1,
             next_operation_id: 1,
         }
@@ -659,8 +667,11 @@ impl MainView {
                 .delegate_mut()
                 .sync(snapshot, self.filters.connections.clone());
             let language_changed = table.delegate_mut().set_language(lang);
-            if data_changed || language_changed {
+            if language_changed {
                 table.refresh(cx);
+            }
+            if data_changed || language_changed {
+                cx.notify();
             }
             if filter_changed {
                 table.scroll_to_row(0, cx);
