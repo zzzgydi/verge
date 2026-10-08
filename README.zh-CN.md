@@ -237,6 +237,8 @@ MIHOMO_BIN=/absolute/path/to/mihomo \
 5. 在“代理”“规则”“连接”和“日志”中查看实时状态。
 6. 在“设置”中管理 TUN、DNS、IPv6、SOCKS/PAC/bypass、开机启动、快捷键、更新和诊断。
 
+Verge 会记住这台 Mac 上的系统代理开关。退出时恢复原来的系统设置，下次启动待内核健康检查通过后重新开启；手动关闭后，后续启动也保持关闭。旧版本没有保存这个选择，升级后需要开启一次。Dev 不会恢复系统代理。
+
 安装或卸载特权 helper、开启 TUN 和替换应用都会修改系统状态。Verge 会先请求确认，macOS 也可能要求管理员授权。
 
 应用数据默认保存在 `~/Library/Application Support/Verge`。日志位于该目录下的 `logs/verge.log`，另保留 3 份轮转文件，每份最多 2 MiB。GUI 与 daemon 通过文件锁协调轮转。诊断导出会遮盖 controller secret、订阅 URL、认证头和用户主目录。

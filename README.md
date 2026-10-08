@@ -270,6 +270,11 @@ The binary must match the pinned executable checksum in `assets/mihomo/manifest.
 5. Use **Proxies**, **Rules**, **Connections**, and **Logs** to inspect live state.
 6. Use **Settings** for TUN, DNS, IPv6, SOCKS/PAC/bypass, launch at login, shortcuts, updates, and diagnostics.
 
+Verge remembers the system proxy switch on this Mac. Quitting restores the previous
+system settings; the next launch reapplies the proxy after the core passes its health
+check. Turning the switch off keeps it off on later launches. Older versions did not
+save this choice, so enable it once after upgrading. Dev never restores system proxy.
+
 Installing or removing the privileged helper, enabling TUN, and replacing the application can change system state. Verge asks for confirmation and macOS may request administrator authorization.
 
 Application data is stored in `~/Library/Application Support/Verge` by default. Logs are written to `logs/verge.log` under that directory, with three rotated archives and a 2 MiB limit per file. GUI and daemon coordinate rotation through a shared file lock. Diagnostic exports redact controller secrets, subscription URLs, authentication headers, and the user home path.

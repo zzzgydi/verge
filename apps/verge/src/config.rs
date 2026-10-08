@@ -240,6 +240,9 @@ fn yaml_kind(value: &serde_yaml::Value) -> &'static str {
 struct SettingsFile {
     version: u32,
     settings: ApplicationSettings,
+    /// Local restart intent, omitted from portable settings exports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    system_proxy_enabled: Option<bool>,
 }
 
 /// 明文设置导出:带版本号的 JSON,只含 ApplicationSettings 本身。
@@ -250,6 +253,7 @@ pub fn export_settings_json(settings: &ApplicationSettings) -> Result<Vec<u8>, A
     serde_json::to_vec_pretty(&SettingsFile {
         version: SETTINGS_VERSION,
         settings: settings.clone(),
+        system_proxy_enabled: None,
     })
     .map_err(storage_error)
 }
@@ -321,12 +325,13 @@ fn render_json_value(value: &serde_json::Value) -> String {
 pub struct FileSettingsStore {
     path: PathBuf,
     settings: ApplicationSettings,
+    system_proxy_enabled: bool,
 }
 
 impl FileSettingsStore {
     pub fn open(data_directory: impl AsRef<Path>) -> Result<Self, AppError> {
         let path = data_directory.as_ref().join("settings.json");
-        let settings = if path.exists() {
+        let (settings, system_proxy_enabled) = if path.exists() {
             let file: SettingsFile =
                 serde_json::from_slice(&fs::read(&path).map_err(storage_error)?)
                     .map_err(storage_error)?;
@@ -337,11 +342,15 @@ impl FileSettingsStore {
                 ));
             }
             file.settings.validate()?;
-            file.settings
+            (file.settings, file.system_proxy_enabled.unwrap_or(false))
         } else {
-            ApplicationSettings::default()
+            (ApplicationSettings::default(), false)
         };
-        Ok(Self { path, settings })
+        Ok(Self {
+            path,
+            settings,
+            system_proxy_enabled,
+        })
     }
 
     pub fn get(&self) -> &ApplicationSettings {
@@ -349,14 +358,32 @@ impl FileSettingsStore {
     }
 
     pub fn update(&mut self, settings: ApplicationSettings) -> Result<(), AppError> {
+        self.persist(&settings, self.system_proxy_enabled)?;
+        self.settings = settings;
+        Ok(())
+    }
+
+    pub(crate) fn system_proxy_enabled(&self) -> bool {
+        self.system_proxy_enabled
+    }
+
+    pub(crate) fn set_system_proxy_enabled(&mut self, enabled: bool) -> Result<(), AppError> {
+        if self.system_proxy_enabled != enabled {
+            self.persist(&self.settings, enabled)?;
+            self.system_proxy_enabled = enabled;
+        }
+        Ok(())
+    }
+
+    fn persist(&self, settings: &ApplicationSettings, enabled: bool) -> Result<(), AppError> {
         settings.validate()?;
         let file = SettingsFile {
             version: SETTINGS_VERSION,
             settings: settings.clone(),
+            system_proxy_enabled: Some(enabled),
         };
         let bytes = serde_json::to_vec_pretty(&file).map_err(storage_error)?;
         atomic_write_private(&self.path, &bytes).map_err(storage_error)?;
-        self.settings = settings;
         Ok(())
     }
 }
@@ -1290,6 +1317,44 @@ pub(crate) mod tests {
             None,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn system_proxy_intent_survives_settings_saves_and_stays_local() {
+        let directory = TestDir::new("proxy-intent");
+        let mut store = FileSettingsStore::open(&directory.0).unwrap();
+        assert!(!store.system_proxy_enabled());
+        store.set_system_proxy_enabled(true).unwrap();
+        let mut changed = store.get().clone();
+        changed.language = "en".into();
+        store.update(changed).unwrap();
+        let mut reopened = FileSettingsStore::open(&directory.0).unwrap();
+        assert!(reopened.system_proxy_enabled());
+        let exported = export_settings_json(reopened.get()).unwrap();
+        assert!(
+            !serde_json::from_slice::<serde_json::Value>(&exported)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .contains_key("system_proxy_enabled")
+        );
+        // Legacy/imported settings lack local intent and remain disabled by default.
+        fs::write(directory.0.join("settings.json"), exported).unwrap();
+        assert!(
+            !FileSettingsStore::open(&directory.0)
+                .unwrap()
+                .system_proxy_enabled()
+        );
+        reopened.set_system_proxy_enabled(false).unwrap();
+        assert!(
+            !FileSettingsStore::open(&directory.0)
+                .unwrap()
+                .system_proxy_enabled()
+        );
+        fs::remove_file(directory.0.join("settings.json")).unwrap();
+        fs::create_dir(directory.0.join("settings.json")).unwrap();
+        assert!(reopened.set_system_proxy_enabled(true).is_err());
+        assert!(!reopened.system_proxy_enabled());
     }
 
     #[test]

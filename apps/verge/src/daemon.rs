@@ -364,6 +364,7 @@ impl Backend {
         self.refresh_sensitive_values();
         self.runtime_error = None;
         self.startup_updates_pending = true;
+        self.resume_system_proxy();
         Ok(())
     }
 
