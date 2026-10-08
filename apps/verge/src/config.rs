@@ -1175,26 +1175,39 @@ fn render_runtime_yaml(
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let temporary = path.with_extension("tmp");
-    let mut file = fs::File::create(&temporary)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    fs::rename(temporary, path)
+    write_atomic(path, bytes, false)
 }
 
 fn atomic_write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let temporary = path.with_extension("tmp");
+    write_atomic(path, bytes, true)
+}
+
+fn write_atomic(path: &Path, bytes: &[u8], private: bool) -> io::Result<()> {
+    let mut nonce = [0u8; 16];
+    getrandom::fill(&mut nonce).map_err(io::Error::other)?;
+    let suffix = nonce.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let mut name = path.as_os_str().to_os_string();
+    name.push(format!(".{suffix}.tmp"));
+    let temporary = PathBuf::from(name);
     let mut options = fs::OpenOptions::new();
-    options.create(true).truncate(true).write(true);
+    options.create_new(true).write(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        if private {
+            options.mode(0o600);
+        }
     }
-    let mut file = options.open(&temporary)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    fs::rename(temporary, path)
+    let result = (|| {
+        let mut file = options.open(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result
 }
 
 fn storage_error(error: impl fmt::Display) -> AppError {

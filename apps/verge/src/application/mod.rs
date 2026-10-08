@@ -2390,7 +2390,7 @@ mod tests {
 
     #[test]
     fn merge_io_failure_restores_persisted_rules_before_core_apply() {
-        for blocker in ["candidates/first.runtime.tmp", "runtime-config.tmp"] {
+        for blocker in ["candidates/first.runtime.yaml", "runtime-config.yaml"] {
             let directory = TestDir::new("merge-io-failure");
             let (mut store, first, _) = store_with_profiles(&directory.0);
             let previous = store.merge_yaml().unwrap();
