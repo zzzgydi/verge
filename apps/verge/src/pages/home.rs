@@ -85,6 +85,18 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 .child(tr(lang, "home.active_profile")),
                         )
                         .child(div().text_xl().font_medium().truncate().child(profile_name))
+                        .when_some(profile, |this, profile| {
+                            this.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!(
+                                        "{} {}",
+                                        tr(lang, "profiles.updated_at"),
+                                        crate::format::updated_at(lang, profile.updated_at)
+                                    )),
+                            )
+                        })
                         .when(profile.is_none(), |this| {
                             this.child(
                                 div()
@@ -167,7 +179,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                     .outline()
                     .small()
                     .h(px(crate::appearance::metrics::COMPACT_CONTROL))
-                    .icon(IconName::Redo)
+                    .icon(gpui_kit::assets::IconName::RefreshCw)
                     .label(tr(lang, "common.refresh"))
                     .loading(view.is_pending(&["runtime_settings", "mode", "system_proxy"]))
                     .on_click(
@@ -182,6 +194,171 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 .child(connection)
                 .child(div().flex_1().min_w_0().child(view.telemetry.clone())),
         )
+        .child(overview_details(view, cx))
         .child(h_flex().gap_3().children(quick_links))
         .into_any_element()
+}
+
+fn overview_details(view: &MainView, cx: &mut Context<MainView>) -> impl IntoElement {
+    let lang = view.lang();
+    let unknown = tr(lang, "common.unknown");
+    let enabled = |value: Option<bool>| match value {
+        Some(true) => tr(lang, "home.enabled"),
+        Some(false) => tr(lang, "home.disabled"),
+        None => unknown,
+    };
+    let stat = |label: &str, value: String| {
+        h_flex()
+            .gap_3()
+            .justify_between()
+            .text_sm()
+            .child(
+                div()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(label.to_owned()),
+            )
+            .child(div().font_medium().child(value))
+    };
+    let traffic = view.state.connections.as_ref();
+    let network = view.state.network_settings.as_ref();
+    let port = view
+        .state
+        .runtime_settings
+        .as_ref()
+        .map(|s| s.system_proxy_endpoint.port.to_string())
+        .unwrap_or_else(|| "—".into());
+    let network_card = panel(cx)
+        .flex_1()
+        .min_w_0()
+        .gap_3()
+        .child(div().font_medium().child(tr(lang, "home.network")))
+        .child(stat(tr(lang, "home.port"), port))
+        .child(stat("TUN", enabled(network.map(|s| s.tun_enabled)).into()))
+        .child(stat("DNS", enabled(network.map(|s| s.dns_enabled)).into()))
+        .child(stat(
+            "IPv6",
+            enabled(network.map(|s| s.ipv6_enabled)).into(),
+        ))
+        .child(stat(
+            tr(lang, "home.total_upload"),
+            traffic
+                .map(|s| crate::format::bytes(s.upload_total))
+                .unwrap_or_else(|| "—".into()),
+        ))
+        .child(stat(
+            tr(lang, "home.total_download"),
+            traffic
+                .map(|s| crate::format::bytes(s.download_total))
+                .unwrap_or_else(|| "—".into()),
+        ));
+    let mut routes = panel(cx)
+        .flex_1()
+        .min_w_0()
+        .gap_3()
+        .child(
+            h_flex()
+                .justify_between()
+                .child(div().font_medium().child(tr(lang, "home.routes")))
+                .child(
+                    Button::new("home-view-routes")
+                        .small()
+                        .ghost()
+                        .label(tr(lang, "proxies.title"))
+                        .on_click(cx.listener(|this, _, _, cx| this.navigate(Page::Proxies, cx))),
+                ),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(format!(
+                    "{} {} · {} {}",
+                    view.state.rules.len(),
+                    tr(lang, "home.rule_count"),
+                    view.state.providers.len(),
+                    tr(lang, "rules.providers")
+                )),
+        );
+    let groups: Vec<_> = view
+        .state
+        .proxies
+        .groups
+        .iter()
+        .filter(|g| {
+            view.state.mode != Some(RunMode::Direct)
+                && (view.state.mode == Some(RunMode::Global)) == (g.name == "GLOBAL")
+                && !view
+                    .state
+                    .proxies
+                    .proxies
+                    .get(&g.name)
+                    .is_some_and(|p| p.hidden)
+        })
+        .take(4)
+        .collect();
+    if groups.is_empty() {
+        routes = routes.child(
+            div()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child(tr(
+                    lang,
+                    if view.state.mode == Some(RunMode::Direct) {
+                        "proxies.direct.desc"
+                    } else {
+                        "home.no_routes"
+                    },
+                )),
+        );
+    }
+    for group in groups {
+        let selected = group.selected.as_deref().unwrap_or("—");
+        let delay = view.state.delays.get(selected).copied().or_else(|| {
+            view.state
+                .proxies
+                .proxies
+                .get(selected)
+                .and_then(|p| p.delay)
+        });
+        routes = routes.child(
+            v_flex()
+                .gap_1()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .truncate()
+                        .child(group.name.clone()),
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_sm()
+                                .child(selected.to_owned()),
+                        )
+                        .when_some(delay, |row, delay| {
+                            row.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(if delay == 0 {
+                                        tr(lang, "proxies.timeout").into()
+                                    } else {
+                                        format!("{delay} ms")
+                                    }),
+                            )
+                        }),
+                ),
+        );
+    }
+    h_flex()
+        .items_stretch()
+        .gap_4()
+        .child(network_card)
+        .child(routes)
 }

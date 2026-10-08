@@ -567,9 +567,19 @@ impl MainView {
                     | UiAction::UpdateCoreNetworkSettings(_)
                     | UiAction::UpdateSystemProxySettings(_)
             );
+        let coalesce_refresh = matches!(
+            action,
+            UiAction::RefreshHome
+                | UiAction::RefreshProxies
+                | UiAction::RefreshRules
+                | UiAction::RefreshProfiles
+                | UiAction::RefreshSettings
+                | UiAction::RefreshLogSettings
+        );
         let requests: Vec<_> = action
             .requests()
             .into_iter()
+            .filter(|request| !coalesce_refresh || !self.state.has_pending_refresh(request))
             .filter(|request| {
                 // Before a profile is selected, Overview is an onboarding state.
                 // Avoid core reads that can only return "no active profile".
@@ -581,6 +591,9 @@ impl MainView {
                         ) | crate::ui::UiRequest::Runtime(
                             crate::domain::RuntimeCommand::GetMode
                                 | crate::domain::RuntimeCommand::GetNetworkSettings
+                                | crate::domain::RuntimeCommand::ListProxyGroups
+                                | crate::domain::RuntimeCommand::ListRules
+                                | crate::domain::RuntimeCommand::ListProviders
                                 | crate::domain::RuntimeCommand::StartRealtime { .. }
                         )
                     )
@@ -689,17 +702,39 @@ impl MainView {
         keys.iter().any(|key| self.state.pending.contains(key))
     }
 
+    /// Welcome already carries profiles; overlapping page reads share pending requests.
+    pub(crate) fn refresh_after_connect(&mut self, cx: &mut Context<Self>) {
+        self.dispatch(UiAction::RefreshHome, cx);
+        self.dispatch(UiAction::RefreshSettings, cx);
+        if !matches!(
+            self.state.page,
+            Page::Home | Page::Profiles | Page::Settings
+        ) {
+            self.refresh_current_page(cx);
+        }
+        if self.state.page != Page::Ai
+            && self
+                .state
+                .daemon_capabilities
+                .iter()
+                .any(|c| c == crate::ai::CAPABILITY)
+        {
+            self.dispatch(UiAction::Ai(crate::ai::AiCommand::GetState), cx);
+        }
+    }
+
     /// 切换页面，并触发该页需要的首批数据加载。
     pub fn navigate(&mut self, page: Page, cx: &mut Context<Self>) {
         self.dispatch(UiAction::Navigate(page), cx);
         match page {
+            Page::Home => self.dispatch(UiAction::RefreshHome, cx),
             Page::Profiles => self.dispatch(UiAction::RefreshProfiles, cx),
             Page::Rules => self.dispatch(UiAction::RefreshRules, cx),
             Page::Proxies => self.dispatch(UiAction::RefreshProxies, cx),
             Page::Settings => self.dispatch(UiAction::RefreshSettings, cx),
             Page::Ai => self.dispatch(UiAction::Ai(crate::ai::AiCommand::GetState), cx),
             Page::Logs => self.dispatch(UiAction::RefreshLogSettings, cx),
-            Page::Home | Page::Connections => {}
+            Page::Connections => {}
         }
     }
 

@@ -240,11 +240,7 @@ pub fn run() {
                                 view.sync_proxies(cx);
                                 // 增量补齐：RefreshHome 同时建立实时订阅，
                                 // 后续变更全部走 Response / RealtimeBatch。
-                                view.dispatch(UiAction::RefreshHome, cx);
-                                view.dispatch(UiAction::RefreshProfiles, cx);
-                                view.dispatch(UiAction::RefreshSettings, cx);
-                                view.refresh_current_page(cx);
-                                if view.state.page != crate::ui::Page::Ai && view.state.daemon_capabilities.iter().any(|c| c == crate::ai::CAPABILITY) { view.dispatch(UiAction::Ai(crate::ai::AiCommand::GetState), cx); }
+                                view.refresh_after_connect(cx);
                                 cx.notify();
                             });
                             let _ = protocol_version;
@@ -310,6 +306,7 @@ pub fn run() {
                                         crate::domain::RealtimeEvent::Log(_) => {
                                             view.state.page == crate::ui::Page::Logs
                                         }
+                                        crate::domain::RealtimeEvent::Connections(_) => view.state.page == crate::ui::Page::Home,
                                         crate::domain::RealtimeEvent::Reconnecting { .. } => true,
                                         _ => false,
                                     };

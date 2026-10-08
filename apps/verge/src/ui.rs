@@ -371,6 +371,12 @@ impl UiAction {
             }
             Self::RefreshHome => vec![
                 UiRequest::Profile(AppCommand::GetRuntimeSettings),
+                UiRequest::Profile(AppCommand::GetCoreNetworkSettings),
+                UiRequest::Profile(AppCommand::ListProfiles),
+                UiRequest::Runtime(RuntimeCommand::ListProxyGroups),
+                UiRequest::Runtime(RuntimeCommand::ListRules),
+                UiRequest::Runtime(RuntimeCommand::ListProviders),
+                UiRequest::Runtime(RuntimeCommand::GetNetworkSettings),
                 UiRequest::Runtime(RuntimeCommand::GetMode),
                 UiRequest::SystemProxy(SystemProxyCommand::GetState),
                 UiRequest::Runtime(RuntimeCommand::StartRealtime {
@@ -668,6 +674,8 @@ pub struct UiState {
     pub delay_pending: HashSet<String>,
     pub pending: HashSet<&'static str>,
     pending_requests: HashMap<u64, &'static str>,
+    /// Reads started since the last mutation can serve overlapping page refreshes.
+    pending_refreshes: HashMap<u64, UiRequest>,
     latest_requests: HashMap<&'static str, u64>,
     latest_delay_requests: HashMap<String, u64>,
     pub last_error: Option<AppError>,
@@ -679,6 +687,12 @@ impl UiState {
         self.pending_requests.len()
     }
 
+    pub fn has_pending_refresh(&self, request: &UiRequest) -> bool {
+        self.pending_refreshes
+            .values()
+            .any(|pending| pending == request)
+    }
+
     pub fn disconnect(&mut self, message: String) {
         self.connection_notice = Some(message);
         self.discarded_request_id = self
@@ -686,6 +700,7 @@ impl UiState {
             .max(self.pending_requests.keys().copied().max().unwrap_or(0));
         self.pending.clear();
         self.pending_requests.clear();
+        self.pending_refreshes.clear();
         self.latest_requests.clear();
         self.latest_delay_requests.clear();
         self.delay_pending.clear();
@@ -693,6 +708,31 @@ impl UiState {
     }
 
     pub fn begin_envelope(&mut self, envelope: &UiRequestEnvelope) {
+        let refresh_request = matches!(
+            &envelope.request,
+            UiRequest::Profile(
+                AppCommand::GetRuntimeSettings
+                    | AppCommand::GetCoreNetworkSettings
+                    | AppCommand::GetApplicationSettings
+                    | AppCommand::GetHelperStatus
+                    | AppCommand::ListProfiles
+            ) | UiRequest::Runtime(
+                RuntimeCommand::GetMode
+                    | RuntimeCommand::GetNetworkSettings
+                    | RuntimeCommand::ListProxyGroups
+                    | RuntimeCommand::ListRules
+                    | RuntimeCommand::ListProviders
+                    | RuntimeCommand::StartRealtime { .. }
+            ) | UiRequest::SystemProxy(SystemProxyCommand::GetState)
+        );
+        if refresh_request {
+            self.pending_refreshes
+                .insert(envelope.request_id, envelope.request.clone());
+        } else if envelope.request.risk() != CommandRisk::ReadOnly {
+            // A refresh after a mutation must read the new state, even if an older
+            // query is still running. Mutation commands themselves are never merged.
+            self.pending_refreshes.clear();
+        }
         let key = request_key(&envelope.request);
         self.pending_requests.insert(envelope.request_id, key);
         self.latest_requests.insert(key, envelope.request_id);
@@ -983,6 +1023,7 @@ impl UiState {
             };
         let stale = latest.is_some_and(|latest| *latest != request_id);
         self.pending_requests.remove(&request_id);
+        self.pending_refreshes.remove(&request_id);
         if !stale || is_write_request(&request) {
             self.apply_response(envelope.response);
         }
@@ -1200,6 +1241,12 @@ mod tests {
             UiAction::RefreshHome.requests(),
             [
                 UiRequest::Profile(AppCommand::GetRuntimeSettings),
+                UiRequest::Profile(AppCommand::GetCoreNetworkSettings),
+                UiRequest::Profile(AppCommand::ListProfiles),
+                UiRequest::Runtime(RuntimeCommand::ListProxyGroups),
+                UiRequest::Runtime(RuntimeCommand::ListRules),
+                UiRequest::Runtime(RuntimeCommand::ListProviders),
+                UiRequest::Runtime(RuntimeCommand::GetNetworkSettings),
                 UiRequest::Runtime(RuntimeCommand::GetMode),
                 UiRequest::SystemProxy(SystemProxyCommand::GetState),
                 UiRequest::Runtime(RuntimeCommand::StartRealtime {

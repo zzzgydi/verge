@@ -974,6 +974,103 @@ fn daemon_recovery_preserves_drafts_and_never_replays_writes(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
+fn welcome_and_repeated_navigation_share_pending_home_queries(cx: &mut TestAppContext) {
+    use crate::{
+        domain::{ProfileId, RuntimeCommand},
+        ui::{Page, UiAction, UiRequest},
+    };
+    cx.update(gpui_kit::init);
+    let (tx, rx) = mpsc::sync_channel(32);
+    let (view, cx) = cx.add_window_view(|window, cx| MainView::new(tx, window, cx));
+    cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.state.selected_profile = Some(ProfileId::parse("test").unwrap());
+            view.refresh_after_connect(cx);
+            let initial: Vec<_> = rx.try_iter().collect();
+            let queries = initial
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        &e.request,
+                        UiRequest::Runtime(
+                            RuntimeCommand::GetMode
+                                | RuntimeCommand::GetNetworkSettings
+                                | RuntimeCommand::ListProxyGroups
+                                | RuntimeCommand::ListRules
+                                | RuntimeCommand::ListProviders
+                        )
+                    )
+                })
+                .count();
+            assert_eq!(
+                queries, 5,
+                "welcome should request each Mihomo snapshot once"
+            );
+            for (i, request) in initial.iter().enumerate() {
+                assert!(
+                    !initial[..i]
+                        .iter()
+                        .any(|other| other.request == request.request)
+                );
+            }
+            for _ in 0..10 {
+                for page in [
+                    Page::Home,
+                    Page::Proxies,
+                    Page::Rules,
+                    Page::Settings,
+                    Page::Profiles,
+                    Page::Logs,
+                ] {
+                    view.navigate(page, cx);
+                    view.refresh_current_page(cx);
+                }
+            }
+            assert!(rx.try_recv().is_err(), "pending snapshots should be reused");
+            assert!(view.state.last_error.is_none());
+            let mode = initial
+                .iter()
+                .find(|e| e.request == UiRequest::Runtime(RuntimeCommand::GetMode))
+                .unwrap();
+            view.state
+                .apply_response_envelope(crate::ui::UiResponseEnvelope::for_request(
+                    mode,
+                    crate::ui::UiResponse::Runtime {
+                        request: RuntimeCommand::GetMode,
+                        result: Err(crate::domain::AppError::new(
+                            crate::domain::ErrorCode::RequestTimeout,
+                            "test timeout",
+                        )),
+                    },
+                ));
+            view.dispatch(UiAction::RefreshProxies, cx);
+            let retry = rx.try_recv().unwrap();
+            assert_eq!(retry.request, mode.request);
+            assert!(retry.request_id > mode.request_id);
+            assert!(rx.try_recv().is_err());
+
+            // A mutation invalidates sharing with earlier reads; its follow-up
+            // refresh must observe the updated state, not reuse the old request.
+            view.dispatch(UiAction::SetMode(crate::domain::RunMode::Global), cx);
+            assert!(matches!(
+                rx.try_recv().unwrap().request,
+                UiRequest::Runtime(RuntimeCommand::SetMode { .. })
+            ));
+            view.dispatch(UiAction::RefreshProxies, cx);
+            let after_write: Vec<_> = rx.try_iter().collect();
+            assert_eq!(after_write.len(), 2);
+            assert!(after_write.iter().all(|e| e.request_id > retry.request_id));
+
+            // A new daemon session must receive fresh reads and subscriptions.
+            view.state.disconnect("reconnecting".into());
+            view.state.connection_notice = None;
+            view.refresh_after_connect(cx);
+            assert_eq!(rx.try_iter().count(), initial.len());
+        })
+    });
+}
+
+#[gpui_kit::test]
 fn daemon_requests_are_bounded_while_responses_are_stalled(cx: &mut TestAppContext) {
     use crate::ui::UiAction;
     cx.update(gpui_kit::init);
@@ -982,7 +1079,7 @@ fn daemon_requests_are_bounded_while_responses_are_stalled(cx: &mut TestAppConte
     cx.update(|_, cx| {
         view.update(cx, |view, cx| {
             for _ in 0..100 {
-                view.dispatch(UiAction::RefreshProfiles, cx);
+                view.dispatch(UiAction::SetMode(crate::domain::RunMode::Rule), cx);
             }
             assert_eq!(rx.try_iter().count(), 32);
             assert_eq!(view.state.pending_request_count(), 32);
