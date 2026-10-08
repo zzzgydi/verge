@@ -2,6 +2,7 @@ mod model;
 mod rows;
 #[cfg(test)]
 mod tests;
+mod tools;
 
 use super::components::{PageHeader, mode_selector};
 use crate::{
@@ -21,7 +22,7 @@ use gpui_kit::component::{
 use gpui_kit::{prelude::FluentBuilder as _, *};
 use model::Row;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     rc::Rc,
     sync::Arc,
 };
@@ -45,6 +46,14 @@ pub struct ProxyPage {
     delays: HashMap<String, u32>,
     delay_errors: HashMap<String, AppError>,
     pending: HashSet<String>,
+    group_filters: HashMap<String, tools::GroupFilter>,
+    group_searches: HashMap<String, Entity<InputState>>,
+    group_subscriptions: HashMap<String, Subscription>,
+    search_lang: Lang,
+    animation: HashMap<String, f32>,
+    animation_task: Option<Task<()>>,
+    test_queue: VecDeque<String>,
+    test_reserved: HashSet<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -87,6 +96,14 @@ impl ProxyPage {
             delays: HashMap::new(),
             delay_errors: HashMap::new(),
             pending: HashSet::new(),
+            group_filters: HashMap::new(),
+            group_searches: HashMap::new(),
+            group_subscriptions: HashMap::new(),
+            search_lang: Lang::En,
+            animation: HashMap::new(),
+            animation_task: None,
+            test_queue: VecDeque::new(),
+            test_reserved: HashSet::new(),
             _subscriptions: vec![subscription, bounds],
         }
     }
@@ -112,59 +129,151 @@ impl ProxyPage {
         }
         if self.profile != state.selected_profile {
             self.expanded.clear();
+            self.group_filters.clear();
+            self.group_searches.clear();
+            self.group_subscriptions.clear();
+            self.animation.clear();
+            self.test_queue.clear();
         }
         if self.mode != state.mode || self.profile != state.selected_profile {
             self.scroll.set_offset(point(px(0.), px(0.)));
         }
+        if self.mode != state.mode || state.connection_notice.is_some() {
+            self.animation.clear();
+            self.animation_task = None;
+            self.test_queue.clear();
+        }
         self.snapshot = state.proxies.clone();
+        self.group_searches
+            .retain(|name, _| self.snapshot.groups.iter().any(|g| &g.name == name));
+        self.group_subscriptions
+            .retain(|name, _| self.group_searches.contains_key(name));
+        self.group_filters
+            .retain(|name, _| self.group_searches.contains_key(name));
+        self.test_queue
+            .retain(|name| self.snapshot.proxies.contains_key(name));
         self.mode = state.mode;
         self.profile = state.selected_profile.clone();
         self.revision = state.proxy_revision;
         self.lang = lang;
         self.delays.clone_from(&state.delays);
         self.delay_errors.clone_from(&state.delay_errors);
+        self.test_reserved
+            .retain(|name| !state.delay_pending.contains(name));
         self.pending.clone_from(&state.delay_pending);
+        self.pending.extend(self.test_reserved.iter().cloned());
         self.expanded
             .retain(|name| self.snapshot.groups.iter().any(|g| &g.name == name));
-        if layout_changed {
-            self.rebuild();
-        }
+        self.rebuild();
+        self.pump_tests(cx);
         cx.notify();
     }
 
     fn rebuild(&mut self) {
+        let mut visible = self.expanded.clone();
+        visible.extend(self.animation.keys().cloned());
+        let collapsed = self
+            .filter_collapsed
+            .iter()
+            .filter(|name| !self.animation.contains_key(*name))
+            .cloned()
+            .collect();
         let rows = model::rows(
             &self.snapshot,
             self.mode,
-            &self.expanded,
+            &visible,
             &self.query,
-            &self.filter_collapsed,
+            &collapsed,
             self.columns,
         );
+        let rows = self.filter_rows(rows);
         self.sizes = Rc::new(
             rows.iter()
-                .map(|row| size(px(0.), px(row.height())))
+                .map(|row| size(px(0.), px(self.row_height(row))))
                 .collect(),
         );
         self.rows = Rc::new(rows);
     }
 
+    fn is_expanded(&self, name: &str) -> bool {
+        if self.query.trim().is_empty() {
+            self.expanded.contains(name)
+        } else {
+            !self.filter_collapsed.contains(name)
+        }
+    }
+
+    fn row_height(&self, row: &Row) -> f32 {
+        let group = match row {
+            Row::Group(_) => return row.height(),
+            Row::Toolbar(g) | Row::Nodes { group: g, .. } => *g,
+        };
+        row.height()
+            * self
+                .animation
+                .get(&self.snapshot.groups[group].name)
+                .copied()
+                .unwrap_or(1.)
+    }
+
     fn toggle(&mut self, group: usize, cx: &mut Context<Self>) {
         let name = self.snapshot.groups[group].name.clone();
+        let was_open = self.is_expanded(&name);
         if !self.query.trim().is_empty() {
             if !self.filter_collapsed.remove(&name) {
-                self.filter_collapsed.insert(name);
+                self.filter_collapsed.insert(name.clone());
             }
         } else if !self.expanded.remove(&name) {
-            self.expanded.insert(name);
+            self.expanded.insert(name.clone());
+        }
+        if !cx.reduce_motion() {
+            self.animation
+                .entry(name)
+                .or_insert(if was_open { 1. } else { 0.01 });
+            self.animate(cx);
         }
         self.rebuild();
         cx.notify();
     }
 
+    fn animate(&mut self, cx: &mut Context<Self>) {
+        self.animation_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(16))
+                    .await;
+                let Ok(active) = this.update(cx, |this, cx| {
+                    let names: Vec<_> = this.animation.keys().cloned().collect();
+                    for name in names {
+                        let target = if this.is_expanded(&name) { 1. } else { 0. };
+                        let progress = this.animation.get_mut(&name).unwrap();
+                        *progress += (target - *progress).clamp(-0.1, 0.1);
+                        if (*progress - target).abs() < 0.001 {
+                            this.animation.remove(&name);
+                        }
+                    }
+                    this.rebuild();
+                    cx.notify();
+                    !this.animation.is_empty()
+                }) else {
+                    break;
+                };
+                if !active {
+                    break;
+                }
+            }
+        }));
+    }
+
     fn locate(&mut self, group: usize, window: &mut Window, cx: &mut Context<Self>) {
         if self.snapshot.groups[group].selected.is_none() {
             return;
+        }
+        self.animation.clear();
+        let name = self.snapshot.groups[group].name.clone();
+        self.group_filters.remove(&name);
+        if let Some(input) = self.group_searches.get(&name) {
+            input.update(cx, |input, cx| input.set_value("", window, cx));
         }
         self.query.clear();
         self.search
@@ -187,7 +296,8 @@ impl ProxyPage {
 }
 
 impl Render for ProxyPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ensure_group_searches(window, cx);
         let global = self.mode == Some(RunMode::Global);
         let direct = self.mode == Some(RunMode::Direct);
         let global_index = self
@@ -214,6 +324,19 @@ impl Render for ProxyPage {
                         .h(px(crate::appearance::metrics::CONTROL))
                         .ghost()
                         .on_click(cx.listener(|this, _, window, cx| {
+                            let opened: Vec<_> = this
+                                .snapshot
+                                .groups
+                                .iter()
+                                .filter(|g| this.is_expanded(&g.name))
+                                .map(|g| g.name.clone())
+                                .collect();
+                            if !cx.reduce_motion() {
+                                for name in opened {
+                                    this.animation.entry(name).or_insert(1.);
+                                }
+                                this.animate(cx);
+                            }
                             this.expanded.clear();
                             this.query.clear();
                             this.search
@@ -266,7 +389,13 @@ impl Render for ProxyPage {
                         move |this, range, _, cx| {
                             range
                                 .filter_map(|ix| rows.get(ix))
-                                .map(|row| rows::render(row, this, cx))
+                                .map(|row| {
+                                    div()
+                                        .h(px(this.row_height(row)))
+                                        .overflow_hidden()
+                                        .child(rows::render(row, this, cx))
+                                        .into_any_element()
+                                })
                                 .collect()
                         },
                     )

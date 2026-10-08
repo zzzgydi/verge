@@ -742,6 +742,12 @@ const ENTRIES: &[(&str, &str, &str)] = &[
         "Clear the filter, or activate a profile and refresh.",
     ),
     ("proxies.test_delay", "测速", "Test"),
+    ("proxies.filter_nodes", "过滤节点", "Filter nodes"),
+    ("proxies.test_all", "测速全部", "Test all"),
+    ("proxies.sort_default", "原始顺序", "Original order"),
+    ("proxies.sort_name", "名称排序", "Name"),
+    ("proxies.sort_delay", "延迟排序", "Latency"),
+    ("proxies.hide_unavailable", "隐藏不可用", "Hide unavailable"),
     ("proxies.testing", "测速中…", "Testing…"),
     ("proxies.empty.title", "暂无代理组", "No Proxy Groups"),
     (

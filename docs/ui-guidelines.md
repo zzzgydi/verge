@@ -43,6 +43,8 @@ GPUI spacing utilities match this scale; the application body explicitly uses
 - Proxy groups and nodes are 64px tall, followed by an 8px gap. A node has two
   lines (name, protocol/capabilities), a centered selection marker, and a 28px
   delay action. Use 12px horizontal padding and a 4px gap between text lines.
+  Expanded groups have a 44px toolbar and a 28px left inset shared with node rows.
+  Expansion and collapse preserve virtualized rows until the animation finishes.
 - Rules use 36px rows (56px provider cards plus 8px spacing); connections retain compact table rows;
   logs use 24px physical lines, preserving embedded line breaks. The log viewport
   scrolls in both axes and measures the longest filtered message; never apply

@@ -47,7 +47,10 @@ fn snapshot() -> ProxySnapshot {
 
 #[gpui_kit::test]
 fn group_filter_locate_selection_and_global_layout(cx: &mut TestAppContext) {
-    cx.update(gpui_kit::init);
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_reduce_motion(true);
+    });
     let (tx, rx) = mpsc::sync_channel(32);
     let holder = Rc::new(RefCell::new(None));
     let copy = holder.clone();
@@ -103,6 +106,7 @@ fn group_filter_locate_selection_and_global_layout(cx: &mut TestAppContext) {
             *page.read(cx).rows,
             [
                 Row::Group(0),
+                Row::Toolbar(0),
                 Row::Nodes {
                     group: 0,
                     members: vec![5]
@@ -205,7 +209,7 @@ fn group_filter_locate_selection_and_global_layout(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.update(|_, cx| {
         assert_eq!(page.read(cx).columns, 1);
-        assert_eq!(page.read(cx).rows.len(), 160);
+        assert_eq!(page.read(cx).rows.len(), 161);
     });
     let node = cx.debug_bounds("proxy-card-1-0").unwrap();
     cx.simulate_click(
@@ -223,4 +227,132 @@ fn group_filter_locate_selection_and_global_layout(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     cx.update(|_, cx| assert!(page.read(cx).rows.is_empty()));
+}
+
+#[gpui_kit::test]
+fn group_animation_filters_and_batch_tests_keep_retained_state(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (tx, rx) = mpsc::sync_channel(32);
+    let (view, cx) = cx.add_window_view(|window, cx| MainView::new(tx, window, cx));
+    cx.simulate_resize(size(px(960.), px(640.)));
+    let page = cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.state.page = Page::Proxies;
+            view.state.proxies = Arc::new(snapshot());
+            view.state.mode = Some(RunMode::Rule);
+            view.sync_proxies(cx);
+            cx.notify();
+        });
+        view.read(cx).proxy_page.clone()
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| page.update(cx, |page, cx| page.toggle(0, cx)));
+    for _ in 0..4 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(16));
+        cx.run_until_parked();
+    }
+    cx.update(|_, cx| {
+        let page = page.read(cx);
+        assert!(page.animation["Route"] > 0.1 && page.animation["Route"] < 1.);
+        assert!(
+            page.row_height(&Row::Nodes {
+                group: 0,
+                members: vec![0]
+            }) < super::model::NODES_HEIGHT
+        );
+    });
+    for _ in 0..8 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(16));
+        cx.run_until_parked();
+    }
+    cx.update(|_, cx| assert!(page.read(cx).animation.is_empty()));
+    let tools = cx.debug_bounds("proxy-tools-0").unwrap();
+    let card = cx.debug_bounds("proxy-card-0-0").unwrap();
+    let group = cx.debug_bounds("proxy-group-0").unwrap();
+    assert!(card.left() >= group.left() + px(24.));
+    assert!(tools.bottom() <= card.top());
+    cx.update(|window, cx| {
+        page.update(cx, |page, cx| {
+            page.group_searches["Route"]
+                .read(cx)
+                .focus_handle(cx)
+                .focus(window, cx);
+        })
+    });
+    cx.simulate_input("Node 001");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        page.update(cx, |page, cx| {
+            assert_eq!(
+                *page.rows,
+                [
+                    Row::Group(0),
+                    Row::Toolbar(0),
+                    Row::Nodes {
+                        group: 0,
+                        members: vec![1]
+                    }
+                ]
+            );
+            page.locate(0, window, cx);
+            assert!(
+                !page.group_filters.contains_key("Route")
+                    || page.group_filters["Route"].query.is_empty()
+            );
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| page.update(cx, |page, cx| page.test_all(0, cx)));
+    cx.run_until_parked();
+    let requests: Vec<_> = rx.try_iter().collect();
+    assert_eq!(requests.len(), 4, "batch testing has four in-flight slots");
+    cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            for request in &requests {
+                let crate::ui::UiRequest::Runtime(command) = &request.request else {
+                    panic!()
+                };
+                view.state
+                    .apply_response_envelope(crate::ui::UiResponseEnvelope::for_request(
+                        request,
+                        crate::ui::UiResponse::Runtime {
+                            request: command.clone(),
+                            result: Ok(crate::domain::RuntimeCommandResult {
+                                output: crate::domain::RuntimeCommandOutput::Delay(42),
+                                summary: String::new(),
+                            }),
+                        },
+                    ));
+            }
+            view.sync_proxies(cx);
+        })
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        rx.try_iter().count(),
+        4,
+        "completed batch refills only four slots"
+    );
+    cx.update(|_, cx| page.update(cx, |page, cx| page.toggle(0, cx)));
+    for _ in 0..4 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(16));
+        cx.run_until_parked();
+    }
+    cx.update(|_, cx| {
+        let page = page.read(cx);
+        assert!(page.animation["Route"] > 0. && page.animation["Route"] < 1.);
+        assert!(
+            page.rows.iter().any(|r| matches!(r, Row::Nodes { .. })),
+            "collapse keeps rows until animation ends"
+        );
+    });
+    for _ in 0..8 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(16));
+        cx.run_until_parked();
+    }
+    cx.update(|_, cx| assert_eq!(*page.read(cx).rows, [Row::Group(0)]));
 }

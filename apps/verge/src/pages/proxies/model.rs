@@ -9,12 +9,14 @@ pub const NODES_HEIGHT: f32 = metrics::PROXY_ITEM + metrics::ITEM_GAP;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Row {
     Group(usize),
+    Toolbar(usize),
     Nodes { group: usize, members: Vec<usize> },
 }
 impl Row {
     pub fn height(&self) -> f32 {
         match self {
             Self::Group(_) => GROUP_HEIGHT,
+            Self::Toolbar(_) => 44.,
             Self::Nodes { .. } => NODES_HEIGHT,
         }
     }
@@ -71,6 +73,7 @@ pub fn rows(
                 !filter_collapsed.contains(&group.name)
             })
         {
+            rows.push(Row::Toolbar(index));
             rows.extend(members.chunks(columns.max(1)).map(|chunk| Row::Nodes {
                 group: index,
                 members: chunk.to_vec(),
@@ -130,11 +133,11 @@ mod tests {
             [Row::Group(0)]
         );
         let global = rows(&s, Some(RunMode::Global), &closed, "", &HashSet::new(), 2);
-        assert_eq!(global.len(), 2);
+        assert_eq!(global.len(), 3);
         assert!(
             global
                 .iter()
-                .all(|r| matches!(r, Row::Nodes { group: 1, .. }))
+                .all(|r| matches!(r, Row::Nodes { group: 1, .. } | Row::Toolbar(1)))
         );
         assert!(rows(&s, Some(RunMode::Direct), &closed, "", &HashSet::new(), 2).is_empty());
     }
@@ -154,13 +157,14 @@ mod tests {
             filtered,
             [
                 Row::Group(0),
+                Row::Toolbar(0),
                 Row::Nodes {
                     group: 0,
                     members: vec![1]
                 }
             ]
         );
-        assert_eq!(selected_row(&s, &filtered, 0), Some(1));
+        assert_eq!(selected_row(&s, &filtered, 0), Some(2));
         assert_eq!(
             rows(&s, Some(RunMode::Rule), &expanded, "", &HashSet::new(), 2),
             [Row::Group(0)]
@@ -168,7 +172,7 @@ mod tests {
         expanded.insert("Route".into());
         assert_eq!(
             rows(&s, Some(RunMode::Rule), &expanded, "", &HashSet::new(), 1).len(),
-            3
+            4
         );
         assert!(
             rows(

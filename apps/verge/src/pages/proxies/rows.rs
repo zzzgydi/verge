@@ -123,9 +123,11 @@ pub fn render(row: &Row, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyEl
                 )
                 .into_any_element()
         }
+        Row::Toolbar(group) => super::tools::render(*group, page, cx),
         Row::Nodes { group, members } => {
             let mut row = h_flex()
                 .w_full()
+                .pl(px(28.))
                 .h(px(NODES_HEIGHT))
                 .pb(px(metrics::ITEM_GAP))
                 .gap(px(metrics::ITEM_GAP))
