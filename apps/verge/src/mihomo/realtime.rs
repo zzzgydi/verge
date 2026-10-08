@@ -1,4 +1,8 @@
-use super::{ControllerEndpoint, endpoint::ControllerStream};
+use super::{
+    ControllerEndpoint,
+    controller::{MihomoClient, TcpControllerTransport},
+    endpoint::ControllerStream,
+};
 use std::{
     collections::VecDeque,
     io,
@@ -20,12 +24,18 @@ use tungstenite::{
     http::{HeaderValue, header::AUTHORIZATION},
 };
 
-fn topic_path(topic: RealtimeTopic) -> &'static str {
+fn topic_path(topic: RealtimeTopic, log_level: &str) -> &'static str {
     match topic {
         RealtimeTopic::Traffic => "/traffic",
         RealtimeTopic::Memory => "/memory",
         RealtimeTopic::Connections => "/connections?interval=1000",
-        RealtimeTopic::Logs => "/logs?level=debug",
+        RealtimeTopic::Logs => match log_level {
+            "debug" => "/logs?level=debug",
+            "warning" => "/logs?level=warning",
+            "error" => "/logs?level=error",
+            "silent" => "/logs?level=silent",
+            _ => "/logs?level=info",
+        },
     }
 }
 
@@ -236,15 +246,35 @@ fn connect_stream(
     topic: RealtimeTopic,
     options: &RealtimeOptions,
 ) -> Result<tungstenite::WebSocket<ControllerStream>, AppError> {
+    // Read the effective configuration on every connection, including after a
+    // profile/settings reload. The logs endpoint has its own independent threshold.
+    let log_level = if topic == RealtimeTopic::Logs {
+        let transport = match controller {
+            ControllerEndpoint::Tcp(address) => {
+                TcpControllerTransport::new(*address, secret, options.connect_timeout)?
+            }
+            #[cfg(unix)]
+            ControllerEndpoint::Unix(path) => {
+                TcpControllerTransport::unix(path.clone(), options.connect_timeout)?
+            }
+        };
+        MihomoClient::new(transport).log_level()?
+    } else {
+        String::new()
+    };
     let stream = controller
         .connect(options.connect_timeout)
         .map_err(realtime_error)?;
     stream
         .set_timeout(options.read_timeout)
         .map_err(realtime_error)?;
-    let mut request = format!("ws://{}{}", controller.host(), topic_path(topic))
-        .into_client_request()
-        .map_err(realtime_error)?;
+    let mut request = format!(
+        "ws://{}{}",
+        controller.host(),
+        topic_path(topic, &log_level)
+    )
+    .into_client_request()
+    .map_err(realtime_error)?;
     request.headers_mut().insert(
         AUTHORIZATION,
         HeaderValue::from_str(&format!("Bearer {secret}")).map_err(realtime_error)?,
@@ -387,6 +417,66 @@ fn realtime_error(error: impl std::fmt::Display) -> AppError {
 mod tests {
     use super::*;
     use crate::domain::{LogEvent, MemoryEvent, TrafficEvent};
+
+    #[test]
+    fn reconnect_reads_current_log_level_before_subscribing() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = thread::spawn(move || {
+            for level in ["debug", "info", "silent"] {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    stream.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                }
+                assert!(
+                    String::from_utf8(request)
+                        .unwrap()
+                        .starts_with("GET /configs ")
+                );
+                let body = format!(r#"{{"log-level":"{level}"}}"#);
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .unwrap();
+                drop(stream);
+                let (stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                // The callback error type is defined by tungstenite.
+                #[allow(clippy::result_large_err)]
+                let _socket = tungstenite::accept_hdr(
+                    stream,
+                    |request: &tungstenite::handshake::server::Request, response| {
+                        assert_eq!(request.uri().to_string(), format!("/logs?level={level}"));
+                        Ok(response)
+                    },
+                )
+                .unwrap();
+            }
+        });
+        for _ in 0..3 {
+            let socket = connect_stream(
+                &address.into(),
+                "",
+                RealtimeTopic::Logs,
+                &RealtimeOptions::default(),
+            )
+            .unwrap();
+            drop(socket);
+        }
+        worker.join().unwrap();
+    }
 
     #[test]
     fn parses_all_realtime_payloads() {

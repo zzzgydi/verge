@@ -249,6 +249,7 @@ pub enum UiAction {
     Ai(crate::ai::AiCommand),
     Navigate(Page),
     RefreshHome,
+    RefreshLogSettings,
     RefreshProxies,
     RefreshRules,
     RefreshProfiles,
@@ -365,6 +366,9 @@ impl UiAction {
         match self {
             Self::Ai(command) => vec![UiRequest::Ai(command)],
             Self::Navigate(_) => Vec::new(),
+            Self::RefreshLogSettings => {
+                vec![UiRequest::Profile(AppCommand::GetCoreNetworkSettings)]
+            }
             Self::RefreshHome => vec![
                 UiRequest::Profile(AppCommand::GetRuntimeSettings),
                 UiRequest::Runtime(RuntimeCommand::GetMode),
@@ -805,6 +809,17 @@ impl UiState {
             .remove(request_key(&UiRequest::Profile(request.clone())));
         match result.output {
             AppCommandOutput::CoreNetworkSettings(settings) => {
+                let before = self.logs.len();
+                self.logs
+                    .retain(|log| log_meets_level(&log.level, &settings.log_level));
+                if before != self.logs.len() {
+                    self.log_bytes = self
+                        .logs
+                        .iter()
+                        .map(|log| log.level.len() + log.payload.len())
+                        .sum();
+                    self.log_revision += 1;
+                }
                 self.core_network_settings = Some(settings);
                 if matches!(request, AppCommand::UpdateCoreNetworkSettings { .. }) {
                     self.core_network_revision = self.core_network_revision.wrapping_add(1);
@@ -883,6 +898,13 @@ impl UiState {
                 self.connections = Some(Arc::new(connections))
             }
             RealtimeEvent::Log(mut log) => {
+                if self
+                    .core_network_settings
+                    .as_ref()
+                    .is_some_and(|settings| !log_meets_level(&log.level, &settings.log_level))
+                {
+                    return;
+                }
                 let limit = self
                     .application_settings
                     .as_ref()
@@ -1107,6 +1129,18 @@ fn request_key(request: &UiRequest) -> &'static str {
     }
 }
 
+fn log_meets_level(level: &str, minimum: &str) -> bool {
+    let rank = |level| match level {
+        "debug" => 0,
+        "info" => 1,
+        "warning" | "warn" => 2,
+        "error" => 3,
+        "silent" => 4,
+        _ => 1,
+    };
+    minimum != "silent" && rank(level) >= rank(minimum)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::domain::{
@@ -1114,6 +1148,51 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn log_settings_prune_old_debug_and_filter_late_events() {
+        let mut state = UiState::default();
+        for level in ["debug", "info", "warning", "error"] {
+            state.apply_realtime(RealtimeEvent::Log(LogEvent {
+                level: level.into(),
+                payload: "entry".into(),
+            }));
+        }
+        state.apply_profile(
+            &AppCommand::GetCoreNetworkSettings,
+            AppCommandResult {
+                output: AppCommandOutput::CoreNetworkSettings(Default::default()),
+                summary: String::new(),
+            },
+        );
+        assert_eq!(state.logs.len(), 3);
+        state.apply_realtime(RealtimeEvent::Log(LogEvent {
+            level: "debug".into(),
+            payload: "late".into(),
+        }));
+        assert_eq!(state.logs.len(), 3);
+        assert_eq!(
+            state.log_bytes,
+            state
+                .logs
+                .iter()
+                .map(|l| l.level.len() + l.payload.len())
+                .sum::<usize>()
+        );
+        let settings = crate::domain::CoreNetworkSettings {
+            log_level: "silent".into(),
+            ..Default::default()
+        };
+        state.apply_profile(
+            &AppCommand::GetCoreNetworkSettings,
+            AppCommandResult {
+                output: AppCommandOutput::CoreNetworkSettings(settings),
+                summary: String::new(),
+            },
+        );
+        assert!(state.logs.is_empty());
+        assert_eq!(state.log_bytes, 0);
+    }
 
     #[test]
     fn home_refresh_only_dispatches_typed_application_commands() {

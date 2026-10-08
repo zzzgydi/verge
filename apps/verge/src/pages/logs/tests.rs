@@ -13,7 +13,7 @@ use crate::{
 #[gpui_kit::test]
 fn multiline_logs_fit_and_longest_log_scrolls_both_axes(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
-    let (tx, _rx) = mpsc::sync_channel(32);
+    let (tx, rx) = mpsc::sync_channel(32);
     let holder = Rc::new(RefCell::new(None));
     let copy = holder.clone();
     let (_, cx) = cx.add_window_view(|window, cx| {
@@ -48,6 +48,10 @@ fn multiline_logs_fit_and_longest_log_scrolls_both_axes(cx: &mut TestAppContext)
         })
     });
     cx.run_until_parked();
+    assert!(matches!(
+        rx.try_recv().unwrap().request,
+        crate::ui::UiRequest::Profile(crate::domain::AppCommand::GetCoreNetworkSettings)
+    ));
     let row = cx.debug_bounds("log-row-1").unwrap();
     let text = cx.debug_bounds("log-text-1").unwrap();
     let next = cx.debug_bounds("log-row-2").unwrap();

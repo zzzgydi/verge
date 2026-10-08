@@ -698,11 +698,12 @@ impl MainView {
             Page::Proxies => self.dispatch(UiAction::RefreshProxies, cx),
             Page::Settings => self.dispatch(UiAction::RefreshSettings, cx),
             Page::Ai => self.dispatch(UiAction::Ai(crate::ai::AiCommand::GetState), cx),
-            _ => {}
+            Page::Logs => self.dispatch(UiAction::RefreshLogSettings, cx),
+            Page::Home | Page::Connections => {}
         }
     }
 
-    /// 刷新当前页；连接和日志走实时推送，没有对应的刷新请求。
+    /// 刷新当前页；连接与日志内容走实时推送，日志页另刷新最低日志等级。
     pub(crate) fn refresh_current_page(&mut self, cx: &mut Context<Self>) {
         match self.state.page {
             Page::Home => self.dispatch(UiAction::RefreshHome, cx),
@@ -711,7 +712,8 @@ impl MainView {
             Page::Rules => self.dispatch(UiAction::RefreshRules, cx),
             Page::Settings => self.dispatch(UiAction::RefreshSettings, cx),
             Page::Ai => self.dispatch(UiAction::Ai(crate::ai::AiCommand::GetState), cx),
-            Page::Connections | Page::Logs => {}
+            Page::Logs => self.dispatch(UiAction::RefreshLogSettings, cx),
+            Page::Connections => {}
         }
     }
 

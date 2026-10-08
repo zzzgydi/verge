@@ -176,6 +176,20 @@ impl<T: ControllerTransport> MihomoClient<T> {
         Ok(response.mode)
     }
 
+    pub fn log_level(&mut self) -> Result<String, AppError> {
+        #[derive(Deserialize)]
+        struct ConfigResponse {
+            #[serde(rename = "log-level")]
+            log_level: String,
+        }
+        let response: ConfigResponse = self.json("GET", "/configs", None)?;
+        if ["debug", "info", "warning", "error", "silent"].contains(&response.log_level.as_str()) {
+            Ok(response.log_level)
+        } else {
+            Err(controller_error("Mihomo returned an unknown log level"))
+        }
+    }
+
     pub fn set_mode(&mut self, mode: RunMode) -> Result<(), AppError> {
         let body = serde_json::to_string(&serde_json::json!({ "mode": mode }))
             .map_err(controller_data_error)?;
@@ -638,6 +652,23 @@ mod tests {
             status,
             body: body.into(),
         }
+    }
+
+    #[test]
+    fn effective_log_level_accepts_only_mihomo_levels() {
+        for level in ["debug", "info", "warning", "error", "silent"] {
+            let mut client = MihomoClient::new(FakeTransport::new([response(
+                200,
+                &format!(r#"{{"log-level":"{level}"}}"#),
+            )]));
+            assert_eq!(client.log_level().unwrap(), level);
+            assert_eq!(client.transport.requests[0].path, "/configs");
+        }
+        let mut client = MihomoClient::new(FakeTransport::new([response(
+            200,
+            r#"{"log-level":"trace"}"#,
+        )]));
+        assert!(client.log_level().is_err());
     }
 
     #[test]

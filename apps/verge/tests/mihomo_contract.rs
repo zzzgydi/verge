@@ -101,7 +101,7 @@ fn pinned_mihomo_process_and_rest_contract() {
         stop_timeout: Duration::from_secs(2),
         log_capacity: 100,
     };
-    let mut supervisor = CoreSupervisor::new(settings, config_path).unwrap();
+    let mut supervisor = CoreSupervisor::new(settings, config_path.clone()).unwrap();
     let invalid = directory.0.join("invalid.yaml");
     fs::write(&invalid, "- invalid-root\n").unwrap();
     assert_eq!(
@@ -182,6 +182,35 @@ fn pinned_mihomo_process_and_rest_contract() {
     traffic.stop();
     memory.stop();
     connections.stop();
+    logs.drain();
+    let yaml = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace("log-level: debug", "log-level: info");
+    fs::write(&config_path, yaml).unwrap();
+    supervisor.apply_config(&config_path).unwrap();
+    for _ in 0..50 {
+        if client.log_level().ok().as_deref() == Some("info") {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(client.log_level().unwrap(), "info");
+    thread::sleep(Duration::from_millis(250));
+    logs.drain();
+    let mut proxy = std::net::TcpStream::connect(("127.0.0.1", mixed_port)).unwrap();
+    proxy
+        .write_all(b"GET http://example.invalid/ HTTP/1.1\r\nHost: example.invalid\r\n\r\n")
+        .unwrap();
+    let event = wait_for_event("info-level logs after restart", &logs, |event| {
+        matches!(event, RealtimeEvent::Log(_))
+    });
+    assert!(matches!(event, RealtimeEvent::Log(log) if log.level != "debug"));
+    thread::sleep(Duration::from_millis(100));
+    assert!(
+        logs.drain()
+            .iter()
+            .all(|event| !matches!(event, RealtimeEvent::Log(log) if log.level == "debug"))
+    );
     logs.stop();
 
     supervisor.stop().unwrap();
