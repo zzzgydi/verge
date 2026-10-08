@@ -78,6 +78,15 @@ only enabled system proxy endpoints that still point to Verge; existing recovery
 are preserved. Applying network settings restarts the core and can interrupt active connections.
 Application settings exports include portable network overrides. External controller settings and credentials stay local. TUN remains a separate helper-managed runtime switch.
 
+TUN descriptor handoff is implemented: the helper leases an utun device to an
+unprivileged Mihomo process, and activates routes and temporary DNS only after
+the listener is verified. Closing the lease tears down its network state; a
+watchdog stops the core if the daemon exits. Real-system forwarding, DNS and
+recovery acceptance is still pending. TUN requires enabled Mihomo DNS and the
+default `fake-ip-range: 198.18.0.1/16`. Disable TUN before changing IPv6 routing.
+With IPv6 disabled, IPv6 traffic is outside TUN; this is not a kill switch.
+TUN starts off after an application restart.
+
 ## Requirements
 
 - macOS 15 or newer for development, following GPUI Kit’s current requirements.
@@ -277,12 +286,27 @@ A question shares bounded runtime and group summaries, rule types/outbounds,
 connection counts and error counts. Full configurations, connection destinations
 and log text are omitted. Inference runs on a background worker; Stop, closing
 the window, or disconnecting cancels it. Conversation text stays in daemon memory
-until a full quit. The implementation has been tested with local mock providers;
-real-provider validation is pending. Only read-only tools are available.
+until a full quit. Expand **Data sent and available actions** before sending to
+review the disclosure scope.
+
+The assistant can probe up to six nodes per turn, explain static domain rules,
+run fresh Mihomo configuration validation, and prepare node, mode or global Merge
+proposals. Merge proposals use an isolated copy of the existing compiler and
+scripts; supported changes are domain rules, IPv6, unified delay and log level.
+The app shows the changes, affected profiles and recovery behavior. Review and
+confirm a proposal to apply it. Confirmations expire after five minutes, are
+single-use and are rejected when the underlying state changes. Applied changes
+are verified; failed changes attempt recovery with an explicit outcome. A local
+audit retains at most 64 confirmation/result records. The model cannot confirm
+changes or operate system proxy, TUN, helpers or updates.
+
+Local mock-provider and pinned Mihomo tests cover the workflow. A real provider
+connection test has succeeded; a complete real-model diagnostic conversation and
+recommendation quality remain to be validated.
 
 ## Platform status
 
-The domain and application layers keep platform APIs behind adapters, but the shipping implementation is currently macOS-first. Windows, Linux, and Intel macOS packages are not available yet. The AI assistant supports streaming read-only diagnostics through an OpenAI-compatible Chat Completions endpoint. Recommendations, configuration previews, and approved write tools remain planned.
+The domain and application layers keep platform APIs behind adapters, but the shipping implementation is currently macOS-first. Windows, Linux, and Intel macOS packages are not available yet. The AI assistant supports streaming diagnostics and separately confirmed node, mode and Merge proposals through an OpenAI-compatible Chat Completions endpoint. TUN descriptor integration is implemented; real-system forwarding, DNS, recovery and daily-use validation remain pending.
 
 ## License
 
