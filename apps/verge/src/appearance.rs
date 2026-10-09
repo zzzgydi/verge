@@ -59,8 +59,68 @@ pub fn apply(mode: ThemeMode, cx: &mut App) {
     c.popover = c.tiles;
     c.popover_foreground = c.foreground;
     c.ring = color(0xa6a6b6, 0x707080);
+    // Semantic text must remain legible on neutral and tinted surfaces.
+    c.success = color(0x4ade80, 0x126b35);
+    c.warning = color(0xfacc15, 0x805000);
+    c.danger = color(0xfda4af, 0xb42332);
     c.chart_1 = c.foreground;
     c.chart_2 = c.muted_foreground;
     theme.tokens = theme.colors.into();
     Theme::sync_base(cx);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui_kit::component::ActiveTheme as _;
+    use gpui_kit::{Rgba, TestAppContext};
+
+    fn contrast(a: Hsla, b: Hsla) -> f32 {
+        let luminance = |color: Hsla| {
+            let c: Rgba = color.into();
+            let linear = |v: f32| {
+                if v <= 0.04045 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * linear(c.r) + 0.7152 * linear(c.g) + 0.0722 * linear(c.b)
+        };
+        let a = luminance(a);
+        let b = luminance(b);
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[gpui_kit::test]
+    fn semantic_text_has_aa_contrast_in_delay_states(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            for mode in [ThemeMode::Light, ThemeMode::Dark] {
+                Theme::change(mode, None, cx);
+                apply(mode, cx);
+                let t = cx.theme();
+                let neutral = if mode == ThemeMode::Dark {
+                    rgb(0xbabac3).into()
+                } else {
+                    rgb(0x50505a).into()
+                };
+                let opacities = if mode == ThemeMode::Dark {
+                    [0., 0.09, 0.13, 0.16]
+                } else {
+                    [0., 0.04, 0.06, 0.08]
+                };
+                for fg in [t.success, t.warning, t.danger, neutral] {
+                    for surface in [t.tiles, t.background, t.list_active, t.list_hover] {
+                        for alpha in opacities {
+                            let background =
+                                Rgba::from(surface).blend(Rgba::from(fg.opacity(alpha)));
+                            let ratio = contrast(fg, background.into());
+                            assert!(ratio >= 4.5, "{mode:?}: {fg:?} contrast {ratio}");
+                        }
+                    }
+                }
+            }
+        });
+    }
 }

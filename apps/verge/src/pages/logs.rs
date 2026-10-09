@@ -30,7 +30,7 @@ fn display_text(row: &crate::domain::LogEvent) -> String {
         .replace('\t', "    ")
 }
 
-/// 按级别着色：错误红、警告黄、调试灰、信息默认前景。
+/// Keep message text neutral; color only the severity marker.
 fn level_color(level: &str, cx: &Context<MainView>) -> Hsla {
     match level {
         "error" => cx.theme().danger,
@@ -57,11 +57,17 @@ fn render_log_row(
         .line_height(px(LOG_ROW_HEIGHT))
         .text_size(px(LOG_FONT_SIZE))
         .font_family(cx.theme().mono_font_family.clone())
-        .text_color(level_color(&row.level, cx))
+        .text_color(cx.theme().foreground)
         .child(
             div()
                 .debug_selector(move || format!("log-text-{source_index}"))
-                .child(display_text(row)),
+                .child(StyledText::new(display_text(row)).with_highlights([(
+                    0..row.level.len() + 2,
+                    HighlightStyle {
+                        color: Some(level_color(&row.level, cx)),
+                        ..Default::default()
+                    },
+                )])),
         )
         .into_any_element()
 }
