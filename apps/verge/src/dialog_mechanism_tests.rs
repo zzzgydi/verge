@@ -1175,3 +1175,78 @@ fn merge_preview_keeps_editor_draft_and_opens_a_result_dialog(cx: &mut TestAppCo
     });
     cx.run_until_parked();
 }
+
+#[gpui_kit::test]
+fn page_headers_stay_visible_and_scroll_offsets_are_isolated(cx: &mut TestAppContext) {
+    use crate::domain::{
+        ApplicationSettings, ApplicationSettingsSnapshot, Profile, ProfileId, ProfileSource,
+        UpdatePolicy,
+    };
+    use gpui_kit::{ScrollDelta, ScrollWheelEvent, TouchPhase, point, px, size};
+    let (_, holder, cx) = setup(cx);
+    let view = holder.borrow().clone().unwrap();
+    cx.simulate_resize(size(px(960.), px(640.)));
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state.application_settings = Some(ApplicationSettingsSnapshot {
+                settings: ApplicationSettings::default(),
+                data_directory: "/tmp/verge-test".into(),
+                app_version: None,
+            });
+            view.state.profiles = (0..12)
+                .map(|i| {
+                    Profile::new(
+                        ProfileId::parse(format!("p-{i}")).unwrap(),
+                        format!("Profile {i}"),
+                        ProfileSource::Local,
+                        UpdatePolicy::Manual,
+                        0,
+                        None,
+                    )
+                    .unwrap()
+                })
+                .collect();
+            view.state.page = crate::ui::Page::Profiles;
+            view.sync_form_inputs(window, cx);
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    let header = cx.debug_bounds("page-header").unwrap();
+    for page in [crate::ui::Page::Profiles, crate::ui::Page::Settings] {
+        cx.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                view.state.page = page;
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(800.), px(480.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-600.))),
+            modifiers: Default::default(),
+            touch_phase: TouchPhase::Moved,
+        });
+        cx.run_until_parked();
+        assert_eq!(cx.debug_bounds("page-header").unwrap(), header);
+    }
+    cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.settings_category = crate::pages::settings::SettingsCategory::Updates;
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    let core = cx
+        .debug_bounds("settings-category-settings.group.app_update")
+        .unwrap();
+    assert!(core.top() >= header.bottom());
+    cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.state.page = crate::ui::Page::Home;
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("home-profile-name").unwrap().top() >= header.bottom());
+}

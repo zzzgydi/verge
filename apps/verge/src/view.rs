@@ -12,7 +12,6 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{EditorState, InputEvent, InputState},
-    scroll::ScrollableElement as _,
     status_bar::StatusBar,
     table::TableState,
     theme::{Theme, ThemeMode},
@@ -867,37 +866,17 @@ impl Render for MainView {
             Page::Ai => pages::ai::render(self, cx),
         };
 
-        // 长数据页内部是虚拟化组件，自己滚动（带可见滚动条），不再包滚动容器。
-        let content_area: AnyElement = if matches!(
-            page,
-            Page::Connections | Page::Logs | Page::Proxies | Page::Rules | Page::Ai
-        ) || (page == Page::Settings
-            && self.settings_category == pages::settings::SettingsCategory::Ai)
-        {
-            v_flex()
-                .id("page-content")
-                .flex_1()
-                .min_h_0()
-                .overflow_hidden()
-                .p(px(crate::appearance::metrics::PAGE_INSET))
-                .when(crate::identity::AppChannel::current().is_dev(), |view| {
-                    view.child(div().text_xs().pb_2().child(tr(self.lang(), "dev.notice")))
-                })
-                .child(content)
-                .into_any_element()
-        } else {
-            v_flex()
-                .id("page-content")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scrollbar()
-                .p(px(crate::appearance::metrics::PAGE_INSET))
-                .when(crate::identity::AppChannel::current().is_dev(), |view| {
-                    view.child(div().text_xs().pb_2().child(tr(self.lang(), "dev.notice")))
-                })
-                .child(content)
-                .into_any_element()
-        };
+        // Each page owns its scrollable body; shared chrome never retains page offsets.
+        let content_area = v_flex()
+            .id("page-content")
+            .flex_1()
+            .min_h_0()
+            .overflow_hidden()
+            .p(px(crate::appearance::metrics::PAGE_INSET))
+            .when(crate::identity::AppChannel::current().is_dev(), |view| {
+                view.child(div().text_xs().pb_2().child(tr(self.lang(), "dev.notice")))
+            })
+            .child(content);
         let error = self.state.last_error.clone();
 
         v_flex()

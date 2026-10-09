@@ -666,6 +666,7 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("home.disabled", "已关闭", "Off"),
     ("home.total_upload", "内核累计上传", "Core upload total"),
     ("home.total_download", "内核累计下载", "Core download total"),
+    ("home.core_total", "内核累计", "Core total"),
     ("home.routes", "当前代理", "Current proxies"),
     ("home.rule_count", "条规则", "rules"),
     (

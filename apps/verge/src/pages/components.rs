@@ -1,44 +1,43 @@
 //! Value-like visual components; retained behavior belongs to feature entities.
 use crate::appearance::metrics;
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, StyledExt as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::*;
 
 #[derive(IntoElement)]
 pub struct Metric {
     label: SharedString,
     value: SharedString,
-    icon: IconName,
 }
 
 impl Metric {
-    pub fn new(
-        label: impl Into<SharedString>,
-        value: impl Into<SharedString>,
-        icon: IconName,
-    ) -> Self {
+    pub fn new(label: impl Into<SharedString>, value: impl Into<SharedString>) -> Self {
         Self {
             label: label.into(),
             value: value.into(),
-            icon,
         }
     }
 }
 
 impl RenderOnce for Metric {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        panel(cx)
+        v_flex()
             .flex_1()
             .min_w_0()
-            .gap_3()
+            .gap_1()
             .child(
-                gpui_kit::component::h_flex()
-                    .justify_between()
-                    .text_color(cx.theme().muted_foreground)
+                div()
                     .text_xs()
-                    .child(self.label)
-                    .child(Icon::new(self.icon).size_4()),
+                    .line_height(px(16.))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(self.label),
             )
-            .child(div().text_2xl().font_medium().child(self.value))
+            .child(
+                div()
+                    .text_xl()
+                    .line_height(px(24.))
+                    .font_medium()
+                    .child(self.value),
+            )
     }
 }
 

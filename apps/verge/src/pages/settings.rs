@@ -11,6 +11,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, NumberInput},
+    scroll::ScrollableElement as _,
     switch::Switch,
     v_flex,
 };
@@ -36,7 +37,7 @@ fn helper_label(lang: Lang, view: &MainView) -> String {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsCategory {
     General,
     Network,
@@ -155,6 +156,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                         .description(tr(lang, "settings.global_hotkey.desc"))
                         .child(
                             h_flex()
+                                .w_full()
                                 .gap_2()
                                 .child(Input::new(&view.global_hotkey))
                                 .child(
@@ -466,6 +468,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                         .description(tr(lang, "settings.system.settings_import.desc"))
                         .child(
                             h_flex()
+                                .w_full()
                                 .gap_2()
                                 .child(Input::new(&view.settings_import_path))
                                 .child(
@@ -507,6 +510,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         ),
     ];
     let tabs = h_flex()
+        .flex_shrink_0()
         .gap_2()
         .pb_2()
         .border_b_1()
@@ -556,12 +560,24 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
             }),
     };
     v_flex()
+        .flex_1()
+        .min_h_0()
         .gap_4()
         .child(super::components::PageHeader::new(tr(
             lang,
             "settings.title",
         )))
         .child(tabs)
-        .child(content)
+        .child(
+            v_flex()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scrollbar()
+                .id(SharedString::from(format!(
+                    "settings-body-{:?}",
+                    view.settings_category
+                )))
+                .child(content.w_full().max_w(px(920.))),
+        )
         .into_any_element()
 }

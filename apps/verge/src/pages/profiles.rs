@@ -17,6 +17,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     menu::{DropdownMenu as _, PopupMenuItem},
+    scroll::ScrollableElement as _,
     v_flex,
 };
 use gpui_kit::{prelude::FluentBuilder as _, *};
@@ -124,7 +125,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                     ))
                     .small()
                     .h(px(crate::appearance::metrics::COMPACT_CONTROL))
-                    .primary()
+                    .outline()
                     .disabled(selected)
                     .loading(view.is_pending(&["profile_write"]))
                     .on_click(cx.listener({
@@ -343,6 +344,8 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         );
     }
     v_flex()
+        .flex_1()
+        .min_h_0()
         .gap_4()
         .child(
             PageHeader::new(tr(lang, "profiles.title")).child(
@@ -352,6 +355,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                         Button::new("refresh-profiles")
                             .icon(gpui_kit::assets::IconName::RefreshCw)
                             .tooltip(tr(lang, "common.refresh"))
+                            .accessibility_label(tr(lang, "common.refresh"))
                             .small()
                             .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                             .ghost()
@@ -396,6 +400,13 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                     ),
             ),
         )
-        .child(list)
+        .child(
+            v_flex()
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scrollbar()
+                .id("profiles-body")
+                .child(list),
+        )
         .into_any_element()
 }

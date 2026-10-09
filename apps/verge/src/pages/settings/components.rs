@@ -57,7 +57,14 @@ impl RenderOnce for SettingRow {
                             .child(text)
                     })),
             )
-            .child(div().w(px(310.)).flex_shrink_0().children(self.children))
+            .child(
+                h_flex()
+                    .w(px(310.))
+                    .flex_shrink_0()
+                    .justify_end()
+                    .gap_2()
+                    .children(self.children),
+            )
     }
 }
 
@@ -90,11 +97,12 @@ impl ParentElement for SettingsSection {
     }
 }
 impl RenderOnce for SettingsSection {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        super::super::components::panel(cx)
+    fn render(self, _: &mut Window, _cx: &mut App) -> impl IntoElement {
+        v_flex()
+            .w_full()
             .id(self.id.unwrap_or("settings-section".into()))
             .gap_1()
-            .px_4()
+            .px_0()
             .py_2()
             .child(
                 div()
