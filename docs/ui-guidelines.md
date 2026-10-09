@@ -37,13 +37,24 @@ GPUI spacing utilities match this scale; the application body explicitly uses
   text explains consequences or non-obvious constraints.
 - Use `panel` for grouped content. Avoid nested decorative cards and repeated
   titles. Prefer alignment, typography and restrained borders to extra padding.
-- Overview uses a connection panel and a telemetry column; quick links are compact
-  actions. Profiles use 12px content padding and an 8px action footer. Settings
-  use 16px section headings, 12px row padding and aligned controls.
+- Keep page headers and primary actions outside the scrollable body. Give each
+  page and settings category an explicit, distinct scroll-container ID.
+- Overview groups the active profile, core state, system proxy, mode and a compact
+  network status row in one full-width panel. Below it, current proxies and
+  telemetry share an equal-width, equal-height grid row with aligned headings and
+  metric footers. Keep cumulative traffic under its corresponding rate, and use
+  two continuous traffic paths scaled to the actual plot width. Rules/providers
+  and memory/connections use the same compact metric layout. Up to four current
+  proxy groups fit at 960×640; a single route or empty state centers in its space.
+  Profiles use 12px content padding and an 8px action footer. Settings use a
+  bounded 920px form with right-aligned controls and separators instead of nested
+  cards. Input-and-action groups must fill their control column.
 - Proxy groups and nodes are 64px tall, followed by an 8px gap. A node has two
   lines (name, protocol/capabilities), a centered selection marker, and a 28px
   delay action. Use 12px horizontal padding and a 4px gap between text lines.
   Expanded groups have a 44px toolbar and a 28px left inset shared with node rows.
+  Global mode has one persistent search/test/sort toolbar and no group inset.
+  Use two columns only when the actual content area is at least 780px wide.
   Expansion and collapse preserve virtualized rows until the animation finishes.
 - Rules use 36px rows (56px provider cards plus 8px spacing); connections retain compact table rows;
   logs use 24px physical lines, preserving embedded line breaks. The log viewport
@@ -59,6 +70,14 @@ GPUI spacing utilities match this scale; the application body explicitly uses
 - Use semantic theme colors in both light and dark modes; neutral surfaces and
   one restrained selection accent. A selected node uses a filled check marker,
   a contrasting border and a tinted background, never color alone.
+- Truncated proxy names and rule fields expose full-text tooltips and copying.
+  Proxy groups support keyboard expansion. Nodes expose selection semantics,
+  visible focus, arrow navigation across virtualized rows, Enter/Space selection,
+  and Command-C copying. Copy and delay actions must not switch the node.
+- Use compact icon refresh actions with tooltips and accessible labels.
+- Semantic text meets 4.5:1 contrast on normal, selected, hovered and pressed
+  surfaces in both themes. Logs color the severity marker, keeping payload text
+  neutral and preserving measured physical lines.
 - Hover must preserve selection. Delay label and semantic color update in the
   same render, including while hovered or pressed. Pending and failed tests have
   explicit labels; retry stays on the same action.
