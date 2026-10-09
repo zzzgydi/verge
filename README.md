@@ -291,8 +291,12 @@ clearing the key. Loopback HTTP endpoints can be used for local models. Settings
 exports exclude AI credentials.
 
 A question shares bounded runtime and group summaries, rule types/outbounds,
-connection counts and error counts. Full configurations, connection destinations
-and log text are omitted. Inference runs on a background worker; Stop, closing
+connection counts and error counts. On-demand tools can read up to 20 active
+connections (application, destination, matched rule and outbound chain), query
+A/AAAA/CNAME through the core resolver, inspect DNS settings and rule-provider
+summaries, read up to 20 sanitized recent logs, and check TUN/helper/lease state.
+Full configurations and credentials are excluded; logs omit credential-bearing
+lines, URLs and home paths. Inference runs on a background worker; Stop, closing
 the window, or disconnecting cancels it. Conversation text stays in daemon memory
 until a full quit. Use the information button in the chat header to review the
 data sent and available actions.
@@ -306,7 +310,19 @@ confirm a proposal to apply it. Confirmations expire after five minutes, are
 single-use and are rejected when the underlying state changes. Applied changes
 are verified; failed changes attempt recovery with an explicit outcome. A local
 audit retains at most 64 confirmation/result records. The model cannot confirm
-changes or operate system proxy, TUN, helpers or updates.
+changes. System proxy and TUN toggles also require confirmation and reuse the
+app's normal network controls. The assistant can also inspect and propose bypass
+additions/removals, restore default bypass entries, toggle PAC/default bypass/guard,
+and change the guard interval. These preferences use the same saved settings as
+the Settings page. When Verge owns the proxy, changes apply immediately; otherwise
+they are saved without enabling it. Bypass applies to manual proxy; PAC still uses
+the saved script and TUN rules are unchanged. The model cannot edit the PAC script.
+System proxy toggles persist startup intent; TUN
+is a runtime toggle. DNS proposals validate every profile and support DNS enable,
+IPv6, enhanced mode, nameserver and fallback changes. They preserve other fields
+and reject unrelated effects; turn TUN off before changing DNS. Helpers and
+updates cannot be operated by the model. Rule-set contents are not expanded;
+observed connections show past routing decisions, not predictions for new traffic.
 
 Local mock-provider and pinned Mihomo tests cover the workflow. A real provider
 connection test has succeeded; a complete real-model diagnostic conversation and
