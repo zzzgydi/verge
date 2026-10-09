@@ -31,7 +31,15 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> Div {
                             .text_sm()
                             .font_semibold()
                             .whitespace_normal()
-                            .child(format!("{} · {}", tr(lang, "ai.proposal"), proposal.target)),
+                            .child(format!(
+                                "{} · {}",
+                                tr(lang, "ai.proposal"),
+                                if proposal.kind == "proxy_settings" {
+                                    tr(lang, "ai.proxy_settings_title")
+                                } else {
+                                    &proposal.target
+                                }
+                            )),
                     ),
             )
             .child(
@@ -58,7 +66,13 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> Div {
         for change in &proposal.changes {
             let label = match change.path.as_str() {
                 "Added Merge operations" => tr(lang, "ai.merge_operations"),
-                "scope" => tr(lang, "ai.scope"),
+                "scope" => tr(lang, "ai.change_scope"),
+                "proxy.bypass" => tr(lang, "ai.proxy_bypass"),
+                "proxy.effective_bypass" => tr(lang, "ai.proxy_effective_bypass"),
+                "proxy.use_default_bypass" => tr(lang, "ai.proxy_defaults"),
+                "proxy.pac_mode" => tr(lang, "ai.proxy_pac"),
+                "proxy.guard_enabled" => tr(lang, "ai.proxy_guard"),
+                "proxy.guard_interval_secs" => tr(lang, "ai.proxy_guard_interval"),
                 _ => &change.path,
             };
             let mut change_view = v_flex()
@@ -79,7 +93,7 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> Div {
                         .text_sm()
                         .whitespace_normal()
                         .text_color(cx.theme().muted_foreground)
-                        .child(change.before.clone()),
+                        .child(change_text(lang, &change.path, &change.before)),
                 );
             }
             change_view = change_view.child(
@@ -93,7 +107,7 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> Div {
                             .min_w_0()
                             .text_sm()
                             .whitespace_normal()
-                            .child(change.after.clone()),
+                            .child(change_text(lang, &change.path, &change.after)),
                     ),
             );
             card = card.child(change_view);
@@ -105,10 +119,13 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> Div {
                 .text_color(cx.theme().muted_foreground)
                 .child(tr(
                     lang,
-                    if proposal.kind == "merge" {
-                        "ai.merge_impact"
-                    } else {
-                        "ai.runtime_impact"
+                    match proposal.kind.as_str() {
+                        "merge" => "ai.merge_impact",
+                        "dns" => "ai.dns_impact",
+                        "tun" => "ai.tun_impact",
+                        "system_proxy" => "ai.proxy_impact",
+                        "proxy_settings" => "ai.proxy_settings_impact",
+                        _ => "ai.runtime_impact",
                     },
                 )),
         );
@@ -215,4 +232,20 @@ fn result_text(lang: Lang, result: &str) -> String {
         text.push_str(tr(lang, "ai.audit_failed"));
     }
     text
+}
+
+fn change_text(lang: crate::i18n::Lang, path: &str, value: &str) -> String {
+    let key = match (path, value) {
+        ("proxy.use_default_bypass" | "proxy.pac_mode" | "proxy.guard_enabled", "true") => "ai.yes",
+        ("proxy.use_default_bypass" | "proxy.pac_mode" | "proxy.guard_enabled", "false") => "ai.no",
+        ("proxy.bypass", "") => "ai.proxy_no_custom",
+        ("scope", "Apply to the currently managed system proxy and save for future use") => {
+            "ai.proxy_apply_now"
+        }
+        ("scope", "Save preferences for the next enable; leave system proxy disabled") => {
+            "ai.proxy_save_only"
+        }
+        _ => return value.to_owned(),
+    };
+    tr(lang, key).into()
 }

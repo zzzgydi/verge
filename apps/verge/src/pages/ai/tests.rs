@@ -55,14 +55,14 @@ fn proposal_requires_two_clicks_and_sends_only_bound_confirmation(cx: &mut TestA
                 id: "proposal-1".into(),
                 run_id: 1,
                 digest: "bound-digest".into(),
-                kind: "mode".into(),
-                target: "Direct".into(),
+                kind: "proxy_settings".into(),
+                target: "System proxy settings".into(),
                 expires_at: crate::ai::proposals::now() + 300,
                 status: "pending".into(),
                 changes: vec![crate::ai::proposals::Change {
-                    path: "mode".into(),
-                    before: "Rule".into(),
-                    after: "Direct".into(),
+                    path: "proxy.bypass".into(),
+                    before: "localhost".into(),
+                    after: "localhost\n*.example.com".into(),
                 }],
                 evidence_id: "R1-E8".into(),
                 result: None,
@@ -89,6 +89,22 @@ fn proposal_requires_two_clicks_and_sends_only_bound_confirmation(cx: &mut TestA
     assert!(
         matches!(rx.try_recv().unwrap().request,UiRequest::Ai(AiCommand::Approve {id,digest}) if id=="proposal-1" && digest=="bound-digest")
     );
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            let response = UiResponse::Ai {
+                operation: AiOperation::Approve,
+                result: Ok(view.state.ai.clone()),
+            };
+            view.ai_response(&response, window, cx);
+        })
+    });
+    let refresh = rx.try_iter().map(|e| e.request).collect::<Vec<_>>();
+    assert!(refresh.contains(&UiRequest::Profile(
+        crate::domain::AppCommand::GetApplicationSettings
+    )));
+    assert!(refresh.contains(&UiRequest::SystemProxy(
+        crate::domain::SystemProxyCommand::GetState
+    )));
 }
 
 #[gpui_kit::test]

@@ -24,6 +24,75 @@ impl Lang {
 
 /// 文案表：`(key, zh-CN, en)`。key 按页面/用途命名。
 const ENTRIES: &[(&str, &str, &str)] = &[
+    (
+        "ai.proxy_settings_title",
+        "系统代理设置",
+        "System proxy settings",
+    ),
+    ("ai.proxy_bypass", "自定义绕过列表", "Custom bypass"),
+    (
+        "ai.proxy_effective_bypass",
+        "最终绕过列表",
+        "Effective bypass",
+    ),
+    (
+        "ai.proxy_defaults",
+        "包含默认绕过列表",
+        "Include default bypass",
+    ),
+    ("ai.proxy_pac", "PAC 模式", "PAC mode"),
+    ("ai.proxy_guard", "代理守卫", "Proxy guard"),
+    (
+        "ai.proxy_guard_interval",
+        "守卫检查间隔（秒）",
+        "Guard interval (seconds)",
+    ),
+    ("ai.proxy_no_custom", "无自定义条目", "No custom entries"),
+    (
+        "ai.proxy_apply_now",
+        "立即应用到当前系统代理，并保存设置",
+        "Apply to the current system proxy and save preferences",
+    ),
+    (
+        "ai.proxy_save_only",
+        "仅保存，下一次开启系统代理时生效",
+        "Save for the next enable; keep the system proxy off",
+    ),
+    (
+        "ai.proxy_settings_impact",
+        "bypass 只作用于手动系统代理；PAC 使用已保存的脚本，TUN 规则不变。保持代理开关状态，失败时尝试恢复原设置。",
+        "Bypass applies to manual system proxy. PAC uses the saved script; TUN rules stay unchanged. The proxy enable state is preserved; failures attempt to restore prior settings.",
+    ),
+    ("ai.change_scope", "影响范围", "Affected scope"),
+    (
+        "ai.dns_impact",
+        "保存全局 DNS 配置并重载内核，可能短暂中断解析。失败时尝试恢复原配置。",
+        "Save global DNS settings and reload the core. Resolution may pause briefly; failures attempt to restore the previous configuration.",
+    ),
+    (
+        "ai.tun_impact",
+        "更改当前 TUN 路由，可能短暂中断连接。失败时尝试恢复；此操作不会安装系统服务。",
+        "Change current TUN routing; connections may briefly interrupt. Failures attempt recovery. This does not install the helper.",
+    ),
+    (
+        "ai.proxy_impact",
+        "使用已保存的系统代理设置，并记住下次启动时的开关状态。关闭时恢复原网络服务设置；恢复失败时保留恢复记录。",
+        "Use saved proxy settings and remember startup intent. Disabling restores prior network service settings; failed recovery retains its recovery record.",
+    ),
+    ("ai.source_dns", "DNS 解析", "DNS resolution"),
+    ("ai.source_tun", "TUN 状态", "TUN status"),
+    ("ai.source_logs", "近期日志", "Recent logs"),
+    ("ai.dns_status_code", "状态码", "Status"),
+    (
+        "ai.no_matching_logs",
+        "近期缓冲中没有匹配的日志",
+        "No matching logs in the recent buffer",
+    ),
+    ("ai.helper", "系统服务", "Helper"),
+    ("ai.helper_ready", "就绪", "Ready"),
+    ("ai.helper_missing", "未安装", "Not installed"),
+    ("ai.helper_incompatible", "需修复", "Needs repair"),
+    ("ai.tun_verified", "设备已核验", "Device verified"),
     ("ai.close_details", "关闭说明", "Close details"),
     ("ai.starter_network_title", "排查网络", "Network check"),
     ("ai.starter_node_title", "检查节点", "Check nodes"),
@@ -261,8 +330,8 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ),
     (
         "ai.data_scope_detail",
-        "模型会收到问题和对话、内核状态、代理组与节点名称及延迟、规则类型与出站、连接总数与流量、错误数量和配置校验结果。域名解释与 Merge 建议包含指定域名及修改内容。完整配置、订阅地址、密钥、连接目标和日志正文不会发送。测速每轮最多 6 个节点，访问固定 HTTPS 探测地址；选节点、改模式和应用 Merge 均需你确认。",
-        "Your model receives the question and conversation, core state, group/node names and delays, rule types and outbound names, connection totals and traffic, error counts and validation results. Domain explanations and Merge proposals include the requested domain and changes. Full configurations, subscription URLs, credentials, connection destinations and log text are omitted. Up to 6 nodes per turn use a fixed HTTPS probe. Node, mode and Merge changes require your confirmation.",
+        "模型会收到对话和运行概况。排查时可按需读取 DNS 结果、应用与域名连接、命中规则和出站链、过滤后的近期日志，以及 TUN、系统服务和 bypass 等系统代理设置。完整配置和凭据不会发送。日志最多读取 20 条，连接最多 20 条，节点测速每轮最多 6 个。节点、模式、Merge、DNS、系统代理和 TUN 修改均需你确认。",
+        "The model receives your conversation and runtime summaries. On demand, it can read DNS results, app/domain connections with matched rules and outbound chains, sanitized recent logs, TUN/helper state, and saved bypass/PAC/guard preferences. Full configurations and credentials are excluded. Limits: 20 logs, 20 connections, 6 node probes per turn. Node, mode, Merge, DNS, system proxy and TUN changes require your confirmation.",
     ),
     (
         "ai.readonly",
@@ -459,11 +528,6 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("ai.save", "保存设置", "Save settings"),
     ("ai.test", "测试已保存的连接", "Test saved provider"),
     ("ai.clear_key", "清除密钥", "Clear key"),
-    (
-        "ai.scope",
-        "发送问题后，模型可读取运行状态、代理组与选中节点、规则类型和出站、连接数量及错误数量。不发送完整配置、连接目标、日志正文或订阅地址；本轮只能诊断，不能修改设置。",
-        "Sending shares runtime status, groups and selected nodes, rule types and outbounds, connection counts and error counts. Full configs, destinations, log text and subscription URLs are omitted. Read-only diagnostics.",
-    ),
     (
         "ai.empty",
         "配置模型后，可以问：为什么现在无法联网？",

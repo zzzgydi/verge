@@ -189,7 +189,103 @@ fn summary(e: &Evidence, lang: Lang) -> String {
             value(d, "proposed")
         ),
         "suggest_mode" => format!("{} → {}", value(d, "previous"), value(d, "proposed")),
-        "preview_merge" => tr(lang, "ai.validated").into(),
+        "query_dns" => format!(
+            "{} · {} · {}: {} · {} ms\n{}",
+            value(d, "host"),
+            value(d, "record_type"),
+            tr(lang, "ai.dns_status_code"),
+            value(d, "status"),
+            value(d, "elapsed_ms"),
+            d["answers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|a| format!("{} → {}", value(a, "name"), value(a, "data")))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+        "dns_status" => format!(
+            "DNS: {} · {}\n{}",
+            yes(lang, &d["dns"]["enable"]),
+            value(&d["dns"], "enhanced-mode"),
+            d["dns"]["nameserver"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+        "inspect_connections" => format!(
+            "{}: {} / {}\n{}",
+            tr(lang, "ai.connections"),
+            value(d, "matched"),
+            value(d, "total"),
+            d["connections"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|c| format!(
+                    "{} · {} · {} → {}",
+                    value(c, "process"),
+                    value(c, "host"),
+                    value(c, "rule"),
+                    c["chains"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" → ")
+                ))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+        "read_logs" => d["entries"]
+            .as_array()
+            .filter(|e| !e.is_empty())
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|e| format!("[{}] {}", value(e, "level"), value(e, "message")))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_else(|| tr(lang, "ai.no_matching_logs").into()),
+        "tun_status" => format!(
+            "TUN: {} · {}: {} · {}: {}",
+            yes(lang, &d["network"]["tun_enabled"]),
+            tr(lang, "ai.helper"),
+            tr(
+                lang,
+                match d["helper"].as_str() {
+                    Some("ready") => "ai.helper_ready",
+                    Some("not_installed") => "ai.helper_missing",
+                    _ => "ai.helper_incompatible",
+                }
+            ),
+            tr(lang, "ai.tun_verified"),
+            yes(lang, &d["core_device_verified"])
+        ),
+        "system_proxy_settings" => format!(
+            "{}: {} · {}: {} · {} s\n{}: {}",
+            tr(lang, "ai.proxy_pac"),
+            yes(lang, &d["pac_mode"]),
+            tr(lang, "ai.proxy_guard"),
+            yes(lang, &d["guard_enabled"]),
+            value(d, "guard_interval_secs"),
+            tr(lang, "ai.proxy_effective_bypass"),
+            d["effective_bypass"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| entry.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        "preview_system_proxy_settings" => tr(lang, "ai.awaiting_approval").into(),
+        "suggest_tun" | "suggest_system_proxy" => tr(lang, "ai.awaiting_approval").into(),
+        "preview_merge" | "preview_dns" => tr(lang, "ai.validated").into(),
         _ => tr(lang, "ai.evidence_unavailable").into(),
     }
 }
@@ -207,7 +303,13 @@ pub(super) fn evidence_cards(evidence: &[Evidence], lang: Lang, cx: &App) -> Div
             "runtime_status" => "ai.source_runtime",
             "system_proxy_status" => "ai.source_proxy",
             "proxy_summary" => "ai.source_nodes",
-            "connection_summary" => "ai.source_connections",
+            "connection_summary" | "inspect_connections" => "ai.source_connections",
+            "query_dns" | "dns_status" => "ai.source_dns",
+            "tun_status" | "suggest_tun" => "ai.source_tun",
+            "suggest_system_proxy" | "system_proxy_settings" | "preview_system_proxy_settings" => {
+                "ai.source_proxy"
+            }
+            "read_logs" => "ai.source_logs",
             "rule_summary" => "ai.source_rules",
             "recent_errors" => "ai.source_errors",
             _ => "ai.source_config",

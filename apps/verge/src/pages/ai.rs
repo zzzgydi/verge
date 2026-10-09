@@ -216,6 +216,16 @@ impl MainView {
         let UiResponse::Ai { operation, result } = response else {
             return;
         };
+        if *operation == AiOperation::Approve
+            && self
+                .state
+                .ai
+                .proposals
+                .iter()
+                .any(|proposal| proposal.kind == "proxy_settings" && proposal.status == "pending")
+        {
+            self.dispatch(crate::ui::UiAction::RefreshSettings, cx);
+        }
         match result {
             Ok(snapshot) => {
                 if matches!(
