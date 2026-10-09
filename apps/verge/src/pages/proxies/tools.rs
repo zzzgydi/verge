@@ -7,7 +7,7 @@ use gpui_kit::component::{
     input::{Input, InputEvent, InputState},
     menu::{DropdownMenu as _, PopupMenuItem},
 };
-use gpui_kit::*;
+use gpui_kit::{prelude::FluentBuilder as _, *};
 
 #[derive(Default)]
 pub(super) struct GroupFilter {
@@ -155,6 +155,7 @@ impl ProxyPage {
 }
 
 pub(super) fn render(group: usize, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyElement {
+    let global = page.mode == Some(crate::domain::RunMode::Global);
     let name = page.snapshot.groups[group].name.clone();
     let lang = page.lang;
     let busy = page.snapshot.groups[group]
@@ -169,7 +170,7 @@ pub(super) fn render(group: usize, page: &ProxyPage, cx: &mut Context<ProxyPage>
     h_flex()
         .h(px(44.))
         .pb_2()
-        .pl(px(28.))
+        .when(!global, |row| row.pl(px(28.)))
         .gap_2()
         .debug_selector(move || format!("proxy-tools-{group}"))
         .child(
@@ -190,9 +191,13 @@ pub(super) fn render(group: usize, page: &ProxyPage, cx: &mut Context<ProxyPage>
         )
         .child(
             div().flex_1().min_w(px(90.)).child(
-                Input::new(&page.group_searches[&name])
-                    .small()
-                    .cleanable(true),
+                Input::new(if global {
+                    &page.search
+                } else {
+                    &page.group_searches[&name]
+                })
+                .small()
+                .cleanable(true),
             ),
         )
         .child(

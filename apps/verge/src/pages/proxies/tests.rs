@@ -209,7 +209,7 @@ fn group_filter_locate_selection_and_global_layout(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.update(|_, cx| {
         assert_eq!(page.read(cx).columns, 1);
-        assert_eq!(page.read(cx).rows.len(), 161);
+        assert_eq!(page.read(cx).rows.len(), 160);
     });
     let node = cx.debug_bounds("proxy-card-1-0").unwrap();
     cx.simulate_click(
@@ -355,4 +355,105 @@ fn group_animation_filters_and_batch_tests_keep_retained_state(cx: &mut TestAppC
         cx.run_until_parked();
     }
     cx.update(|_, cx| assert_eq!(*page.read(cx).rows, [Row::Group(0)]));
+}
+
+#[gpui_kit::test]
+fn keyboard_selects_virtualized_nodes_and_copy_does_not_switch(cx: &mut TestAppContext) {
+    use gpui_kit::Role;
+    use gpui_kit::test::TestWindowExt as _;
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let (tx, rx) = mpsc::sync_channel(32);
+    let holder = Rc::new(RefCell::new(None));
+    let copy = holder.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| MainView::new(tx, window, cx));
+        *copy.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = holder.borrow().clone().unwrap();
+    cx.simulate_resize(size(px(960.), px(640.)));
+    cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.state.page = Page::Proxies;
+            view.state.mode = Some(RunMode::Global);
+            view.state.proxies = Arc::new(snapshot());
+            view.sync_proxies(cx);
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    let page = cx.update(|window, cx| {
+        let mut reached = false;
+        for _ in 0..64 {
+            window.focus_next(cx);
+            window.render_frame(cx);
+            if window.find("proxy-card-1-0").focused() == Some(true) {
+                reached = true;
+                break;
+            }
+        }
+        assert!(reached, "Tab reaches the proxy selection control");
+        assert_eq!(
+            window.find("proxy-card-1-0").role(),
+            Some(Role::RadioButton)
+        );
+        assert_eq!(window.find("proxy-card-1-2").selected(), Some(true));
+        assert_eq!(
+            window.find("proxy-card-1-0").label(),
+            Some("GLOBAL: Node 000")
+        );
+        let page = view.read(cx).proxy_page.clone();
+        page.read(cx).node_focus.clone().focus(window, cx);
+        page
+    });
+    cx.run_until_parked();
+    for _ in 0..14 {
+        cx.simulate_keystrokes("down");
+        cx.run_until_parked();
+    }
+    cx.update(|window, cx| {
+        assert_eq!(page.read(cx).cursor, Some((1, 14)));
+        assert_eq!(window.find("proxy-card-1-14").focused(), Some(true));
+    });
+    assert!(cx.debug_bounds("proxy-card-1-14").is_some());
+    assert!(
+        rx.try_recv().is_err(),
+        "arrows move focus without switching nodes"
+    );
+    cx.simulate_keystrokes("cmd-c");
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some("Node 014")
+        )
+    });
+    assert!(rx.try_recv().is_err());
+    cx.simulate_event(gpui_kit::KeyDownEvent {
+        keystroke: gpui_kit::Keystroke::parse("enter").unwrap(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(gpui_kit::KeyUpEvent {
+        keystroke: gpui_kit::Keystroke::parse("enter").unwrap(),
+    });
+    cx.run_until_parked();
+    assert!(
+        matches!(rx.try_recv().unwrap().request, UiRequest::Runtime(RuntimeCommand::SelectProxy {group,proxy}) if group=="GLOBAL" && proxy=="Node 014")
+    );
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    cx.simulate_event(gpui_kit::KeyDownEvent {
+        keystroke: gpui_kit::Keystroke::parse("space").unwrap(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(gpui_kit::KeyUpEvent {
+        keystroke: gpui_kit::Keystroke::parse("space").unwrap(),
+    });
+    cx.run_until_parked();
+    assert!(rx.try_iter().any(|r| matches!(r.request, UiRequest::Runtime(RuntimeCommand::SelectProxy {proxy,..}) if proxy=="Node 015")));
 }

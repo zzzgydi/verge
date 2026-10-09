@@ -6,7 +6,10 @@ use crate::{appearance::metrics, i18n::tr, ui::UiAction};
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
-    h_flex, v_flex,
+    h_flex,
+    menu::{ContextMenuExt as _, PopupMenuItem},
+    tooltip::Tooltip,
+    v_flex,
 };
 use gpui_kit::{prelude::FluentBuilder as _, *};
 
@@ -38,8 +41,10 @@ pub fn render(row: &Row, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyEl
                 .h(px(GROUP_HEIGHT))
                 .pb(px(metrics::ITEM_GAP))
                 .child(
-                    h_flex()
-                        .id(SharedString::from(label.clone()))
+                    gpui_kit::base::Button::new(SharedString::from(label.clone()))
+                        .accessibility_label(group.name.clone())
+                        .aria_expanded(expanded)
+                        .focus_visible(|s| s.border_color(cx.theme().ring))
                         .debug_selector(move || label.clone())
                         .size_full()
                         .px(px(metrics::ITEM_INSET))
@@ -127,7 +132,9 @@ pub fn render(row: &Row, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyEl
         Row::Nodes { group, members } => {
             let mut row = h_flex()
                 .w_full()
-                .pl(px(28.))
+                .when(page.mode != Some(crate::domain::RunMode::Global), |row| {
+                    row.pl(px(28.))
+                })
                 .h(px(NODES_HEIGHT))
                 .pb(px(metrics::ITEM_GAP))
                 .gap(px(metrics::ITEM_GAP))
@@ -190,8 +197,39 @@ fn card(group: usize, member: usize, page: &ProxyPage, cx: &mut Context<ProxyPag
             );
         }
     }
-    h_flex()
-        .id(SharedString::from(id.clone()))
+    let full_name = proxy.clone();
+    let copy_name = proxy.clone();
+    let keyboard_name = proxy.clone();
+    let copy_label = tr(page.lang, "common.copy");
+    let cursor = page.keyboard_cursor();
+    gpui_kit::base::Button::new(SharedString::from(id.clone()))
+        .role(Role::RadioButton)
+        .accessibility_label(format!("{}: {}", entry.name, proxy))
+        .aria_selected(selected)
+        .aria_toggled(if selected {
+            accesskit::Toggled::True
+        } else {
+            accesskit::Toggled::False
+        })
+        .disabled(!selectable)
+        .tab_stop(cursor == Some((group, member)))
+        .when(cursor == Some((group, member)), |button| {
+            button.track_focus(&page.node_focus)
+        })
+        .focus_visible(|s| s.border_2().border_color(cx.theme().ring))
+        .tooltip(move |window, cx| Tooltip::new(full_name.clone()).build(window, cx))
+        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+            if event.keystroke.modifiers.platform && event.keystroke.key == "c" {
+                cx.write_to_clipboard(ClipboardItem::new_string(keyboard_name.clone()));
+                cx.stop_propagation();
+            } else if matches!(
+                event.keystroke.key.as_str(),
+                "up" | "down" | "left" | "right"
+            ) {
+                this.move_cursor(group, member, &event.keystroke.key, window, cx);
+                cx.stop_propagation();
+            }
+        }))
         .debug_selector(move || id.clone())
         .flex_1()
         .min_w_0()
@@ -215,8 +253,10 @@ fn card(group: usize, member: usize, page: &ProxyPage, cx: &mut Context<ProxyPag
                 this.hover(|this| this.bg(cx.theme().list_hover))
             })
         })
-        .on_click(cx.listener(move |this, _, _, cx| {
+        .on_click(cx.listener(move |this, _, window, cx| {
             if selectable {
+                this.cursor = Some((group, member));
+                this.node_focus.focus(window, cx);
                 this.dispatch(
                     UiAction::SelectProxy {
                         group: select_group.clone(),
@@ -303,6 +343,12 @@ fn card(group: usize, member: usize, page: &ProxyPage, cx: &mut Context<ProxyPag
                     );
                 })),
         )
+        .context_menu(move |menu, _, _| {
+            let name = copy_name.clone();
+            menu.item(PopupMenuItem::new(copy_label).on_click(move |_, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(name.clone()));
+            }))
+        })
         .into_any_element()
 }
 
@@ -328,11 +374,13 @@ impl DelayPresentation {
         lang: crate::i18n::Lang,
         cx: &App,
     ) -> Self {
+        let neutral = if cx.theme().is_dark() {
+            rgb(0xbabac3).into()
+        } else {
+            rgb(0x50505a).into()
+        };
         let (label, color) = if pending {
-            (
-                tr(lang, "proxies.testing").into(),
-                cx.theme().muted_foreground,
-            )
+            (tr(lang, "proxies.testing").into(), neutral)
         } else if let Some(error) = error {
             (
                 tr(
@@ -354,24 +402,26 @@ impl DelayPresentation {
                     match ms {
                         1..200 => cx.theme().success,
                         200..800 => cx.theme().warning,
-                        _ => cx.theme().muted_foreground,
+                        _ => neutral,
                     },
                 ),
-                None => (
-                    tr(lang, "proxies.test_delay").into(),
-                    cx.theme().muted_foreground,
-                ),
+                None => (tr(lang, "proxies.test_delay").into(), neutral),
             }
         };
         Self { label, color }
     }
 
     fn button_style(&self, cx: &App) -> ButtonCustomVariant {
+        let [normal, hover, active] = if cx.theme().is_dark() {
+            [0.09, 0.13, 0.16]
+        } else {
+            [0.04, 0.06, 0.08]
+        };
         ButtonCustomVariant::new(cx)
             .foreground(self.color)
-            .color(self.color.opacity(0.09))
-            .hover(self.color.opacity(0.16))
-            .active(self.color.opacity(0.22))
+            .color(self.color.opacity(normal))
+            .hover(self.color.opacity(hover))
+            .active(self.color.opacity(active))
     }
 }
 

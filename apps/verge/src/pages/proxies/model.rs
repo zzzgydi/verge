@@ -73,7 +73,9 @@ pub fn rows(
                 !filter_collapsed.contains(&group.name)
             })
         {
-            rows.push(Row::Toolbar(index));
+            if !global {
+                rows.push(Row::Toolbar(index));
+            }
             rows.extend(members.chunks(columns.max(1)).map(|chunk| Row::Nodes {
                 group: index,
                 members: chunk.to_vec(),
@@ -133,7 +135,7 @@ mod tests {
             [Row::Group(0)]
         );
         let global = rows(&s, Some(RunMode::Global), &closed, "", &HashSet::new(), 2);
-        assert_eq!(global.len(), 3);
+        assert_eq!(global.len(), 2);
         assert!(
             global
                 .iter()

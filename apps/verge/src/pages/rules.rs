@@ -3,7 +3,11 @@ use super::filters::{self, Choice};
 use crate::ui::Page;
 use crate::{domain::ProviderKind, i18n::tr, ui::UiAction, view::MainView};
 use gpui_kit::component::{
-    ActiveTheme as _, Sizable as _, StyledExt as _, button::Button, h_flex, scroll::Scrollbar,
+    ActiveTheme as _, Sizable as _, StyledExt as _,
+    button::{Button, ButtonVariants as _},
+    h_flex,
+    scroll::Scrollbar,
+    tooltip::Tooltip,
     v_flex, v_virtual_list,
 };
 use gpui_kit::*;
@@ -169,9 +173,19 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                             .child(div().w(px(160.)).child(tr(lang, "rules.column.type")))
                             .child(div().flex_1().child(tr(lang, "rules.column.match")))
                             .child(div().w(px(150.)).child(tr(lang, "rules.column.target")))
+                            .child(div().w(px(28.)))
                             .into_any_element(),
                         RuleRow::Rule(ix) => {
                             let rule = &this.state.rules[ix];
+                            let payload = if rule.size > 0 {
+                                format!("{} ({})", rule.payload, rule.size)
+                            } else {
+                                rule.payload.clone()
+                            };
+                            let target = rule.proxy.clone();
+                            let kind = rule.kind.clone();
+                            let full_rule =
+                                format!("{}, {}, {}", rule.kind, rule.payload, rule.proxy);
                             base.debug_selector(move || format!("rule-row-{ix}"))
                                 .text_sm()
                                 .border_b_1()
@@ -179,6 +193,10 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 .hover(|row| row.bg(cx.theme().list_hover))
                                 .child(
                                     div()
+                                        .id(("rule-kind", ix))
+                                        .tooltip(move |window, cx| {
+                                            Tooltip::new(kind.clone()).build(window, cx)
+                                        })
                                         .w(px(160.))
                                         .flex_shrink_0()
                                         .text_xs()
@@ -188,6 +206,10 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 )
                                 .child(
                                     div()
+                                        .id(("rule-payload", ix))
+                                        .tooltip(move |window, cx| {
+                                            Tooltip::new(payload.clone()).build(window, cx)
+                                        })
                                         .flex_1()
                                         .min_w_0()
                                         .truncate()
@@ -200,10 +222,33 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 )
                                 .child(
                                     div()
+                                        .id(("rule-target", ix))
+                                        .tooltip(move |window, cx| {
+                                            Tooltip::new(target.clone()).build(window, cx)
+                                        })
                                         .w(px(150.))
                                         .flex_shrink_0()
                                         .truncate()
                                         .child(rule.proxy.clone()),
+                                )
+                                .child(
+                                    Button::new(("copy-rule", ix))
+                                        .small()
+                                        .ghost()
+                                        .w(px(28.))
+                                        .h(px(28.))
+                                        .icon(gpui_kit::component::IconName::Copy)
+                                        .tooltip(tr(lang, "common.copy"))
+                                        .accessibility_label(format!(
+                                            "{}: {}",
+                                            tr(lang, "common.copy"),
+                                            full_rule
+                                        ))
+                                        .on_click(move |_, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                full_rule.clone(),
+                                            ))
+                                        }),
                                 )
                                 .into_any_element()
                         }
@@ -223,10 +268,12 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 .child(
                     Button::new("refresh-rules")
                         .debug_selector(|| "refresh-rules".into())
-                        .label(tr(lang, "common.refresh"))
+                        .tooltip(tr(lang, "common.refresh"))
+                        .accessibility_label(tr(lang, "common.refresh"))
+                        .icon(gpui_kit::assets::IconName::RefreshCw)
                         .small()
                         .h(px(crate::appearance::metrics::COMPACT_CONTROL))
-                        .outline()
+                        .ghost()
                         .loading(refreshing)
                         .on_click(
                             cx.listener(|this, _, _, cx| this.dispatch(UiAction::RefreshRules, cx)),

@@ -43,6 +43,8 @@ pub struct ProxyPage {
     rows: Rc<Vec<Row>>,
     sizes: Rc<Vec<Size<Pixels>>>,
     columns: usize,
+    node_focus: FocusHandle,
+    cursor: Option<(usize, usize)>,
     delays: HashMap<String, u32>,
     delay_errors: HashMap<String, AppError>,
     pending: HashSet<String>,
@@ -93,6 +95,8 @@ impl ProxyPage {
             rows: Rc::default(),
             sizes: Rc::default(),
             columns: Self::columns(window),
+            node_focus: cx.focus_handle(),
+            cursor: None,
             delays: HashMap::new(),
             delay_errors: HashMap::new(),
             pending: HashSet::new(),
@@ -106,6 +110,95 @@ impl ProxyPage {
             test_reserved: HashSet::new(),
             _subscriptions: vec![subscription, bounds],
         }
+    }
+
+    fn keyboard_nodes(&self) -> impl Iterator<Item = (usize, usize, usize)> + '_ {
+        self.rows.iter().enumerate().flat_map(move |(row, entry)| {
+            let (group, members) = match entry {
+                Row::Nodes { group, members } => (*group, members.as_slice()),
+                _ => (0, [].as_slice()),
+            };
+            members
+                .iter()
+                .copied()
+                .filter(move |&member| {
+                    let entry = &self.snapshot.groups[group];
+                    matches!(entry.kind.as_str(), "Selector" | "URLTest" | "Fallback")
+                        && self.snapshot.proxies.contains_key(&entry.members[member])
+                })
+                .map(move |member| (row, group, member))
+        })
+    }
+
+    fn keyboard_cursor(&self) -> Option<(usize, usize)> {
+        let top = -self.scroll.offset().y;
+        let bottom = top + self.scroll.bounds().size.height;
+        let mut y = px(0.);
+        let mut first = self.rows.len();
+        let mut end = self.rows.len();
+        for (index, size) in self.sizes.iter().enumerate() {
+            if y >= bottom {
+                end = index;
+                break;
+            }
+            if y + size.height > top && first == self.rows.len() {
+                first = index;
+            }
+            y += size.height;
+        }
+        let visible = |row: usize| (first..end).contains(&row);
+        let current = self.cursor.and_then(|cursor| {
+            self.keyboard_nodes()
+                .find(|&(row, group, member)| (group, member) == cursor && visible(row))
+        });
+        current
+            .or_else(|| self.keyboard_nodes().find(|&(row, _, _)| visible(row)))
+            .map(|(_, group, member)| (group, member))
+    }
+
+    fn move_cursor(
+        &mut self,
+        group: usize,
+        member: usize,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let nodes: Vec<_> = self.keyboard_nodes().collect();
+        let Some(index) = nodes
+            .iter()
+            .position(|(_, g, m)| (*g, *m) == (group, member))
+        else {
+            return;
+        };
+        let step = if matches!(key, "up" | "down") {
+            self.columns
+        } else {
+            1
+        };
+        let next = if matches!(key, "up" | "left") {
+            index.saturating_sub(step)
+        } else {
+            (index + step).min(nodes.len() - 1)
+        };
+        let (row, group, member) = nodes[next];
+        self.cursor = Some((group, member));
+        let top = self
+            .sizes
+            .iter()
+            .take(row)
+            .map(|size| size.height)
+            .sum::<Pixels>();
+        let bottom = top + self.sizes[row].height;
+        let viewport_top = -self.scroll.offset().y;
+        let height = self.scroll.bounds().size.height;
+        if top < viewport_top {
+            self.scroll.set_offset(point(px(0.), -top));
+        } else if bottom > viewport_top + height {
+            self.scroll.set_offset(point(px(0.), height - bottom));
+        }
+        self.node_focus.focus(window, cx);
+        cx.notify();
     }
 
     fn columns(window: &Window) -> usize {
@@ -126,6 +219,9 @@ impl ProxyPage {
             || self.pending != state.delay_pending;
         if !changed {
             return;
+        }
+        if layout_changed {
+            self.cursor = None;
         }
         if self.profile != state.selected_profile {
             self.expanded.clear();
@@ -298,6 +394,30 @@ impl ProxyPage {
 impl Render for ProxyPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_group_searches(window, cx);
+        let entity = cx.entity().downgrade();
+        let current_columns = self.columns;
+        let measure_width = canvas(
+            |_, _, _| (),
+            move |bounds, _, window, _| {
+                let width = bounds.size.width;
+                let columns = if width >= px(780.) { 2 } else { 1 };
+                if current_columns == columns {
+                    return;
+                }
+                let entity = entity.clone();
+                window.on_next_frame(move |_, cx| {
+                    let _ = entity.update(cx, |page, cx| {
+                        if page.columns != columns {
+                            page.columns = columns;
+                            page.rebuild();
+                            cx.notify();
+                        }
+                    });
+                });
+            },
+        )
+        .absolute()
+        .size_full();
         let global = self.mode == Some(RunMode::Global);
         let direct = self.mode == Some(RunMode::Direct);
         let global_index = self
@@ -346,19 +466,12 @@ impl Render for ProxyPage {
                             cx.notify();
                         })),
                 )
-            })
-            .when_some(global_index.filter(|_| global), |this, ix| {
-                this.child(
-                    Button::new("locate-global")
-                        .small()
-                        .label(tr(self.lang, "proxies.locate"))
-                        .h(px(crate::appearance::metrics::CONTROL))
-                        .outline()
-                        .on_click(
-                            cx.listener(move |this, _, window, cx| this.locate(ix, window, cx)),
-                        ),
-                )
             });
+        let toolbar = if let Some(index) = global_index.filter(|_| global) {
+            tools::render(index, self, cx)
+        } else {
+            toolbar.into_any_element()
+        };
         let body = if direct {
             super::EmptyState::new(
                 IconName::Globe,
@@ -405,9 +518,11 @@ impl Render for ProxyPage {
                 .into_any_element()
         };
         v_flex()
+            .relative()
             .size_full()
             .min_h_0()
             .gap_4()
+            .child(measure_width)
             .child(toolbar)
             .child(body)
     }
@@ -424,8 +539,10 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 h_flex().gap_3().child(mode_selector(view, cx)).child(
                     Button::new("refresh-proxies")
                         .small()
-                        .h(px(crate::appearance::metrics::CONTROL))
-                        .label(tr(lang, "common.refresh"))
+                        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
+                        .icon(gpui_kit::assets::IconName::RefreshCw)
+                        .tooltip(tr(lang, "common.refresh"))
+                        .accessibility_label(tr(lang, "common.refresh"))
                         .ghost()
                         .loading(view.is_pending(&["proxy_groups"]))
                         .on_click(cx.listener(|this, _, _, cx| {
