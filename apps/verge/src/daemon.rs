@@ -487,6 +487,42 @@ impl Backend {
                         controller: self.config.controller,
                         secret: self.config.secret.clone(),
                     }),
+                    network: crate::ai::tools::NetworkContext {
+                        helper_socket: self.config.helper_socket.clone(),
+                        tun_device: self.tun_lease.as_ref().map(|lease| lease.device.clone()),
+                        lease_connected: self
+                            .tun_lease
+                            .as_ref()
+                            .is_some_and(|lease| lease.connected()),
+                        proxy_owned: self.proxy_session.target.is_some(),
+                        proxy_settings: Some((*self.settings.get().system_proxy).clone()),
+                        proxy_settings_digest: crate::ai::proposals::digest(
+                            serde_json::to_vec(&self.settings.get().system_proxy).unwrap(),
+                        ),
+                        proxy_description: {
+                            let settings = &self.settings.get().system_proxy;
+                            let port = self
+                                .profiles
+                                .selected()
+                                .and_then(|id| self.profiles.system_proxy_mixed_endpoint(id).ok())
+                                .map(|endpoint| endpoint.port);
+                            format!(
+                                "{} / {}:{} / {} bypass entries",
+                                if settings.pac_mode {
+                                    "PAC"
+                                } else {
+                                    "HTTP + HTTPS + SOCKS"
+                                },
+                                crate::ai::tools::label(&settings.host),
+                                port.map(|p| p.to_string())
+                                    .unwrap_or_else(|| "unavailable".into()),
+                                settings.effective_bypass().len()
+                            )
+                        },
+                        proxy_saved_enabled: self.settings.system_proxy_enabled(),
+                        dev_mode: self.config.channel.is_dev(),
+                        captured_at: crate::ai::proposals::now(),
+                    },
                     connections: self.ai_connections_sample.clone(),
                     errors: self.ai_recent_errors.clone(),
                 });
@@ -1914,10 +1950,15 @@ fn run_daemon_backend(
                             sample.connections.clear();
                             backend.ai_connections_sample = Some(sample);
                         }
-                        RealtimeEvent::Log(log) if log.level == "error" || log.level == "warn" => {
+                        RealtimeEvent::Log(log)
+                            if ["error", "warn", "warning", "info"]
+                                .contains(&log.level.as_str()) =>
+                        {
                             backend.ai_recent_errors.push_back(LogEvent {
                                 level: log.level.clone(),
-                                payload: String::new(),
+                                payload: crate::ai::tools::log_text(
+                                    &backend.redact_text(&log.payload),
+                                ),
                             });
                             while backend.ai_recent_errors.len() > 100 {
                                 backend.ai_recent_errors.pop_front();

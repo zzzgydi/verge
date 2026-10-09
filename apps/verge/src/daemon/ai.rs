@@ -51,6 +51,20 @@ fn transaction<T>(
     Ok(())
 }
 
+fn validate_platform_action(dev_mode: bool, action: &Action) -> Result<(), Failure> {
+    if dev_mode
+        && matches!(
+            action,
+            Action::SystemProxy { .. }
+                | Action::ProxySettings { .. }
+                | Action::Tun { enabled: true, .. }
+        )
+    {
+        return Err(Failure::Rejected);
+    }
+    Ok(())
+}
+
 fn runtime_matches(engine: &mut Engine, baseline: &RuntimeBaseline) -> Result<(), AppError> {
     let current = RuntimeBaseline::new(
         engine.runtime.mode()?,
@@ -107,6 +121,7 @@ impl Backend {
     }
 
     fn apply_ai(&mut self, pending: &Pending) -> Result<(), Failure> {
+        validate_platform_action(self.config.channel.is_dev(), &pending.action)?;
         if self.profiles.preview_digest()? != pending.baseline {
             return Err(Failure::Rejected);
         }
@@ -176,7 +191,140 @@ impl Backend {
                     },
                 )?;
             }
+            Action::Tun { enabled, previous } => {
+                self.check_dev_request(&UiRequest::Runtime(RuntimeCommand::SetNetworkSettings {
+                    settings: crate::domain::NetworkSettings {
+                        tun_enabled: *enabled,
+                        ..previous.network.clone()
+                    },
+                }))?;
+                runtime_matches(self.engine.as_mut().ok_or(Failure::Rejected)?, previous)?;
+                if previous.network.tun_enabled != self.tun_lease.is_some() {
+                    return Err(Failure::Rejected);
+                }
+                let mut next = previous.network.clone();
+                next.tun_enabled = *enabled;
+                transaction(
+                    self,
+                    |backend| {
+                        backend.set_tun_network(&next)?;
+                        let mut expected = previous.clone();
+                        expected.network = next;
+                        runtime_matches(
+                            backend
+                                .engine
+                                .as_mut()
+                                .ok_or_else(|| crate::ai::error("Core unavailable"))?,
+                            &expected,
+                        )
+                    },
+                    |backend| {
+                        backend.set_tun_network(&previous.network)?;
+                        restore_selections(
+                            backend
+                                .engine
+                                .as_mut()
+                                .ok_or_else(|| crate::ai::error("Core unavailable"))?,
+                            previous,
+                        )
+                    },
+                )?;
+            }
+            Action::SystemProxy {
+                enabled,
+                previous,
+                settings_digest,
+                saved_enabled,
+                owned,
+            } => {
+                let command = SystemProxyCommand::SetEnabled { enabled: *enabled };
+                self.check_dev_request(&UiRequest::SystemProxy(command.clone()))?;
+                if self.system_proxy.state()? != *previous
+                    || proposals::digest(
+                        serde_json::to_vec(&self.settings.get().system_proxy).unwrap(),
+                    ) != *settings_digest
+                    || self.settings.system_proxy_enabled() != *saved_enabled
+                    || self.proxy_session.target.is_some() != *owned
+                {
+                    return Err(Failure::Rejected);
+                }
+                // Reuse the normal proxy transaction and persisted startup intent. A failed
+                // cleanup must retain its recovery record and must not silently re-enable.
+                let result = self.execute_system_proxy(command).and_then(|result| {
+                    let actual = self.system_proxy.state()?;
+                    if actual != result.state
+                        || self.settings.system_proxy_enabled() != *enabled
+                        || (*enabled
+                            && !self
+                                .proxy_session
+                                .target
+                                .as_ref()
+                                .is_some_and(|target| target.matches(&actual)))
+                        || (!*enabled
+                            && (self.proxy_session.target.is_some() || actual.recovery_pending))
+                    {
+                        return Err(crate::ai::error("Proxy verification failed"));
+                    }
+                    Ok(())
+                });
+                if result.is_err() {
+                    if *enabled
+                        && !previous.recovery_pending
+                        && (self.proxy_session.target.is_some()
+                            || self.system_proxy.recovery_pending())
+                    {
+                        // An enable that fails verification must release the new ownership
+                        // and restore the saved OS snapshot. Disables keep explicit off intent.
+                        let cleanup = self.execute_system_proxy(SystemProxyCommand::SetEnabled {
+                            enabled: false,
+                        });
+                        if cleanup.is_ok() {
+                            let _ = self.settings.set_system_proxy_enabled(*saved_enabled);
+                        }
+                    }
+                    return Err(
+                        if self
+                            .system_proxy
+                            .state()
+                            .is_ok_and(|state| state == *previous)
+                            && self.settings.system_proxy_enabled() == *saved_enabled
+                            && self.proxy_session.target.is_some() == *owned
+                        {
+                            Failure::Restored
+                        } else {
+                            Failure::RecoveryFailed
+                        },
+                    );
+                }
+            }
+            Action::ProxySettings {
+                previous,
+                settings,
+                state,
+                saved_enabled,
+            } => {
+                if self.settings.get().system_proxy.as_ref() != previous.as_ref()
+                    || self.settings.system_proxy_enabled() != *saved_enabled
+                    || self.proxy_session.target.is_some() != state.is_some()
+                {
+                    return Err(Failure::Rejected);
+                }
+                if let Some(state) = state
+                    && self.system_proxy.state()? != *state
+                {
+                    return Err(Failure::Rejected);
+                }
+                self.update_system_proxy_settings(settings)
+                    .map_err(|failure| match failure {
+                        super::system_proxy::PreferenceFailure::Rejected(_) => Failure::Rejected,
+                        super::system_proxy::PreferenceFailure::Restored(_) => Failure::Restored,
+                        super::system_proxy::PreferenceFailure::RecoveryFailed(_) => {
+                            Failure::RecoveryFailed
+                        }
+                    })?;
+            }
             Action::Merge {
+                network,
                 yaml,
                 preview,
                 selected,
@@ -190,6 +338,10 @@ impl Backend {
                 }
                 runtime_matches(self.engine.as_mut().ok_or(Failure::Rejected)?, runtime)?;
                 let previous_merge = self.profiles.merge_yaml()?;
+                let previous_network = self.profiles.network_override();
+                if network.is_some() && (runtime.network.tun_enabled || self.tun_lease.is_some()) {
+                    return Err(Failure::Rejected);
+                }
                 let path = self.config.data_dir.join("profiles/runtime-config.yaml");
                 let old_runtime = self.profiles.runtime_bytes()?;
                 if proposals::digest(&old_runtime) != *previous_runtime
@@ -206,7 +358,13 @@ impl Backend {
                 transaction(
                     self,
                     |backend| {
-                        backend.profiles.set_merge_yaml(yaml)?;
+                        if let Some(settings) = network {
+                            backend
+                                .profiles
+                                .set_network_override(Some(settings.clone()))?;
+                        } else {
+                            backend.profiles.set_merge_yaml(yaml)?;
+                        }
                         crate::config::restore_runtime_artifact(&path, candidate)?;
                         let engine = backend.engine.as_mut().unwrap();
                         let mut core =
@@ -224,7 +382,13 @@ impl Backend {
                     },
                     |backend| {
                         // Attempt both disk restorations even if one fails.
-                        let merge = backend.profiles.set_merge_yaml(&previous_merge);
+                        let merge = if network.is_some() {
+                            backend
+                                .profiles
+                                .set_network_override(previous_network.clone())
+                        } else {
+                            backend.profiles.set_merge_yaml(&previous_merge)
+                        };
                         let artifact = crate::config::restore_runtime_artifact(&path, &old_runtime);
                         merge?;
                         artifact?;
@@ -290,5 +454,177 @@ mod tests {
         );
         assert!(matches!(result, Err(Failure::RecoveryFailed)));
         assert!(!result.unwrap_err().message().contains("private"));
+    }
+}
+
+#[cfg(test)]
+mod network_action_tests {
+    use super::*;
+    #[test]
+    fn proxy_settings_tool_previews_without_writes_then_confirms_or_rejects_stale_state() {
+        use crate::ai::{
+            diagnostics::{ConfigContext, Session},
+            tools::{NetworkContext, ToolContext},
+        };
+        use std::sync::{Arc, atomic::AtomicBool};
+        let (mut backend, directory) = super::super::tests::test_backend("ai-bypass-confirm");
+        let session = |backend: &Backend| {
+            Session::new(
+                ToolContext {
+                    socket: backend.config.internal_socket(),
+                    services: vec![],
+                    recovery_path: backend.config.recovery_path.clone(),
+                    config_selected: false,
+                    connections: None,
+                    errors: Default::default(),
+                    config: Some(ConfigContext {
+                        profiles: backend.profiles.clone(),
+                        binary: backend.config.binary.clone(),
+                        working_dir: directory.clone(),
+                        controller: backend.config.controller,
+                        secret: backend.config.secret.clone(),
+                    }),
+                    network: NetworkContext {
+                        proxy_settings: Some((*backend.settings.get().system_proxy).clone()),
+                        dev_mode: backend.config.channel.is_dev(),
+                        ..Default::default()
+                    },
+                },
+                vec![],
+                1,
+                backend.ai.proposal_store(),
+                Arc::new(AtomicBool::new(false)),
+            )
+        };
+        let mut diagnostics = session(&backend);
+        let preferences = diagnostics.execute("system_proxy_settings", "{}").unwrap();
+        assert_eq!(preferences["data"]["pac_script_omitted"], true);
+        let proposal=diagnostics.execute("preview_system_proxy_settings",r#"{"add_bypass":["*.example.test"],"guard_enabled":true,"guard_interval_secs":15}"#).unwrap();
+        assert_eq!(proposal["status"], "awaiting_user_confirmation");
+        assert!(backend.settings.get().system_proxy.bypass.is_empty());
+        assert!(!directory.join("settings.json").exists());
+        let view = diagnostics.views.last().unwrap().clone();
+        assert!(!proposal.to_string().contains(&view.digest));
+        assert!(matches!(
+            backend.approve_ai(view.id.clone(), "forged".into()),
+            UiResponse::Ai { result: Err(_), .. }
+        ));
+        let result = backend.approve_ai(view.id.clone(), view.digest.clone());
+        assert!(
+            matches!(result, UiResponse::Ai { result: Ok(_), .. }),
+            "{result:?}"
+        );
+        assert_eq!(
+            backend.settings.get().system_proxy.bypass,
+            vec!["*.example.test"]
+        );
+        assert!(backend.settings.get().system_proxy.guard_enabled);
+        assert!(backend.proxy_session.target.is_none());
+        assert!(backend.proxy_session.pac.is_none());
+        assert!(!backend.config.recovery_path.exists());
+        assert!(!backend.settings.system_proxy_enabled());
+        let saved = FileSettingsStore::open(&directory).unwrap();
+        assert_eq!(saved.get(), backend.settings.get());
+        assert!(matches!(
+            backend.approve_ai(view.id, view.digest),
+            UiResponse::Ai { result: Err(_), .. }
+        ));
+        // General settings may change while a suggestion is open; preserve them.
+        let mut diagnostics = session(&backend);
+        diagnostics
+            .execute(
+                "preview_system_proxy_settings",
+                r#"{"reset_bypass":true,"pac_mode":true}"#,
+            )
+            .unwrap();
+        let view = diagnostics.views.last().unwrap().clone();
+        let mut settings = backend.settings.get().clone();
+        settings.language = "zh-CN".into();
+        backend.settings.update(settings).unwrap();
+        assert!(matches!(
+            backend.approve_ai(view.id, view.digest),
+            UiResponse::Ai { result: Ok(_), .. }
+        ));
+        assert!(backend.settings.get().system_proxy.pac_mode);
+        assert_eq!(backend.settings.get().language, "zh-CN");
+        assert!(backend.proxy_session.pac.is_none());
+        for change_intent in [false, true] {
+            let mut diagnostics = session(&backend);
+            diagnostics
+                .execute(
+                    "preview_system_proxy_settings",
+                    r#"{"add_bypass":["stale.test"]}"#,
+                )
+                .unwrap();
+            let view = diagnostics.views.last().unwrap().clone();
+            if change_intent {
+                backend.settings.set_system_proxy_enabled(true).unwrap();
+            } else {
+                let mut latest = backend.settings.get().clone();
+                latest.system_proxy.guard_interval_secs += 1;
+                backend.settings.update(latest).unwrap();
+            }
+            assert!(matches!(
+                backend.approve_ai(view.id, view.digest),
+                UiResponse::Ai { result: Err(_), .. }
+            ));
+            assert!(backend.settings.get().system_proxy.bypass.is_empty());
+        }
+        backend.config.channel = crate::identity::AppChannel::Dev;
+        assert!(
+            session(&backend)
+                .execute("preview_system_proxy_settings", r#"{"reset_bypass":true}"#)
+                .is_err()
+        );
+        drop(backend);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn ai_confirmation_cannot_bypass_dev_system_restrictions() {
+        let runtime = RuntimeBaseline {
+            mode: crate::domain::RunMode::Rule,
+            network: crate::domain::NetworkSettings::default(),
+            groups: vec![],
+        };
+        assert!(
+            validate_platform_action(
+                true,
+                &Action::Tun {
+                    enabled: true,
+                    previous: runtime.clone()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            validate_platform_action(
+                true,
+                &Action::Tun {
+                    enabled: false,
+                    previous: runtime
+                }
+            )
+            .is_ok()
+        );
+        let proxy = Action::SystemProxy {
+            enabled: false,
+            previous: crate::domain::SystemProxyState {
+                services: vec![],
+                recovery_pending: false,
+            },
+            settings_digest: "test".into(),
+            saved_enabled: false,
+            owned: false,
+        };
+        assert!(validate_platform_action(true, &proxy).is_err());
+        assert!(validate_platform_action(false, &proxy).is_ok());
+        let settings = Action::ProxySettings {
+            previous: Box::default(),
+            settings: Box::default(),
+            state: None,
+            saved_enabled: false,
+        };
+        assert!(validate_platform_action(true, &settings).is_err());
     }
 }

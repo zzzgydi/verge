@@ -42,7 +42,25 @@ pub(crate) enum Action {
         mode: RunMode,
         previous: RunMode,
     },
+    Tun {
+        enabled: bool,
+        previous: RuntimeBaseline,
+    },
+    SystemProxy {
+        enabled: bool,
+        previous: crate::domain::SystemProxyState,
+        settings_digest: String,
+        saved_enabled: bool,
+        owned: bool,
+    },
+    ProxySettings {
+        previous: Box<crate::domain::SystemProxySettings>,
+        settings: Box<crate::domain::SystemProxySettings>,
+        state: Option<crate::domain::SystemProxyState>,
+        saved_enabled: bool,
+    },
     Merge {
+        network: Option<crate::domain::CoreNetworkSettings>,
         yaml: String,
         preview: Box<ConfigPreview>,
         selected: ProfileId,
@@ -131,6 +149,25 @@ impl Proposals {
         let id = nonce.iter().map(|b| format!("{b:02x}")).collect::<String>();
         let expires_at = now() + 300;
         let action_version = match &action {
+            Action::Tun { enabled, previous } => format!("tun/{enabled}/{previous:?}"),
+            Action::SystemProxy {
+                enabled,
+                previous,
+                settings_digest,
+                saved_enabled,
+                owned,
+            } => format!("proxy/{enabled}/{previous:?}/{settings_digest}/{saved_enabled}/{owned}"),
+            Action::ProxySettings {
+                previous,
+                settings,
+                state,
+                saved_enabled,
+            } => format!(
+                "proxy-settings/{}/{}/{:?}/{saved_enabled}",
+                digest(serde_json::to_vec(previous).unwrap()),
+                digest(serde_json::to_vec(settings).unwrap()),
+                state
+            ),
             Action::Mode { mode, previous } => format!("{mode:?}/{previous:?}"),
             Action::Select {
                 group,
@@ -138,6 +175,7 @@ impl Proposals {
                 previous,
             } => format!("{group:?}/{proxy:?}/{previous:?}"),
             Action::Merge {
+                network,
                 yaml,
                 selected,
                 runtime_digest,
@@ -145,7 +183,8 @@ impl Proposals {
                 runtime,
                 ..
             } => format!(
-                "{}/{selected:?}/{runtime_digest}/{previous_runtime}/{runtime:?}",
+                "{}/{}/{selected:?}/{runtime_digest}/{previous_runtime}/{runtime:?}",
+                digest(serde_json::to_vec(network).unwrap()),
                 digest(yaml)
             ),
         };

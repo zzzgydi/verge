@@ -52,7 +52,7 @@ fn ai_proposals_preview_confirm_verify_and_reject_stale_changes() {
     let mut backend = Backend::new(config).unwrap();
     let id = ProfileId::parse("ai-test").unwrap();
     backend.profiles.import(Profile::new(id.clone(),"Test",ProfileSource::Local,UpdatePolicy::Manual,0,None).unwrap(),
-        "mixed-port: 0\nmode: rule\nlog-level: warning\nproxy-groups:\n- name: Manual\n  type: select\n  proxies: [DIRECT, REJECT]\nrules: ['MATCH,DIRECT']\ndns:\n  enable: false\n").unwrap();
+        &format!("mixed-port: {}\nmode: rule\nlog-level: warning\nproxy-groups:\n- name: Manual\n  type: select\n  proxies: [DIRECT, REJECT]\nrules: ['MATCH,DIRECT']\ndns:\n  enable: false\n", available_controller().unwrap().port())).unwrap();
     backend
         .execute_profile(AppCommand::SelectProfile { id: id.clone() })
         .unwrap();
@@ -63,6 +63,7 @@ fn ai_proposals_preview_confirm_verify_and_reject_stale_changes() {
                 services: vec![],
                 recovery_path: backend.config.recovery_path.clone(),
                 config_selected: true,
+                network: Default::default(),
                 connections: None,
                 errors: Default::default(),
                 config: Some(ConfigContext {
@@ -266,6 +267,88 @@ fn ai_proposals_preview_confirm_verify_and_reject_stale_changes() {
             .iter()
             .any(|g| g.name == "Manual" && g.selected.as_deref() == Some("REJECT"))
     );
+    backend
+        .profiles
+        .set_internal_socket(backend.config.internal_socket());
+    // A local DNS responder keeps the contract test deterministic and offline.
+    let dns_socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let dns_address = dns_socket.local_addr().unwrap();
+    dns_socket
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let dns_server = std::thread::spawn(move || {
+        let mut query = [0u8; 512];
+        let (length, peer) = dns_socket.recv_from(&mut query).unwrap();
+        let mut answer = query[..length].to_vec();
+        answer[2] = 0x81;
+        answer[3] = 0x80;
+        answer[6] = 0;
+        answer[7] = 1;
+        // Strip any EDNS additional record after the single question.
+        let mut end = 12;
+        while answer[end] != 0 {
+            end += usize::from(answer[end]) + 1;
+        }
+        end += 5;
+        answer.truncate(end);
+        answer[10] = 0;
+        answer[11] = 0;
+        answer.extend_from_slice(&[0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 203, 0, 113, 42]);
+        dns_socket.send_to(&answer, peer).unwrap();
+    });
+    let mut diagnostics = session(&backend);
+    let before = backend.profiles.network_override();
+    diagnostics
+        .execute(
+            "preview_dns",
+            &serde_json::json!({"patch":{"enable":true,"nameserver":[dns_address.to_string()]}})
+                .to_string(),
+        )
+        .unwrap();
+    assert_eq!(backend.profiles.network_override(), before);
+    let proposal = diagnostics.views.last().unwrap().clone();
+    let result = backend.approve_ai(proposal.id.clone(), proposal.digest.clone());
+    assert!(
+        matches!(result, UiResponse::Ai { result: Ok(_), .. }),
+        "{result:?}"
+    );
+    assert!(backend.profiles.network_settings().unwrap().dns_override);
+    let mut diagnostics = session(&backend);
+    let dns = diagnostics.execute("dns_status", "{}").unwrap();
+    assert_eq!(dns["data"]["dns"]["enable"], true);
+    let query = diagnostics
+        .execute(
+            "query_dns",
+            r#"{"host":"diagnostic.example","record_type":"A"}"#,
+        )
+        .unwrap();
+    assert_eq!(query["data"]["status"], 0);
+    assert_eq!(query["data"]["answers"][0]["data"], "203.0.113.42");
+    dns_server.join().unwrap();
+    assert!(diagnostics.execute("inspect_connections", "{}").is_ok());
+    assert!(matches!(
+        backend.approve_ai(proposal.id, proposal.digest),
+        UiResponse::Ai { result: Err(_), .. }
+    ));
+    // A validated candidate may still fail to reload. DNS settings and the exact
+    // prior runtime bytes must both survive the same failure used for Merge above.
+    backend
+        .profiles
+        .set_internal_socket(backend.config.data_dir.join("control/ai-dns-failure.sock"));
+    let before_network = backend.profiles.network_override();
+    let before_runtime = fs::read(&path).unwrap();
+    let mut diagnostics = session(&backend);
+    diagnostics
+        .execute("preview_dns", r#"{"patch":{"nameserver":["8.8.8.8"]}}"#)
+        .unwrap();
+    let proposal = diagnostics.views.last().unwrap().clone();
+    let result = backend.approve_ai(proposal.id, proposal.digest);
+    assert!(
+        matches!(result, UiResponse::Ai {result:Err(ref error),..} if error.message.contains("restored and verified")),
+        "{result:?}"
+    );
+    assert_eq!(backend.profiles.network_override(), before_network);
+    assert_eq!(fs::read(&path).unwrap(), before_runtime);
     backend
         .profiles
         .set_internal_socket(backend.config.internal_socket());

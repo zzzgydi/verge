@@ -174,6 +174,14 @@ impl AiService {
                     }
                     let config = saved.config.validated()?;
                     let key = saved.api_key;
+                    let context = context.map(|mut context| {
+                        if !key.0.is_empty() {
+                            for log in &mut context.errors {
+                                log.payload = log.payload.replace(&key.0, "[redacted]");
+                            }
+                        }
+                        context
+                    });
                     if cancel.load(Ordering::Relaxed) {
                         return Err(error("Cancelled"));
                     }
@@ -420,6 +428,7 @@ mod tests {
             services: vec![],
             recovery_path: directory.0.join("unused-recovery.json"),
             config_selected: false,
+            network: Default::default(),
             connections: None,
             errors: Default::default(),
             config: None,

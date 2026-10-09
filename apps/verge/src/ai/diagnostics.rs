@@ -1,4 +1,7 @@
 //! Bounded on-demand diagnostics and local proposals. Runs only on AI workers.
+mod dns;
+mod network;
+mod proxy;
 use super::{
     error,
     proposals::{self, Action, Change, Proposals},
@@ -22,12 +25,22 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) const NAMES: [&str; 5] = [
+pub(super) const NAMES: [&str; 15] = [
     "test_nodes",
     "explain_rules",
     "suggest_node",
     "suggest_mode",
     "preview_merge",
+    "query_dns",
+    "dns_status",
+    "inspect_connections",
+    "read_logs",
+    "tun_status",
+    "suggest_system_proxy",
+    "suggest_tun",
+    "preview_dns",
+    "system_proxy_settings",
+    "preview_system_proxy_settings",
 ];
 
 #[derive(Clone)]
@@ -137,6 +150,12 @@ impl Session {
         if tools::NAMES.contains(&name) && name != "config_check" {
             return tools::execute(name, args, &self.evidence).map(|e| json!(e));
         }
+        if ["system_proxy_settings", "preview_system_proxy_settings"].contains(&name) {
+            return self.proxy_settings_tool(name, args);
+        }
+        if network::NAMES.contains(&name) {
+            return self.network_tool(name, args);
+        }
         match name {
             "config_check" => {
                 let _: Empty = parse(args)?;
@@ -222,7 +241,8 @@ impl Session {
                     }
                 }
                 let e=self.record(name,json!({"host":host,"matching_rules":matches,"unsupported_rules":unsupported,
-                    "scope":"static domain rules only; no DNS lookup, rule-set expansion or live routing claim"}))?;
+                    "observed_connections":self.routing_evidence(&host),"rule_providers":self.ruleset_evidence(),
+                    "scope":"static domain matches are candidates only; unsupported rules are not evaluated. Observed connections show actual routing at connection creation, including rule sets; not a prediction for new traffic"}))?;
                 Ok(json!(e))
             }
             "suggest_mode" => {
@@ -414,6 +434,7 @@ impl Session {
                 let e=self.record(name,json!({"validated_profiles":count,"mihomo_validated":true,"changes":changes,"applied":false}))?;
                 self.propose(
                     Action::Merge {
+                        network: None,
                         yaml,
                         preview: Box::new(preview),
                         selected,
@@ -753,6 +774,8 @@ pub(super) fn schema() -> Value {
     ] {
         entries.push(json!({"type":"function","function":{"name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}}}));
     }
+    entries.extend(network::schemas());
+    entries.extend(proxy::schemas());
     Value::Array(entries)
 }
 

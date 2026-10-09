@@ -40,6 +40,21 @@ pub struct ToolContext {
     pub connections: Option<ConnectionSnapshot>,
     pub errors: VecDeque<LogEvent>,
     pub config: Option<super::diagnostics::ConfigContext>,
+    pub network: NetworkContext,
+}
+
+#[derive(Clone, Default)]
+pub struct NetworkContext {
+    pub helper_socket: PathBuf,
+    pub tun_device: Option<String>,
+    pub lease_connected: bool,
+    pub proxy_owned: bool,
+    pub proxy_settings: Option<crate::domain::SystemProxySettings>,
+    pub proxy_settings_digest: String,
+    pub proxy_description: String,
+    pub proxy_saved_enabled: bool,
+    pub dev_mode: bool,
+    pub captured_at: u64,
 }
 
 pub fn schema() -> Value {
@@ -62,7 +77,7 @@ pub fn execute(name: &str, arguments: &str, evidence: &[Evidence]) -> Result<Evi
 }
 
 /// Names may contain URLs or pasted tokens. Omit those names entirely, cap remaining text.
-pub(super) fn label(value: &str) -> String {
+pub(crate) fn label(value: &str) -> String {
     let lower = value.to_ascii_lowercase();
     if [
         "://",
@@ -88,6 +103,51 @@ pub(super) fn label(value: &str) -> String {
     }
 }
 
+/// Keep useful error context, but discard credential-bearing lines and URL/path tokens.
+/// The daemon replaces known controller secrets and subscription URLs before this function.
+pub(crate) fn log_text(value: &str) -> String {
+    let lower = value.to_ascii_lowercase();
+    if [
+        "authorization",
+        "cookie",
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "api_key",
+        "api-key",
+        "apikey",
+        "sk-",
+        "private key",
+    ]
+    .iter()
+    .any(|key| lower.contains(key))
+    {
+        return "[credential-bearing log omitted]".into();
+    }
+    bounded(
+        &value
+            .split_whitespace()
+            .map(|part| {
+                if part.contains("://") {
+                    "[URL omitted]"
+                } else if part.contains("/Users/") || part.contains("/home/") {
+                    "[path omitted]"
+                } else {
+                    part
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+        768,
+    )
+}
+
+pub(super) fn network_summary(network: &crate::domain::NetworkSettings) -> Value {
+    // Mihomo v1.19.26 /configs does not expose DNS configuration.
+    json!({"tun_enabled":network.tun_enabled,"ipv6_enabled":network.ipv6_enabled,"dns_status":"not reported by controller; use dns_status"})
+}
+
 pub fn collect(context: ToolContext, cancelled: &std::sync::atomic::AtomicBool) -> Vec<Evidence> {
     let mut client =
         TcpControllerTransport::unix(context.socket, Duration::from_secs(2)).map(MihomoClient::new);
@@ -100,7 +160,7 @@ pub fn collect(context: ToolContext, cancelled: &std::sync::atomic::AtomicBool) 
             "runtime_status" => {
                 let client = client.as_mut().map_err(|e| e.clone())?;
                 Ok(
-                    json!({"version":label(&client.version()?), "mode":client.mode()?, "network":client.network_settings()?, "private_controller":"reachable"}),
+                    json!({"version":label(&client.version()?), "mode":client.mode()?, "network":network_summary(&client.network_settings()?), "private_controller":"reachable"}),
                 )
             }
             "proxy_summary" => {
@@ -134,7 +194,7 @@ pub fn collect(context: ToolContext, cancelled: &std::sync::atomic::AtomicBool) 
                 None => json!({"available":false,"reason":"no realtime sample"}),
             }),
             "recent_errors" => Ok(
-                json!({"source":"recent daemon events", "error_count":context.errors.iter().filter(|e| e.level=="error").count(),"warning_count":context.errors.iter().filter(|e| e.level=="warn").count(),"log_content_omitted":true}),
+                json!({"source":"recent daemon events", "error_count":context.errors.iter().filter(|e| e.level=="error").count(),"warning_count":context.errors.iter().filter(|e| e.level=="warn" || e.level=="warning").count(),"log_content_omitted":true}),
             ),
             "config_check" => Ok(
                 json!({"selected":context.config_selected,"checked":false,"scope":"call config_check to run fresh local Mihomo validation","config_content_omitted":true}),
