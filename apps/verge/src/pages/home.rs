@@ -1,7 +1,7 @@
 pub mod telemetry;
 
 use super::components::{Metric, PageHeader, panel};
-use crate::domain::RunMode;
+use crate::domain::{ProfileSource, RunMode};
 use crate::ui::{CoreStatus, Page, UiAction};
 use crate::{
     i18n::{Lang, tr},
@@ -48,7 +48,8 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         view.state.runtime_settings.is_some() || view.state.system_proxy_enabled();
 
     let connection = panel(cx)
-        .gap_2()
+        .p_5()
+        .gap_3()
         .child(
             h_flex()
                 .gap_3()
@@ -94,15 +95,48 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                     gpui_kit::component::tooltip::Tooltip::new(profile_name.clone())
                                         .build(window, cx)
                                 }),
-                        ),
+                        )
+                        .when_some(profile, |this, profile| {
+                            this.child(
+                                div()
+                                    .text_xs()
+                                    .line_height(px(16.))
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!(
+                                        "{} · {} {}",
+                                        tr(
+                                            lang,
+                                            match profile.source {
+                                                ProfileSource::Local => "profiles.source.local",
+                                                ProfileSource::Remote { .. } =>
+                                                    "profiles.source.remote",
+                                            }
+                                        ),
+                                        tr(lang, "profiles.updated_at"),
+                                        crate::format::updated_at(lang, profile.updated_at),
+                                    )),
+                            )
+                        }),
                 )
                 .child(
-                    h_flex()
-                        .gap_2()
+                    v_flex()
+                        .items_end()
+                        .gap_1()
                         .text_xs()
-                        .text_color(status_color)
-                        .child(div().size(px(6.)).rounded_full().bg(status_color))
-                        .child(core_status),
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .text_color(status_color)
+                                .child(div().size(px(6.)).rounded_full().bg(status_color))
+                                .child(core_status),
+                        )
+                        .when_some(view.state.mihomo_version.as_ref(), |this, version| {
+                            this.child(
+                                div()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!("Mihomo {version}")),
+                            )
+                        }),
                 )
                 .child(
                     Button::new("manage-profiles")
@@ -228,11 +262,13 @@ fn network_status(view: &MainView, cx: &App) -> impl IntoElement {
 
 fn overview_details(view: &MainView, cx: &mut Context<MainView>) -> impl IntoElement {
     let lang = view.lang();
-    let mut routes = v_flex().flex_1().gap_1();
+    let mut routes = v_flex().flex_1().gap_3();
     let panel = panel(cx)
         .debug_selector(|| "home-routes-panel".into())
         .min_w_0()
-        .gap_2()
+        .min_h(px(440.))
+        .p_5()
+        .gap_4()
         .child(
             h_flex()
                 .h(px(28.))
@@ -261,8 +297,8 @@ fn overview_details(view: &MainView, cx: &mut Context<MainView>) -> impl IntoEle
                     .get(&g.name)
                     .is_some_and(|p| p.hidden)
         })
-        .take(4)
         .collect();
+    let group_count = groups.len();
     let single_route = groups.len() == 1;
     if single_route || groups.is_empty() {
         routes = routes.justify_center();
@@ -282,8 +318,9 @@ fn overview_details(view: &MainView, cx: &mut Context<MainView>) -> impl IntoEle
                 )),
         );
     }
-    for group in groups {
+    for (index, group) in groups.into_iter().take(4).enumerate() {
         let selected = group.selected.as_deref().unwrap_or("—");
+        let details = view.state.proxies.proxies.get(selected);
         let delay = view.state.delays.get(selected).copied().or_else(|| {
             view.state
                 .proxies
@@ -291,15 +328,41 @@ fn overview_details(view: &MainView, cx: &mut Context<MainView>) -> impl IntoEle
                 .get(selected)
                 .and_then(|p| p.delay)
         });
+        let description = details.map(|details| {
+            let mut parts = vec![details.kind.clone()];
+            if details.udp == Some(true) {
+                parts.push("UDP".into());
+            }
+            parts.join(" · ")
+        });
+        let group_name = group.name.clone();
+        let selected_name = selected.to_owned();
         routes = routes.child(
             v_flex()
+                .gap_1()
                 .child(
-                    div()
+                    h_flex()
+                        .gap_2()
+                        .justify_between()
                         .text_xs()
                         .line_height(px(16.))
                         .text_color(cx.theme().muted_foreground)
-                        .truncate()
-                        .child(group.name.clone()),
+                        .child(
+                            div()
+                                .id(("home-route-group", index))
+                                .min_w_0()
+                                .truncate()
+                                .child(group.name.clone())
+                                .tooltip(move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(group_name.clone())
+                                        .build(window, cx)
+                                }),
+                        )
+                        .child(div().flex_shrink_0().child(format!(
+                            "{} {}",
+                            group.members.len(),
+                            tr(lang, "home.nodes")
+                        ))),
                 )
                 .child(
                     h_flex()
@@ -307,18 +370,32 @@ fn overview_details(view: &MainView, cx: &mut Context<MainView>) -> impl IntoEle
                         .line_height(px(20.))
                         .child(
                             div()
+                                .id(("home-route-node", index))
                                 .flex_1()
                                 .min_w_0()
                                 .truncate()
                                 .text_sm()
+                                .font_medium()
                                 .when(single_route, |this| this.text_lg().line_height(px(28.)))
-                                .child(selected.to_owned()),
+                                .child(selected.to_owned())
+                                .tooltip(move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(
+                                        selected_name.clone(),
+                                    )
+                                    .build(window, cx)
+                                }),
                         )
                         .when_some(delay, |row, delay| {
                             row.child(
                                 div()
                                     .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
+                                    .text_color(if delay == 0 {
+                                        cx.theme().danger
+                                    } else if delay < 200 {
+                                        cx.theme().success
+                                    } else {
+                                        cx.theme().warning
+                                    })
                                     .child(if delay == 0 {
                                         tr(lang, "proxies.timeout").into()
                                     } else {
@@ -326,15 +403,28 @@ fn overview_details(view: &MainView, cx: &mut Context<MainView>) -> impl IntoEle
                                     }),
                             )
                         }),
-                ),
+                )
+                .when_some(description, |this, description| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .line_height(px(16.))
+                            .text_color(cx.theme().muted_foreground)
+                            .child(description),
+                    )
+                }),
         );
     }
     panel.child(routes).child(
         h_flex()
             .gap_4()
-            .pt_2()
+            .pt_4()
             .border_t_1()
             .border_color(cx.theme().border)
+            .child(Metric::new(
+                tr(lang, "home.groups"),
+                group_count.to_string(),
+            ))
             .child(Metric::new(
                 tr(lang, "rules.title"),
                 view.state.rules.len().to_string(),

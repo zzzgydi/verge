@@ -731,6 +731,9 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("home.total_upload", "内核累计上传", "Core upload total"),
     ("home.total_download", "内核累计下载", "Core download total"),
     ("home.core_total", "内核累计", "Core total"),
+    ("home.nodes", "个节点", "nodes"),
+    ("home.groups", "代理组", "Groups"),
+    ("home.sample_peak", "近期峰值", "Recent peak"),
     ("home.routes", "当前代理", "Current proxies"),
     ("home.rule_count", "条规则", "rules"),
     (

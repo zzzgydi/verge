@@ -79,6 +79,8 @@ impl Render for Telemetry {
             .history
             .back()
             .map_or_else(|| "—".into(), |t| format::rate(t.down));
+        let download_peak = self.history.iter().map(|sample| sample.down).max();
+        let upload_peak = self.history.iter().map(|sample| sample.up).max();
         let peak = self
             .history
             .iter()
@@ -87,10 +89,20 @@ impl Render for Telemetry {
             .unwrap_or(0)
             .max(1) as f64;
         let samples = self.history.clone();
-        let colors = [cx.theme().foreground, cx.theme().muted_foreground];
+        let colors = [cx.theme().chart_1, cx.theme().chart_2];
+        let grid_color = cx.theme().border.opacity(0.7);
         let chart = canvas(
             |_, _, _| (),
             move |bounds, _, window, _| {
+                for row in 0..=3 {
+                    let y = bounds.top() + bounds.size.height * (row as f32 / 3.);
+                    let mut grid = PathBuilder::stroke(px(1.));
+                    grid.move_to(point(bounds.left(), y));
+                    grid.line_to(point(bounds.right(), y));
+                    if let Ok(path) = grid.build() {
+                        window.paint_path(path, grid_color);
+                    }
+                }
                 // A fixed history mapped to the actual plot width keeps strokes readable
                 // in the minimum-size window; missing samples remain empty on the left.
                 for (series, color) in colors.into_iter().enumerate() {
@@ -122,7 +134,9 @@ impl Render for Telemetry {
         panel(cx)
             .debug_selector(|| "home-telemetry-panel".into())
             .min_w_0()
-            .gap_2()
+            .min_h(px(440.))
+            .p_5()
+            .gap_4()
             .child(
                 h_flex()
                     .h(px(28.))
@@ -139,74 +153,30 @@ impl Render for Telemetry {
                 h_flex()
                     .gap_4()
                     .items_start()
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .line_height(px(16.))
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(tr(lang, "home.tile.download")),
-                            )
-                            .child(div().text_2xl().line_height(px(28.)).child(down))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .line_height(px(16.))
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(format!(
-                                        "{} {}",
-                                        tr(lang, "home.core_total"),
-                                        self.totals.map_or_else(
-                                            || "—".into(),
-                                            |(down, _)| format::bytes(down)
-                                        ),
-                                    )),
-                            ),
-                    )
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .line_height(px(16.))
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(tr(lang, "home.tile.upload")),
-                            )
-                            .child(
-                                div()
-                                    .text_2xl()
-                                    .line_height(px(28.))
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(up),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .line_height(px(16.))
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(format!(
-                                        "{} {}",
-                                        tr(lang, "home.core_total"),
-                                        self.totals.map_or_else(
-                                            || "—".into(),
-                                            |(_, up)| format::bytes(up)
-                                        ),
-                                    )),
-                            ),
-                    ),
+                    .child(traffic_metric(
+                        tr(lang, "home.tile.download"),
+                        down,
+                        self.totals.map(|(down, _)| down),
+                        download_peak,
+                        colors[0],
+                        lang,
+                        cx,
+                    ))
+                    .child(traffic_metric(
+                        tr(lang, "home.tile.upload"),
+                        up,
+                        self.totals.map(|(_, up)| up),
+                        upload_peak,
+                        colors[1],
+                        lang,
+                        cx,
+                    )),
             )
             .child(
                 v_flex()
                     .relative()
                     .flex_1()
-                    .min_h(px(48.))
+                    .min_h(px(104.))
                     .justify_end()
                     .child(chart)
                     .when(self.history.is_empty(), |this| {
@@ -235,7 +205,7 @@ impl Render for Telemetry {
             .child(
                 h_flex()
                     .gap_4()
-                    .pt_2()
+                    .pt_4()
                     .border_t_1()
                     .border_color(cx.theme().border)
                     .child(Metric::new(
@@ -251,6 +221,55 @@ impl Render for Telemetry {
                     )),
             )
     }
+}
+
+fn traffic_metric(
+    label: &'static str,
+    value: String,
+    total: Option<u64>,
+    peak: Option<u64>,
+    color: Hsla,
+    lang: Lang,
+    cx: &App,
+) -> impl IntoElement {
+    v_flex()
+        .flex_1()
+        .min_w_0()
+        .gap_2()
+        .child(
+            h_flex()
+                .gap_2()
+                .text_xs()
+                .line_height(px(16.))
+                .text_color(color)
+                .child(div().w(px(12.)).h(px(3.)).rounded_full().bg(color))
+                .child(label),
+        )
+        .child(
+            div()
+                .text_2xl()
+                .font_medium()
+                .line_height(px(32.))
+                .text_color(color)
+                .child(value),
+        )
+        .child(
+            v_flex()
+                .gap_1()
+                .text_xs()
+                .line_height(px(16.))
+                .text_color(cx.theme().muted_foreground)
+                .child(format!(
+                    "{} {}",
+                    tr(lang, "home.core_total"),
+                    total.map_or_else(|| "—".into(), format::bytes)
+                ))
+                .child(format!(
+                    "{} {}",
+                    tr(lang, "home.sample_peak"),
+                    peak.map_or_else(|| "—".into(), format::rate)
+                )),
+        )
 }
 
 #[cfg(test)]
