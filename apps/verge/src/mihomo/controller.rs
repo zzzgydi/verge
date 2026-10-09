@@ -110,8 +110,12 @@ impl ControllerTransport for TcpControllerTransport {
         }
         let mut response = Vec::new();
         stream
+            .take(16 * 1024 * 1024 + 1)
             .read_to_end(&mut response)
             .map_err(controller_io_error)?;
+        if response.len() > 16 * 1024 * 1024 {
+            return Err(controller_error("Mihomo response exceeds 16 MiB"));
+        }
         parse_http_response(&response)
     }
 }
@@ -165,6 +169,24 @@ impl<T: ControllerTransport> MihomoClient<T> {
         }
         let response: VersionResponse = self.json("GET", "/version", None)?;
         Ok(response.version)
+    }
+
+    /// Read the same metadata as the connection WebSocket, on demand.
+    pub fn connections(&mut self) -> Result<crate::domain::ConnectionSnapshot, AppError> {
+        let response: serde_json::Value = self.json("GET", "/connections", None)?;
+        super::realtime::parse_connections(&response.to_string())
+    }
+
+    /// Query the running core's resolver, not the OS resolver or an arbitrary URL.
+    pub fn query_dns(&mut self, host: &str, kind: &str) -> Result<serde_json::Value, AppError> {
+        if !["A", "AAAA", "CNAME"].contains(&kind) {
+            return Err(controller_error("Unsupported DNS query type"));
+        }
+        self.json(
+            "GET",
+            &format!("/dns/query?name={}&type={kind}", encode_path_segment(host)),
+            None,
+        )
     }
 
     pub fn mode(&mut self) -> Result<RunMode, AppError> {

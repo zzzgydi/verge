@@ -295,80 +295,82 @@ fn parse_event(topic: RealtimeTopic, text: &str) -> Result<RealtimeEvent, AppErr
         RealtimeTopic::Logs => serde_json::from_str(text)
             .map(RealtimeEvent::Log)
             .map_err(realtime_error),
-        RealtimeTopic::Connections => {
-            #[derive(Deserialize)]
-            #[serde(rename_all = "camelCase")]
-            struct ConnectionsMessage {
-                upload_total: u64,
-                download_total: u64,
-                connections: Option<Vec<RawConnection>>,
-            }
-            #[derive(Default, Deserialize)]
-            #[serde(rename_all = "camelCase", default)]
-            struct RawConnection {
-                id: String,
-                metadata: Metadata,
-                upload: u64,
-                download: u64,
-                start: String,
-                chains: Vec<String>,
-                rule: String,
-                rule_payload: String,
-            }
-            #[derive(Default, Deserialize)]
-            #[serde(rename_all = "camelCase", default)]
-            struct Metadata {
-                network: String,
-                #[serde(rename = "sourceIP")]
-                source_ip: String,
-                #[serde(deserialize_with = "deserialize_port")]
-                source_port: u16,
-                #[serde(rename = "destinationIP")]
-                destination_ip: String,
-                #[serde(deserialize_with = "deserialize_port")]
-                destination_port: u16,
-                host: String,
-                process: String,
-                process_path: String,
-            }
-            let message: ConnectionsMessage = serde_json::from_str(text).map_err(realtime_error)?;
-            let connections = message
-                .connections
-                .unwrap_or_default()
-                .into_iter()
-                .map(|connection| Connection {
-                    id: connection.id,
-                    network: connection.metadata.network,
-                    source: format_endpoint(
-                        &connection.metadata.source_ip,
-                        connection.metadata.source_port,
-                    ),
-                    destination: format_endpoint(
-                        &connection.metadata.destination_ip,
-                        connection.metadata.destination_port,
-                    ),
-                    host: connection.metadata.host,
-                    process: if connection.metadata.process.is_empty() {
-                        connection.metadata.process_path
-                    } else {
-                        connection.metadata.process
-                    },
-                    upload: connection.upload,
-                    download: connection.download,
-                    start: connection.start,
-                    rule: connection.rule,
-                    rule_payload: connection.rule_payload,
-                    chains: connection.chains,
-                })
-                .collect::<Vec<_>>();
-            Ok(RealtimeEvent::Connections(ConnectionSnapshot {
-                upload_total: message.upload_total,
-                download_total: message.download_total,
-                connection_count: connections.len(),
-                connections,
-            }))
-        }
+        RealtimeTopic::Connections => parse_connections(text).map(RealtimeEvent::Connections),
     }
+}
+
+pub(super) fn parse_connections(text: &str) -> Result<ConnectionSnapshot, AppError> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ConnectionsMessage {
+        upload_total: u64,
+        download_total: u64,
+        connections: Option<Vec<RawConnection>>,
+    }
+    #[derive(Default, Deserialize)]
+    #[serde(rename_all = "camelCase", default)]
+    struct RawConnection {
+        id: String,
+        metadata: Metadata,
+        upload: u64,
+        download: u64,
+        start: String,
+        chains: Vec<String>,
+        rule: String,
+        rule_payload: String,
+    }
+    #[derive(Default, Deserialize)]
+    #[serde(rename_all = "camelCase", default)]
+    struct Metadata {
+        network: String,
+        #[serde(rename = "sourceIP")]
+        source_ip: String,
+        #[serde(deserialize_with = "deserialize_port")]
+        source_port: u16,
+        #[serde(rename = "destinationIP")]
+        destination_ip: String,
+        #[serde(deserialize_with = "deserialize_port")]
+        destination_port: u16,
+        host: String,
+        process: String,
+        process_path: String,
+    }
+    let message: ConnectionsMessage = serde_json::from_str(text).map_err(realtime_error)?;
+    let connections = message
+        .connections
+        .unwrap_or_default()
+        .into_iter()
+        .map(|connection| Connection {
+            id: connection.id,
+            network: connection.metadata.network,
+            source: format_endpoint(
+                &connection.metadata.source_ip,
+                connection.metadata.source_port,
+            ),
+            destination: format_endpoint(
+                &connection.metadata.destination_ip,
+                connection.metadata.destination_port,
+            ),
+            host: connection.metadata.host,
+            process: if connection.metadata.process.is_empty() {
+                connection.metadata.process_path
+            } else {
+                connection.metadata.process
+            },
+            upload: connection.upload,
+            download: connection.download,
+            start: connection.start,
+            rule: connection.rule,
+            rule_payload: connection.rule_payload,
+            chains: connection.chains,
+        })
+        .collect::<Vec<_>>();
+    Ok(ConnectionSnapshot {
+        upload_total: message.upload_total,
+        download_total: message.download_total,
+        connection_count: connections.len(),
+        connections,
+    })
 }
 
 // Mihomo serializes metadata ports as decimal strings. Accept numeric ports
