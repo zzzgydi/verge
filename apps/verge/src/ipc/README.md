@@ -63,7 +63,10 @@ Responses identify the operation without echoing the request or its key. Only
 connections that request AI receive AI snapshots; snapshots are coalesced at the
 100 ms daemon tick, revisions suppress stale results, and final state remains
 queryable after reconnection. Disconnect cancels the active turn; the GUI never
-automatically repeats inference. Provider IO and Keychain work run on a worker.
+automatically repeats inference. Provider IO and config reads/writes run on a worker. AI keys stay in the local
+`settings.json` file under `ai` and are never returned in snapshots or settings
+exports. Shared settings writes lock and reload the file before updating their
+own fields. The AI worker reads only `settings.json.ai`.
 
 `ai_chat_ux_v2` adds `Retry`, which regenerates the last turn without appending
 a second user question. New GUIs gate this command. `AiSnapshot.operation` and

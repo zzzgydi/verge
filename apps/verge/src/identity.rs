@@ -24,13 +24,6 @@ impl AppChannel {
     pub fn id(self) -> &'static str {
         if self.is_dev() { "dev" } else { "stable" }
     }
-    pub fn ai_service(self) -> &'static str {
-        if self.is_dev() {
-            "com.zzzgydi.verge.dev.ai"
-        } else {
-            "com.zzzgydi.verge.ai"
-        }
-    }
     pub fn network_service(self) -> &'static str {
         if self.is_dev() {
             "com.zzzgydi.verge.dev.network"
@@ -110,10 +103,6 @@ mod tests {
         let stable = AppChannel::Stable.data_directory(home, None).unwrap();
         let dev = AppChannel::Dev.data_directory(home, None).unwrap();
         assert_ne!(stable, dev);
-        assert_ne!(
-            AppChannel::Stable.ai_service(),
-            AppChannel::Dev.ai_service()
-        );
         assert_ne!(
             AppChannel::Stable.network_service(),
             AppChannel::Dev.network_service()

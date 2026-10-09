@@ -1,4 +1,5 @@
 use super::*;
+use gpui_kit::component::{Icon, IconName};
 
 pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> Div {
     let lang = view.lang();
@@ -17,13 +18,22 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> Div {
             proposal.status == "pending" && proposal.expires_at > crate::ai::proposals::now();
         let confirming = view.ai_form.confirm_proposal.as_ref() == Some(&proposal.id);
         let mut card = panel(cx)
-            .gap_2()
+            .gap_3()
             .min_w_0()
-            .child(div().text_sm().font_semibold().child(format!(
-                "{} · {}",
-                tr(lang, "ai.proposal"),
-                proposal.target
-            )))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(Icon::new(IconName::FileText).size_4())
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_sm()
+                            .font_semibold()
+                            .whitespace_normal()
+                            .child(format!("{} · {}", tr(lang, "ai.proposal"), proposal.target)),
+                    ),
+            )
             .child(
                 div()
                     .text_xs()
@@ -46,16 +56,47 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> Div {
                     )),
             );
         for change in &proposal.changes {
-            card = card.child(div().text_sm().whitespace_normal().child(format!(
-                "{}\n{} → {}",
-                match change.path.as_str() {
-                    "Added Merge operations" => tr(lang, "ai.merge_operations"),
-                    "scope" => tr(lang, "ai.scope"),
-                    _ => &change.path,
-                },
-                change.before,
-                change.after
-            )));
+            let label = match change.path.as_str() {
+                "Added Merge operations" => tr(lang, "ai.merge_operations"),
+                "scope" => tr(lang, "ai.scope"),
+                _ => &change.path,
+            };
+            let mut change_view = v_flex()
+                .min_w_0()
+                .gap_2()
+                .p_3()
+                .rounded_lg()
+                .bg(cx.theme().muted)
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(label.to_owned()),
+                );
+            if !change.before.is_empty() {
+                change_view = change_view.child(
+                    div()
+                        .text_sm()
+                        .whitespace_normal()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(change.before.clone()),
+                );
+            }
+            change_view = change_view.child(
+                h_flex()
+                    .items_start()
+                    .gap_2()
+                    .child(Icon::new(IconName::ArrowRight).size_4().flex_shrink_0())
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_sm()
+                            .whitespace_normal()
+                            .child(change.after.clone()),
+                    ),
+            );
+            card = card.child(change_view);
         }
         card = card.child(
             div()
@@ -130,6 +171,17 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> Div {
                     })),
             );
             if confirming {
+                actions = actions.child(
+                    Button::new(("ai-proposal-cancel", index))
+                        .debug_selector(move || format!("ai-proposal-cancel-{index}"))
+                        .label(tr(lang, "common.cancel"))
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.ai_form.confirm_proposal = None;
+                            cx.notify();
+                        })),
+                );
                 card = card.child(
                     div()
                         .text_sm()

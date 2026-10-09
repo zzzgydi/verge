@@ -26,6 +26,8 @@ use serde::{Deserialize, Serialize};
 
 const MANIFEST_VERSION: u32 = 1;
 const SETTINGS_VERSION: u32 = 1;
+// Includes JSON escaping of the permitted 64 KiB PAC script and the AI section.
+const SETTINGS_FILE_LIMIT: usize = 1024 * 1024;
 const MERGE_RULE_LIMIT: usize = 64;
 const MERGE_KEY_LIMIT: usize = 128;
 /// 由运行物化注入的私有字段不允许出现在 merge 配置中,避免被误导为可覆盖。
@@ -236,17 +238,82 @@ fn yaml_kind(value: &serde_yaml::Value) -> &'static str {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-struct SettingsFile {
+#[derive(Serialize, Deserialize)]
+pub(crate) struct SettingsFile {
     version: u32,
     settings: ApplicationSettings,
     /// Local restart intent, omitted from portable settings exports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     system_proxy_enabled: Option<bool>,
+    // Decode AI only in the AI worker: malformed AI must not prevent core startup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ai: Option<serde_json::Value>,
+}
+
+impl Default for SettingsFile {
+    fn default() -> Self {
+        Self {
+            version: SETTINGS_VERSION,
+            settings: ApplicationSettings::default(),
+            system_proxy_enabled: None,
+            ai: None,
+        }
+    }
+}
+
+impl SettingsFile {
+    fn load(path: &Path) -> Result<Self, AppError> {
+        let bytes = match read_bounded(path, SETTINGS_FILE_LIMIT) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(_) => return Err(storage_error("Cannot read application settings")),
+        };
+        let file: Self = serde_json::from_slice(&bytes)
+            .map_err(|_| storage_error("Invalid application settings file"))?;
+        if file.version != SETTINGS_VERSION {
+            return Err(AppError::new(
+                ErrorCode::ValidationFailed,
+                format!("unsupported settings version {}", file.version),
+            ));
+        }
+        file.settings.validate()?;
+        Ok(file)
+    }
+
+    pub(crate) fn persist(&self, path: &Path) -> Result<(), AppError> {
+        let bytes = serde_json::to_vec_pretty(self).map_err(storage_error)?;
+        if bytes.len() > SETTINGS_FILE_LIMIT {
+            return Err(storage_error("Application settings file is too large"));
+        }
+        atomic_write_private(path, &bytes).map_err(storage_error)
+    }
+}
+
+/// Serialize read-modify-write operations from the daemon and AI worker.
+/// The stable lock file must not be renamed with settings.json.
+pub(crate) fn with_settings_file<T>(
+    directory: &Path,
+    update: impl FnOnce(&mut SettingsFile, &Path) -> Result<T, AppError>,
+) -> Result<T, AppError> {
+    use fs2::FileExt;
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::create_dir_all(directory).map_err(storage_error)?;
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .open(directory.join("settings.lock"))
+        .map_err(storage_error)?;
+    lock.lock_exclusive().map_err(storage_error)?;
+    let path = directory.join("settings.json");
+    let mut file = SettingsFile::load(&path)?;
+    update(&mut file, &path)
 }
 
 /// 明文设置导出:带版本号的 JSON,只含 ApplicationSettings 本身。
-/// ApplicationSettings 不含 Keychain 密钥、订阅地址或运行凭据,
+/// ApplicationSettings 不含 AI 密钥、订阅地址或运行凭据,
 /// 导出文件因此可以跨机器迁移。
 pub fn export_settings_json(settings: &ApplicationSettings) -> Result<Vec<u8>, AppError> {
     settings.validate()?;
@@ -254,18 +321,15 @@ pub fn export_settings_json(settings: &ApplicationSettings) -> Result<Vec<u8>, A
         version: SETTINGS_VERSION,
         settings: settings.clone(),
         system_proxy_enabled: None,
+        ai: None,
     })
     .map_err(storage_error)
 }
 
 /// 解析导入文件:版本必须匹配,字段走与 UpdateApplicationSettings 相同的校验。
 pub fn parse_settings_import(bytes: &[u8]) -> Result<ApplicationSettings, AppError> {
-    let file: SettingsFile = serde_json::from_slice(bytes).map_err(|error| {
-        AppError::new(
-            ErrorCode::ValidationFailed,
-            format!("invalid settings file: {error}"),
-        )
-    })?;
+    let file: SettingsFile = serde_json::from_slice(bytes)
+        .map_err(|_| AppError::new(ErrorCode::ValidationFailed, "invalid settings import file"))?;
     if file.version != SETTINGS_VERSION {
         return Err(AppError::new(
             ErrorCode::ValidationFailed,
@@ -331,25 +395,11 @@ pub struct FileSettingsStore {
 impl FileSettingsStore {
     pub fn open(data_directory: impl AsRef<Path>) -> Result<Self, AppError> {
         let path = data_directory.as_ref().join("settings.json");
-        let (settings, system_proxy_enabled) = if path.exists() {
-            let file: SettingsFile =
-                serde_json::from_slice(&fs::read(&path).map_err(storage_error)?)
-                    .map_err(storage_error)?;
-            if file.version != SETTINGS_VERSION {
-                return Err(AppError::new(
-                    ErrorCode::ValidationFailed,
-                    format!("unsupported settings version {}", file.version),
-                ));
-            }
-            file.settings.validate()?;
-            (file.settings, file.system_proxy_enabled.unwrap_or(false))
-        } else {
-            (ApplicationSettings::default(), false)
-        };
+        let file = SettingsFile::load(&path)?;
         Ok(Self {
             path,
-            settings,
-            system_proxy_enabled,
+            settings: file.settings,
+            system_proxy_enabled: file.system_proxy_enabled.unwrap_or(false),
         })
     }
 
@@ -358,7 +408,11 @@ impl FileSettingsStore {
     }
 
     pub fn update(&mut self, settings: ApplicationSettings) -> Result<(), AppError> {
-        self.persist(&settings, self.system_proxy_enabled)?;
+        settings.validate()?;
+        with_settings_file(self.path.parent().unwrap(), |file, path| {
+            file.settings = settings.clone();
+            file.persist(path)
+        })?;
         self.settings = settings;
         Ok(())
     }
@@ -369,21 +423,12 @@ impl FileSettingsStore {
 
     pub(crate) fn set_system_proxy_enabled(&mut self, enabled: bool) -> Result<(), AppError> {
         if self.system_proxy_enabled != enabled {
-            self.persist(&self.settings, enabled)?;
+            with_settings_file(self.path.parent().unwrap(), |file, path| {
+                file.system_proxy_enabled = Some(enabled);
+                file.persist(path)
+            })?;
             self.system_proxy_enabled = enabled;
         }
-        Ok(())
-    }
-
-    fn persist(&self, settings: &ApplicationSettings, enabled: bool) -> Result<(), AppError> {
-        settings.validate()?;
-        let file = SettingsFile {
-            version: SETTINGS_VERSION,
-            settings: settings.clone(),
-            system_proxy_enabled: Some(enabled),
-        };
-        let bytes = serde_json::to_vec_pretty(&file).map_err(storage_error)?;
-        atomic_write_private(&self.path, &bytes).map_err(storage_error)?;
         Ok(())
     }
 }

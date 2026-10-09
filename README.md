@@ -281,18 +281,21 @@ Application data is stored in `~/Library/Application Support/Verge` by default. 
 
 ## AI assistant
 
-Open **AI Assistant → Provider**, enter a Base URL including its API prefix (for
-example `/v1`), model ID and API key, save, then test the saved connection. Keys
-are stored with native macOS Keychain APIs; `ai.json` stores a random credential
-reference. Changing providers requires re-entering or clearing the key. Loopback
-HTTP endpoints can be used for local models.
+Open **Settings → AI Assistant**, enter a Base URL including its API prefix (for
+example `/v1`), model ID and API key. **Save** stores the settings without sending
+a model request. **Test connection** saves any changes first, then checks the
+connection. The key
+and provider configuration are stored in the `ai` field of the app's `settings.json`,
+with owner-only read/write permissions. Changing providers requires re-entering or
+clearing the key. Loopback HTTP endpoints can be used for local models. Settings
+exports exclude AI credentials.
 
 A question shares bounded runtime and group summaries, rule types/outbounds,
 connection counts and error counts. Full configurations, connection destinations
 and log text are omitted. Inference runs on a background worker; Stop, closing
 the window, or disconnecting cancels it. Conversation text stays in daemon memory
-until a full quit. Expand **Data sent and available actions** before sending to
-review the disclosure scope.
+until a full quit. Use the information button in the chat header to review the
+data sent and available actions.
 
 The assistant can probe up to six nodes per turn, explain static domain rules,
 run fresh Mihomo configuration validation, and prepare node, mode or global Merge

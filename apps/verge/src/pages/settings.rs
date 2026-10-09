@@ -1,4 +1,5 @@
 mod actions;
+mod ai;
 mod components;
 pub(crate) mod network;
 mod system_proxy;
@@ -39,6 +40,7 @@ fn helper_label(lang: Lang, view: &MainView) -> String {
 pub enum SettingsCategory {
     General,
     Network,
+    Ai,
     Updates,
     System,
 }
@@ -492,6 +494,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
             "settings.group.network",
             IconName::Network,
         ),
+        (SettingsCategory::Ai, "ai.title", IconName::Bot),
         (
             SettingsCategory::Updates,
             "settings.group.app_update",
@@ -510,6 +513,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         .border_color(cx.theme().border)
         .children(categories.map(|(category, label, icon)| {
             Button::new(format!("settings-category-{label}"))
+                .debug_selector(move || format!("settings-category-{label}"))
                 .label(tr(lang, label))
                 .icon(Icon::new(icon).size_4())
                 .small()
@@ -524,10 +528,23 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings_category = category;
+                    if category == SettingsCategory::Ai {
+                        this.dispatch(UiAction::Ai(crate::ai::AiCommand::GetState), cx);
+                    }
                     cx.notify();
                 }))
         }));
+    if view.settings_category == SettingsCategory::Ai {
+        return v_flex()
+            .h_full()
+            .gap_4()
+            .child(PageHeader::new(tr(lang, "settings.title")))
+            .child(tabs)
+            .child(ai::render(view, cx))
+            .into_any_element();
+    }
     let content = match view.settings_category {
+        SettingsCategory::Ai => unreachable!(),
         SettingsCategory::General => v_flex().gap_4().child(general_group),
         SettingsCategory::Network => v_flex().gap_4().child(proxy_group).child(network_group),
         SettingsCategory::Updates => v_flex().gap_4().child(core_group).child(app_update_group),

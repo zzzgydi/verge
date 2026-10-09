@@ -1,12 +1,7 @@
 use super::{Secret, error};
 use crate::domain::AppError;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::{
-    fs,
-    io::Write,
-    path::{Path, PathBuf},
-};
+use std::path::Path;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -76,60 +71,38 @@ pub(super) fn is_loopback(url: &reqwest::Url) -> bool {
 #[derive(Default, Serialize, Deserialize)]
 pub(super) struct SavedConfig {
     pub config: ProviderConfig,
-    pub credential: Option<String>,
+    #[serde(default)]
+    pub api_key: Secret,
 }
 
-pub(super) trait Credentials {
-    fn set(&self, account: &str, key: &str) -> Result<(), AppError>;
-    fn get(&self, account: &str) -> Result<Secret, AppError>;
-    fn delete(&self, account: &str) -> Result<(), AppError>;
+impl SavedConfig {
+    pub fn has_key(&self) -> bool {
+        !self.api_key.0.is_empty()
+    }
 }
 
-pub(super) struct Keychain(pub(crate) crate::identity::AppChannel);
-impl Credentials for Keychain {
-    fn set(&self, account: &str, key: &str) -> Result<(), AppError> {
-        security_framework::passwords::set_generic_password(
-            self.0.ai_service(),
-            account,
-            key.as_bytes(),
-        )
-        .map_err(|_| error("Unable to save AI key in Keychain"))
+fn validate_key(key: &Secret) -> Result<(), AppError> {
+    if key.0.len() > 4096 || key.0.chars().any(char::is_control) {
+        return Err(error("Invalid AI key"));
     }
-    fn get(&self, account: &str) -> Result<Secret, AppError> {
-        let bytes = security_framework::passwords::get_generic_password(
-            self.0.ai_service(),
-            account,
-        )
-        .map_err(|_| {
-            error("Unable to read AI key from Keychain; unlock Keychain or save the key again")
-        })?;
-        String::from_utf8(bytes)
-            .map(Secret)
-            .map_err(|_| error("Invalid AI key encoding"))
-    }
-    fn delete(&self, account: &str) -> Result<(), AppError> {
-        security_framework::passwords::delete_generic_password(self.0.ai_service(), account)
-            .map_err(|_| error("Unable to remove previous AI key from Keychain"))
-    }
+    Ok(())
+}
+
+fn decode(value: serde_json::Value) -> Result<SavedConfig, AppError> {
+    let saved: SavedConfig =
+        serde_json::from_value(value).map_err(|_| error("Invalid AI settings file"))?;
+    saved.config.clone().validated()?;
+    validate_key(&saved.api_key)?;
+    Ok(saved)
 }
 
 pub(super) fn load(directory: &Path) -> Result<SavedConfig, AppError> {
-    let path = directory.join("ai.json");
-    if !path.exists() {
-        return Ok(SavedConfig::default());
-    }
-    if fs::metadata(&path)
-        .map_err(|_| error("Cannot read AI settings"))?
-        .len()
-        > 8192
-    {
-        return Err(error("AI settings file is too large"));
-    }
-    let bytes = fs::read(path).map_err(|_| error("Cannot read AI settings"))?;
-    let saved: SavedConfig =
-        serde_json::from_slice(&bytes).map_err(|_| error("Invalid AI settings file"))?;
-    saved.config.clone().validated()?;
-    Ok(saved)
+    crate::config::with_settings_file(directory, |file, _| {
+        file.ai
+            .clone()
+            .map_or_else(|| Ok(SavedConfig::default()), decode)
+    })
+    .map_err(|_| error("Cannot load AI settings"))
 }
 
 pub(super) fn save(
@@ -138,148 +111,144 @@ pub(super) fn save(
     config: ProviderConfig,
     key: Secret,
     clear: bool,
-    credentials: &impl Credentials,
 ) -> Result<SavedConfig, AppError> {
     let config = config.validated()?;
-    if key.0.len() > 4096 || key.0.chars().any(char::is_control) {
-        return Err(error("Invalid AI key"));
-    }
+    validate_key(&key)?;
     if clear && !key.0.is_empty() {
         return Err(error("Choose either a new key or clear key"));
     }
-    let same_endpoint = config.base_url == previous.config.base_url;
-    if !same_endpoint && key.0.is_empty() && !clear && previous.credential.is_some() {
+    if key.0.is_empty()
+        && !clear
+        && config.base_url != previous.config.base_url
+        && previous.has_key()
+    {
         return Err(error(
             "Base URL changed: enter a key for the new provider or explicitly clear the old key",
         ));
     }
-    let new_account = if key.0.is_empty() {
-        None
-    } else {
-        let mut random = [0_u8; 16];
-        getrandom::fill(&mut random).map_err(|_| error("Cannot generate Keychain reference"))?;
-        Some(format!(
-            "{:x}-{:x}",
-            Sha256::digest(directory.as_os_str().as_encoded_bytes()),
-            Sha256::digest(random)
-        ))
-    };
-    if let Some(account) = &new_account {
-        credentials.set(account, &key.0)?;
-    }
     let saved = SavedConfig {
         config,
-        credential: new_account.clone().or_else(|| {
-            if clear || !same_endpoint {
-                None
-            } else {
-                previous.credential.clone()
-            }
-        }),
+        api_key: if clear {
+            Secret::default()
+        } else if key.0.is_empty() {
+            previous.api_key.clone()
+        } else {
+            key
+        },
     };
-    if persist(directory, &saved).is_err() {
-        if let Some(account) = new_account {
-            let _ = credentials.delete(&account);
-        }
-        return Err(error("Cannot save AI settings; previous settings retained"));
-    }
-    if let Some(old) = &previous.credential
-        && saved.credential.as_ref() != Some(old)
-    {
-        let _ = credentials.delete(old);
-    }
+    persist(directory, &saved)
+        .map_err(|_| error("Cannot save AI settings; previous settings retained"))?;
     Ok(saved)
 }
 
-fn persist(directory: &Path, saved: &SavedConfig) -> std::io::Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
-    fs::create_dir_all(directory)?;
-    let path: PathBuf = directory.join("ai.json.tmp");
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&path)?;
-    file.write_all(&serde_json::to_vec_pretty(saved)?)?;
-    file.sync_all()?;
-    fs::rename(path, directory.join("ai.json"))
+fn persist(directory: &Path, saved: &SavedConfig) -> Result<(), AppError> {
+    crate::config::with_settings_file(directory, |file, path| {
+        file.ai = Some(serde_json::to_value(saved).map_err(|_| error("Cannot save AI settings"))?);
+        file.persist(path)
+    })
 }
+
+#[cfg(test)]
+mod storage_tests;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[derive(Default)]
-    struct FakeKeys(std::cell::RefCell<std::collections::HashMap<String, String>>);
-    impl Credentials for FakeKeys {
-        fn set(&self, account: &str, key: &str) -> Result<(), AppError> {
-            self.0.borrow_mut().insert(account.into(), key.into());
-            Ok(())
-        }
-        fn get(&self, account: &str) -> Result<Secret, AppError> {
-            self.0
-                .borrow()
-                .get(account)
-                .cloned()
-                .map(Secret)
-                .ok_or_else(|| error("missing"))
-        }
-        fn delete(&self, account: &str) -> Result<(), AppError> {
-            self.0.borrow_mut().remove(account);
-            Ok(())
-        }
-    }
-    #[test]
-    fn settings_keep_keys_out_of_files_and_roll_back_failed_saves() {
-        let directory =
-            std::env::temp_dir().join(format!("verge-ai-settings-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&directory);
-        let keys = FakeKeys::default();
-        let config = ProviderConfig {
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    fn config() -> ProviderConfig {
+        ProviderConfig {
             base_url: "https://example.test/v1".into(),
             model: "fake".into(),
             ..Default::default()
-        };
+        }
+    }
+
+    #[test]
+    fn config_keys_survive_restarts_updates_and_clear() {
+        let directory = crate::config::tests::TestDir::new("ai-file-key");
         let saved = save(
-            &directory,
+            &directory.0,
             &SavedConfig::default(),
-            config.clone(),
+            config(),
             Secret("test-only-key".into()),
             false,
-            &keys,
         )
         .unwrap();
-        assert!(
-            !fs::read_to_string(directory.join("ai.json"))
-                .unwrap()
-                .contains("test-only-key")
-        );
+        let path = directory.0.join("settings.json");
+        let json: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(json["ai"]["api_key"], "test-only-key");
+        assert!(!directory.0.join("ai.json").exists());
+        assert!(json["ai"].get("credential").is_none());
         assert_eq!(
-            keys.get(saved.credential.as_ref().unwrap()).unwrap().0,
-            "test-only-key"
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
         );
-        let mut changed = config.clone();
-        changed.base_url = "https://other.test/v1".into();
-        assert!(save(&directory, &saved, changed, Secret::default(), false, &keys).is_err());
-        fs::create_dir(directory.join("ai.json.tmp")).unwrap();
+        let loaded = load(&directory.0).unwrap();
+        assert_eq!(loaded.api_key, saved.api_key);
+        assert!(loaded.has_key());
+        let mut changed = config();
+        changed.model = "another-model".into();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let updated = save(&directory.0, &loaded, changed, Secret::default(), false).unwrap();
+        assert_eq!(load(&directory.0).unwrap().api_key, saved.api_key);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let mut other = config();
+        other.base_url = "https://other.test/v1".into();
         assert!(
             save(
-                &directory,
-                &saved,
-                config.clone(),
-                Secret("replacement-key".into()),
-                false,
-                &keys
+                &directory.0,
+                &updated,
+                other.clone(),
+                Secret::default(),
+                false
             )
             .is_err()
         );
-        assert_eq!(keys.0.borrow().len(), 1);
-        assert_eq!(load(&directory).unwrap().credential, saved.credential);
-        fs::remove_dir(directory.join("ai.json.tmp")).unwrap();
-        let cleared = save(&directory, &saved, config, Secret::default(), true, &keys).unwrap();
-        assert!(cleared.credential.is_none());
-        assert!(keys.0.borrow().is_empty());
-        fs::remove_dir_all(directory).unwrap();
+        assert_eq!(load(&directory.0).unwrap().config.model, "another-model");
+        let replaced = save(
+            &directory.0,
+            &updated,
+            other.clone(),
+            Secret("replacement".into()),
+            false,
+        )
+        .unwrap();
+        assert_eq!(load(&directory.0).unwrap().api_key, replaced.api_key);
+        let cleared = save(&directory.0, &replaced, other, Secret::default(), true).unwrap();
+        assert!(!cleared.has_key());
+        assert!(!load(&directory.0).unwrap().has_key());
+    }
+
+    #[test]
+    fn failed_config_writes_leave_previous_file_and_no_key_temp() {
+        let directory = crate::config::tests::TestDir::new("ai-write-failure");
+        let saved = save(
+            &directory.0,
+            &SavedConfig::default(),
+            config(),
+            Secret("old-key".into()),
+            false,
+        )
+        .unwrap();
+        let path = directory.0.join("settings.json");
+        let before = fs::read(&path).unwrap();
+        fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o500)).unwrap();
+        let result = save(
+            &directory.0,
+            &saved,
+            config(),
+            Secret("new-key".into()),
+            false,
+        );
+        fs::set_permissions(&directory.0, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(result.is_err());
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 2);
+        assert!(!result.err().unwrap().message.contains("new-key"));
     }
     #[test]
     fn destination_is_explicit_and_secrets_cannot_enter_url() {

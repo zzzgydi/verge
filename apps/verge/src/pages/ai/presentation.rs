@@ -31,7 +31,7 @@ pub(super) fn safe_markdown(source: &str) -> String {
     result
 }
 
-pub(super) fn status_text(lang: Lang, status: &str) -> String {
+pub(crate) fn status_text(lang: Lang, status: &str) -> String {
     let key = match status {
         "Preparing" => "ai.preparing",
         "Receiving response" => "ai.responding",
@@ -39,7 +39,7 @@ pub(super) fn status_text(lang: Lang, status: &str) -> String {
         "Settings saved" => "ai.saved",
         "Testing provider" => "ai.testing",
         "Provider connection succeeded" => "ai.connected",
-        "Cancelled" => "ai.cancelled",
+        "Cancelled" => "ai.stopped",
         "Failed" => "ai.failed",
         s if s.starts_with("Reading ") => "ai.reading",
         s if s.starts_with("Waiting for model") => "ai.thinking",
@@ -48,7 +48,7 @@ pub(super) fn status_text(lang: Lang, status: &str) -> String {
     tr(lang, key).into()
 }
 
-pub(super) fn error_text(lang: Lang, error: &str) -> String {
+pub(crate) fn error_text(lang: Lang, error: &str) -> String {
     let key = if error == "Cancelled" {
         "ai.cancelled"
     } else if error.contains("401") || error.contains("403") {
@@ -94,7 +94,7 @@ pub(super) fn error_text(lang: Lang, error: &str) -> String {
         || error.contains("rounds")
     {
         "ai.error_config"
-    } else if error.contains("Keychain") || error.contains("key") || error.contains("credential") {
+    } else if error.contains("key") || error.contains("credential") {
         "ai.error_key"
     } else {
         "ai.error_generic"

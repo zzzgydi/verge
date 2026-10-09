@@ -24,6 +24,37 @@ impl Lang {
 
 /// 文案表：`(key, zh-CN, en)`。key 按页面/用途命名。
 const ENTRIES: &[(&str, &str, &str)] = &[
+    ("ai.close_details", "关闭说明", "Close details"),
+    ("ai.starter_network_title", "排查网络", "Network check"),
+    ("ai.starter_node_title", "检查节点", "Check nodes"),
+    ("ai.starter_config_title", "检查配置", "Review config"),
+    ("ai.test_connection", "测试连接", "Test connection"),
+    (
+        "ai.test_hint",
+        "使用当前填写的配置测试，有修改时先保存。",
+        "Test the current form; changes are saved first.",
+    ),
+    ("ai.unsaved", "有未保存的修改", "Unsaved changes"),
+    ("ai.saving", "正在保存…", "Saving…"),
+    ("ai.loading_settings", "正在读取设置…", "Loading settings…"),
+    ("ai.stopping", "正在停止…", "Stopping…"),
+    ("ai.stopped", "已停止", "Stopped"),
+    ("ai.undo_clear_key", "撤销清除", "Undo removal"),
+    (
+        "ai.key_will_clear",
+        "保存后清除密钥。",
+        "The key will be removed when you save.",
+    ),
+    (
+        "ai.key_keep_hint",
+        "已保存，留空可保留现有密钥。",
+        "Saved. Leave blank to keep the current key.",
+    ),
+    (
+        "ai.key_optional",
+        "无须认证的本地服务可以留空。",
+        "Leave blank for local services without authentication.",
+    ),
     ("profiles.edit_details", "编辑资料", "Edit details"),
     ("profiles.script", "配置脚本", "Profile script"),
     ("profiles.global_script", "全局脚本", "Global script"),
@@ -183,6 +214,7 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("ai.source_probe", "节点测速", "Node probes"),
     ("ai.source_explain", "规则解释", "Rule explanation"),
     ("ai.error_details", "技术详情", "Technical details"),
+    ("ai.reload_settings", "重新加载配置", "Reload settings"),
     (
         "ai.welcome",
         "有什么网络问题需要排查？",
@@ -200,15 +232,15 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ),
     (
         "ai.connect_body",
-        "先连接你使用的模型。设置完成后，就可以在这里直接提问。",
-        "Connect your model first, then ask a question here.",
+        "先在设置页配置你使用的模型，完成后就可以在这里直接提问。",
+        "Configure your model in Settings, then ask a question here.",
     ),
-    ("ai.connect", "连接模型", "Connect a model"),
+    ("ai.connect", "前往设置", "Open Settings"),
     ("ai.provider_title", "连接你的模型", "Connect your model"),
     (
         "ai.provider_body",
-        "支持兼容 OpenAI 的服务。密钥保存在系统钥匙串中。",
-        "Use an OpenAI-compatible service. Keys are stored in the system Keychain.",
+        "支持兼容 OpenAI 的服务。API Key 保存在本机应用设置中。",
+        "Use an OpenAI-compatible service. The API key is saved in local app settings.",
     ),
     (
         "ai.base",
@@ -220,15 +252,8 @@ const ENTRIES: &[(&str, &str, &str)] = &[
         "填写服务商提供的 API 地址，通常以 /v1 结尾；无需添加 /chat/completions。",
         "Use the API base address, usually ending in /v1; omit /chat/completions.",
     ),
-    ("ai.save_test", "保存并测试连接", "Save and test connection"),
     ("ai.back", "返回对话", "Back to chat"),
     ("ai.advanced", "高级设置", "Advanced settings"),
-    ("ai.advanced_hide", "收起高级设置", "Hide advanced settings"),
-    (
-        "ai.key_remove_pending",
-        "保存时移除密钥 · 点击撤销",
-        "Remove key on save · click to undo",
-    ),
     (
         "ai.data_scope",
         "发送的数据与操作范围",
@@ -294,11 +319,7 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("ai.complete", "回答完成", "Response complete"),
     ("ai.saved", "设置已保存", "Settings saved"),
     ("ai.testing", "正在测试连接…", "Testing the connection…"),
-    (
-        "ai.connected",
-        "连接成功，可以返回对话开始提问。",
-        "Connected. Return to chat to ask a question.",
-    ),
+    ("ai.connected", "连接成功", "Connection successful"),
     (
         "ai.cancelled",
         "已停止，已收到的内容保留在上方。",
@@ -386,8 +407,8 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ),
     (
         "ai.error_key",
-        "密钥未能保存或读取，请检查钥匙串权限；更换服务地址时需重新填写密钥。",
-        "Could not save or read the key. Check Keychain access; changing the address requires a new key.",
+        "请检查 API Key；更换服务地址时需重新填写密钥，或清除旧密钥。",
+        "Check the API key. When changing the service address, enter a new key or clear the old one.",
     ),
     (
         "ai.error_generic",

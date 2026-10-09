@@ -9027,7 +9027,6 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "percent-encoding",
  "reqwest",
- "security-framework",
  "serde",
  "serde_json",
  "serde_yaml",

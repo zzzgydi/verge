@@ -122,7 +122,6 @@ fn ai_send_and_stop_remain_visible_and_dispatch_from_buttons(cx: &mut TestAppCon
                 model: "fake".into(),
                 ..Default::default()
             };
-            view.ai_form.settings_open = false;
             view.ai_form.prompt.update(cx, |input, cx| {
                 input.set_value("为什么无法联网？", window, cx)
             });

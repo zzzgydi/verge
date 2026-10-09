@@ -978,14 +978,15 @@ impl UiState {
 
     pub fn apply_response(&mut self, response: UiResponse) {
         match response {
-            UiResponse::Ai { result, .. } => match result {
-                Ok(snapshot) => {
-                    if snapshot.revision >= self.ai.revision {
-                        self.ai = snapshot;
-                    }
+            UiResponse::Ai { result, .. } => {
+                // AI errors belong to the conversation or provider form, where
+                // MainView::ai_response supplies the appropriate recovery action.
+                if let Ok(snapshot) = result
+                    && snapshot.revision >= self.ai.revision
+                {
+                    self.ai = snapshot;
                 }
-                Err(error) => self.set_error(error),
-            },
+            }
             UiResponse::Profile { request, result } => match result {
                 Ok(result) => self.apply_profile(&request, result),
                 Err(error) => self.fail(&UiRequest::Profile(request), error),

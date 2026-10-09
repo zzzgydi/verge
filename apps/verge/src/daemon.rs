@@ -254,7 +254,7 @@ impl Backend {
         let mut backend = Self {
             geo_job_running: false,
             tun_lease: None,
-            ai: crate::ai::AiService::for_channel(config.data_dir.clone(), config.channel),
+            ai: crate::ai::AiService::new(config.data_dir.clone()),
             ai_connections: Default::default(),
             ai_connections_sample: None,
             ai_recent_errors: Default::default(),

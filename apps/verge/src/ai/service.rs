@@ -1,8 +1,4 @@
-use super::{
-    settings::{self, Credentials, Keychain},
-    tools::ToolContext,
-    *,
-};
+use super::{settings, tools::ToolContext, *};
 use std::{
     path::PathBuf,
     sync::{
@@ -18,16 +14,11 @@ pub struct AiService {
     directory: PathBuf,
     loaded: bool,
     proposals: Arc<Mutex<proposals::Proposals>>,
-    channel: crate::identity::AppChannel,
 }
 
 impl AiService {
     pub fn new(directory: PathBuf) -> Self {
-        Self::for_channel(directory, crate::identity::AppChannel::Stable)
-    }
-    pub fn for_channel(directory: PathBuf, channel: crate::identity::AppChannel) -> Self {
         Self {
-            channel,
             state: Arc::new(Mutex::new(AiSnapshot::default())),
             cancelled: Arc::new(AtomicBool::new(false)),
             directory,
@@ -87,7 +78,10 @@ impl AiService {
             return Ok(self.snapshot());
         }
         if matches!(command, AiCommand::GetState) && self.loaded {
-            return Ok(self.snapshot());
+            let state = self.snapshot();
+            if state.busy || state.operation != Some(AiOperation::State) || state.error.is_none() {
+                return Ok(state);
+            }
         }
         {
             let mut state = self.state.lock().unwrap();
@@ -150,7 +144,6 @@ impl AiService {
         let cancel = self.cancelled.clone();
         let shared = self.state.clone();
         let directory = self.directory.clone();
-        let credentials = Keychain(self.channel);
         let proposals = self.proposals.clone();
         std::thread::spawn(move || {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
@@ -162,24 +155,17 @@ impl AiService {
                         clear_key,
                     } = command
                     {
-                        saved = settings::save(
-                            &directory,
-                            &saved,
-                            config,
-                            api_key,
-                            clear_key,
-                            &credentials,
-                        )?;
+                        saved = settings::save(&directory, &saved, config, api_key, clear_key)?;
                         let mut state = shared.lock().unwrap();
+                        state.has_key = saved.has_key();
                         state.config = saved.config;
-                        state.has_key = saved.credential.is_some();
                         state.activity = "Settings saved".into();
                         return Ok(());
                     }
                     {
                         let mut state = shared.lock().unwrap();
                         state.config = saved.config.clone();
-                        state.has_key = saved.credential.is_some();
+                        state.has_key = saved.has_key();
                         state.revision += 1;
                     }
                     if matches!(command, AiCommand::GetState) {
@@ -187,10 +173,7 @@ impl AiService {
                         return Ok(());
                     }
                     let config = saved.config.validated()?;
-                    let key = match saved.credential {
-                        Some(account) => credentials.get(&account)?,
-                        None => Secret::default(),
-                    };
+                    let key = saved.api_key;
                     if cancel.load(Ordering::Relaxed) {
                         return Err(error("Cancelled"));
                     }
@@ -232,7 +215,7 @@ impl AiService {
                         state.revision += 1;
                         history
                     };
-                    let session = context.map(|context| {
+                    let session = context.filter(|_| !test).map(|context| {
                         Arc::new(Mutex::new(diagnostics::Session::new(
                             context,
                             evidence.clone(),
@@ -295,13 +278,22 @@ impl AiService {
             if let Err(error) = result {
                 let was_cancelled = error.message == "Cancelled";
                 cancel.store(true, Ordering::Relaxed);
-                proposals.lock().unwrap().clear();
-                for p in &mut state.proposals {
-                    if p.status == "pending" {
-                        p.status = "expired".into();
+                if matches!(
+                    state.operation,
+                    Some(AiOperation::Start | AiOperation::Retry)
+                ) {
+                    proposals.lock().unwrap().clear();
+                    for p in &mut state.proposals {
+                        if p.status == "pending" {
+                            p.status = "expired".into();
+                        }
                     }
                 }
-                state.error = Some(error.message);
+                state.error = if was_cancelled {
+                    None
+                } else {
+                    Some(error.message)
+                };
                 state.activity = if was_cancelled { "Cancelled" } else { "Failed" }.into();
             }
             state.busy = false;
@@ -331,6 +323,211 @@ fn retry_turn(state: &mut AiSnapshot) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn wait_idle(service: &AiService) -> AiSnapshot {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let state = service.snapshot();
+            if !state.busy {
+                return state;
+            }
+            assert!(std::time::Instant::now() < deadline, "AI worker stalled");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn failed_initial_settings_load_can_be_retried() {
+        let directory = crate::config::tests::TestDir::new("ai-load-retry");
+        let path = directory.0.join("settings.json");
+        std::fs::write(&path, b"invalid json").unwrap();
+        let mut service = AiService::new(directory.0.clone());
+        service.handle(AiCommand::GetState, None).unwrap();
+        assert!(wait_idle(&service).error.is_some());
+        std::fs::remove_file(path).unwrap();
+        service.handle(AiCommand::GetState, None).unwrap();
+        assert!(wait_idle(&service).error.is_none());
+    }
+
+    #[test]
+    fn stopping_provider_test_is_not_an_error_and_preserves_the_chat() {
+        use std::io::Read;
+        use std::net::TcpListener;
+        use std::time::Duration;
+        let directory = crate::config::tests::TestDir::new("ai-stop-test");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let config = ProviderConfig {
+            base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
+            model: "fake".into(),
+            timeout_seconds: 5,
+            ..Default::default()
+        };
+        settings::save(
+            &directory.0,
+            &settings::SavedConfig::default(),
+            config,
+            Secret::default(),
+            false,
+        )
+        .unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut bytes = [0; 4096];
+            assert!(socket.read(&mut bytes).unwrap() > 0);
+            tx.send(()).unwrap();
+            loop {
+                match socket.read(&mut bytes) {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+        });
+        let mut service = AiService::new(directory.0.clone());
+        let evidence = vec![tools::Evidence {
+            id: "R1-E1".into(),
+            source: "runtime_status".into(),
+            captured_at: 1,
+            data: serde_json::json!({"mode":"Rule"}),
+        }];
+        let proposal = proposals::Proposal {
+            id: "existing-proposal".into(),
+            run_id: 1,
+            digest: "bound-digest".into(),
+            kind: "mode".into(),
+            target: "Direct".into(),
+            expires_at: proposals::now() + 300,
+            status: "pending".into(),
+            changes: vec![],
+            evidence_id: "R1-E1".into(),
+            result: None,
+        };
+        {
+            let mut state = service.state.lock().unwrap();
+            state.messages = vec![ChatMessage {
+                role: "assistant".into(),
+                text: "Existing answer".into(),
+                evidence: evidence.clone(),
+            }];
+            state.evidence = evidence.clone();
+            state.proposals = vec![proposal.clone()];
+        }
+        let context = ToolContext {
+            socket: directory.0.join("unused.sock"),
+            services: vec![],
+            recovery_path: directory.0.join("unused-recovery.json"),
+            config_selected: false,
+            connections: None,
+            errors: Default::default(),
+            config: None,
+        };
+        service
+            .handle(AiCommand::TestProvider, Some(context))
+            .unwrap();
+        rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        service.handle(AiCommand::Cancel, None).unwrap();
+        let state = wait_idle(&service);
+        server.join().unwrap();
+        assert!(state.error.is_none());
+        assert_eq!(state.activity, "Cancelled");
+        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.messages[0].text, "Existing answer");
+        assert_eq!(state.messages[0].evidence, evidence);
+        assert_eq!(state.evidence, evidence);
+        assert_eq!(state.proposals, vec![proposal]);
+    }
+
+    #[test]
+    fn saved_config_key_is_used_after_restart_without_entering_snapshots() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::time::{Duration, Instant};
+        let directory = crate::config::tests::TestDir::new("ai-service-file-key");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let config = ProviderConfig {
+            base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
+            model: "local-test".into(),
+            ..Default::default()
+        };
+        let mut service = AiService::new(directory.0.clone());
+        service
+            .handle(
+                AiCommand::SaveConfig {
+                    config,
+                    api_key: Secret("test-file-key".into()),
+                    clear_key: false,
+                },
+                None,
+            )
+            .unwrap();
+        let saved = wait_idle(&service);
+        assert!(saved.error.is_none());
+        assert!(saved.has_key);
+        drop(service);
+        let mut service = AiService::new(directory.0.clone());
+        service.handle(AiCommand::GetState, None).unwrap();
+        let loaded = wait_idle(&service);
+        assert!(loaded.has_key);
+        assert!(
+            !serde_json::to_string(&loaded)
+                .unwrap()
+                .contains("test-file-key")
+        );
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut socket = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "Provider was not called");
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(e) => panic!("{e}"),
+                }
+            };
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            socket
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut header = Vec::new();
+            while !header.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                socket.read_exact(&mut byte).unwrap();
+                header.push(byte[0]);
+            }
+            let header = String::from_utf8(header).unwrap().to_ascii_lowercase();
+            assert!(header.starts_with("post /v1/chat/completions "));
+            assert!(
+                header
+                    .lines()
+                    .any(|line| line == "authorization: bearer test-file-key")
+            );
+            let length: usize = header
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length: "))
+                .unwrap()
+                .parse()
+                .unwrap();
+            let mut body = vec![0; length];
+            socket.read_exact(&mut body).unwrap();
+            assert!(!String::from_utf8(body).unwrap().contains("test-file-key"));
+            let body = "data: {\"choices\":[{\"delta\":{\"content\":\"OK\"},\"finish_reason\":\"stop\"}]}\r\n\r\n";
+            write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+        });
+        service.handle(AiCommand::TestProvider, None).unwrap();
+        let tested = wait_idle(&service);
+        server.join().unwrap();
+        assert!(tested.error.is_none(), "{:?}", tested.error);
+        assert_eq!(tested.activity, "Provider connection succeeded");
+        assert!(!format!("{tested:?}").contains("test-file-key"));
+    }
+
     #[test]
     fn retry_preserves_prior_turns_and_one_current_question() {
         let mut state = AiSnapshot::default();

@@ -731,7 +731,12 @@ impl MainView {
             Page::Profiles => self.dispatch(UiAction::RefreshProfiles, cx),
             Page::Rules => self.dispatch(UiAction::RefreshRules, cx),
             Page::Proxies => self.dispatch(UiAction::RefreshProxies, cx),
-            Page::Settings => self.dispatch(UiAction::RefreshSettings, cx),
+            Page::Settings => {
+                self.dispatch(UiAction::RefreshSettings, cx);
+                if self.settings_category == pages::settings::SettingsCategory::Ai {
+                    self.dispatch(UiAction::Ai(crate::ai::AiCommand::GetState), cx);
+                }
+            }
             Page::Ai => self.dispatch(UiAction::Ai(crate::ai::AiCommand::GetState), cx),
             Page::Logs => self.dispatch(UiAction::RefreshLogSettings, cx),
             Page::Connections => {}
@@ -745,7 +750,12 @@ impl MainView {
             Page::Proxies => self.dispatch(UiAction::RefreshProxies, cx),
             Page::Profiles => self.dispatch(UiAction::RefreshProfiles, cx),
             Page::Rules => self.dispatch(UiAction::RefreshRules, cx),
-            Page::Settings => self.dispatch(UiAction::RefreshSettings, cx),
+            Page::Settings => {
+                self.dispatch(UiAction::RefreshSettings, cx);
+                if self.settings_category == pages::settings::SettingsCategory::Ai {
+                    self.dispatch(UiAction::Ai(crate::ai::AiCommand::GetState), cx);
+                }
+            }
             Page::Ai => self.dispatch(UiAction::Ai(crate::ai::AiCommand::GetState), cx),
             Page::Logs => self.dispatch(UiAction::RefreshLogSettings, cx),
             Page::Connections => {}
@@ -861,7 +871,9 @@ impl Render for MainView {
         let content_area: AnyElement = if matches!(
             page,
             Page::Connections | Page::Logs | Page::Proxies | Page::Rules | Page::Ai
-        ) {
+        ) || (page == Page::Settings
+            && self.settings_category == pages::settings::SettingsCategory::Ai)
+        {
             v_flex()
                 .id("page-content")
                 .flex_1()

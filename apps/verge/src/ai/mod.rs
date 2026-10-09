@@ -1,4 +1,4 @@
-//! A bounded diagnostic assistant with separately confirmed proposals. Network and Keychain work run off the daemon loop.
+//! A bounded diagnostic assistant with separately confirmed proposals. Network and configuration work run off the daemon loop.
 pub mod diagnostics;
 pub mod proposals;
 mod provider;
