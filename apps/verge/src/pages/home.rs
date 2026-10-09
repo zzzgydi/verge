@@ -57,6 +57,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                         .size_10()
                         .rounded_xl()
                         .bg(cx.theme().accent)
+                        .text_color(cx.theme().primary)
                         .flex()
                         .items_center()
                         .justify_center()

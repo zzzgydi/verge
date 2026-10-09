@@ -69,6 +69,7 @@ impl MainView {
                             .rounded_lg()
                             .border_1()
                             .border_color(gpui_kit::transparent_black())
+                            .text_color(cx.theme().foreground)
                             .accessibility_label(tr(lang, label))
                             .child(
                                 h_flex()
@@ -96,6 +97,7 @@ impl MainView {
                             .when(self.state.page == page, |button| {
                                 button
                                     .bg(cx.theme().list_active)
+                                    .text_color(cx.theme().accent_foreground)
                                     .border_color(cx.theme().list_active_border)
                             })
                             .tooltip(tr(lang, label))
@@ -129,7 +131,7 @@ impl MainView {
                                     .path("branding/logo.svg")
                                     .size_7()
                                     .flex_shrink_0()
-                                    .text_color(cx.theme().foreground),
+                                    .text_color(cx.theme().primary),
                             )
                             .child(
                                 div()

@@ -353,11 +353,7 @@ fn card(group: usize, member: usize, page: &ProxyPage, cx: &mut Context<ProxyPag
 }
 
 fn selection_color(cx: &App) -> Hsla {
-    if cx.theme().is_dark() {
-        rgb(0xe1e5f2).into()
-    } else {
-        rgb(0x4b5f86).into()
-    }
+    cx.theme().primary
 }
 
 /// Text and color are derived together, including while the pointer stays on the button.

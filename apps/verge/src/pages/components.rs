@@ -1,7 +1,7 @@
 //! Value-like visual components; retained behavior belongs to feature entities.
 use crate::appearance::metrics;
 use gpui_kit::component::{ActiveTheme as _, StyledExt as _, h_flex, v_flex};
-use gpui_kit::*;
+use gpui_kit::{prelude::FluentBuilder as _, *};
 
 #[derive(IntoElement)]
 pub struct Metric {
@@ -116,6 +116,12 @@ pub fn mode_selector(
                 .h(px(metrics::CONTROL))
                 .disabled(view.state.mode.is_none() || view.is_pending(&["mode"]))
                 .selected(view.state.mode == Some(mode))
+                .when(view.state.mode == Some(mode), |button| {
+                    button
+                        .bg(cx.theme().list_active)
+                        .text_color(cx.theme().accent_foreground)
+                        .border_color(cx.theme().list_active_border)
+                })
         }))
         .on_click(cx.listener(|this, clicked: &Vec<usize>, _, cx| {
             if let Some(&ix) = clicked.first() {
