@@ -625,9 +625,7 @@ impl Backend {
                 self.persist_settings(&settings)?;
             }
             AppCommand::UpdateSystemProxySettings { settings } => {
-                let mut latest = self.settings.get().clone();
-                latest.system_proxy = settings.clone();
-                self.persist_system_settings(&latest)?;
+                self.update_system_proxy_settings(settings)?;
             }
             AppCommand::ExportApplicationSettings { destination } => {
                 let path = self.export_application_settings(destination)?;

@@ -1,6 +1,7 @@
 use super::*;
 use crate::domain::{SystemProxySettings, SystemProxyTarget};
 use crate::platform::PacServer;
+use std::path::Path;
 
 #[derive(Default)]
 pub(super) struct ProxySession {
@@ -172,6 +173,46 @@ impl Backend {
         )
     }
 
+    /// Shared by Settings and AI. Only the proxy section changes; no login/hotkey calls.
+    pub(super) fn update_system_proxy_settings(
+        &mut self,
+        settings: &SystemProxySettings,
+    ) -> Result<(), PreferenceFailure> {
+        if self.config.channel.is_dev() {
+            return Err(PreferenceFailure::Rejected(
+                crate::identity::dev_restriction(),
+            ));
+        }
+        settings.validate().map_err(PreferenceFailure::Rejected)?;
+        let had_pac = self.proxy_session.pac.is_some();
+        let target = if self.proxy_session.target.is_some() {
+            Some(
+                self.proxy_target(settings)
+                    .map_err(PreferenceFailure::Rejected)?,
+            )
+        } else {
+            None
+        };
+        let result = save_proxy_preferences(
+            &mut self.system_proxy,
+            &mut self.settings,
+            settings,
+            target.as_ref(),
+            &self.config.data_dir,
+        );
+        if result.is_ok() {
+            self.proxy_session.target = target;
+            self.refresh_pac_script();
+            self.proxy_session.last_guard = Some(Instant::now());
+            if !settings.pac_mode {
+                self.proxy_session.pac = None;
+            }
+        } else if !had_pac && !matches!(result, Err(PreferenceFailure::RecoveryFailed(_))) {
+            self.proxy_session.pac = None;
+        }
+        result
+    }
+
     /// Apply settings as one transaction with the native login item and proxy state.
     pub(super) fn persist_system_settings(
         &mut self,
@@ -234,6 +275,96 @@ impl Backend {
         }
         Ok(())
     }
+}
+
+#[derive(Debug)]
+pub(super) enum PreferenceFailure {
+    Rejected(AppError),
+    Restored(AppError),
+    RecoveryFailed(AppError),
+}
+impl From<PreferenceFailure> for AppError {
+    fn from(failure: PreferenceFailure) -> Self {
+        match failure {
+            PreferenceFailure::Rejected(error) => error,
+            PreferenceFailure::Restored(mut error) => {
+                error
+                    .message
+                    .push_str("; previous proxy settings restored and verified");
+                error
+            }
+            PreferenceFailure::RecoveryFailed(mut error) => {
+                error.message.push_str("; proxy settings recovery failed");
+                error
+            }
+        }
+    }
+}
+
+fn save_proxy_preferences<P: crate::platform::SystemProxyPlatform>(
+    proxy: &mut PlatformSystemProxy<P>,
+    store: &mut FileSettingsStore,
+    settings: &SystemProxySettings,
+    target: Option<&SystemProxyTarget>,
+    directory: &Path,
+) -> Result<(), PreferenceFailure> {
+    settings.validate().map_err(PreferenceFailure::Rejected)?;
+    let previous = store.get().clone();
+    let saved_enabled = store.system_proxy_enabled();
+    let persisted = FileSettingsStore::open(directory).map_err(PreferenceFailure::Rejected)?;
+    if persisted.get() != &previous || persisted.system_proxy_enabled() != saved_enabled {
+        return Err(PreferenceFailure::Rejected(crate::ai::error(
+            "Saved proxy preferences changed",
+        )));
+    }
+    let snapshot = target
+        .map(|_| proxy.state())
+        .transpose()
+        .map_err(PreferenceFailure::Rejected)?;
+    let mut next = previous.clone();
+    *next.system_proxy = settings.clone();
+    let result = (|| {
+        if let Some(target) = target {
+            proxy.configure(target)?;
+            if !target.matches(&proxy.state()?) {
+                return Err(crate::ai::error("Proxy settings verification failed"));
+            }
+        }
+        store.update(next.clone())?;
+        let saved = FileSettingsStore::open(directory)?;
+        if saved.get() != &next || saved.system_proxy_enabled() != saved_enabled {
+            return Err(crate::ai::error(
+                "Saved proxy preferences verification failed",
+            ));
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        // Attempt both recoveries even when one fails. Existing recovery records stay intact.
+        let disk = if store.get() != &previous {
+            store.update(previous.clone())
+        } else {
+            Ok(())
+        };
+        let system = snapshot
+            .as_ref()
+            .map(|state| proxy.restore_snapshot(state))
+            .transpose();
+        let verified = disk.is_ok()
+            && system.is_ok()
+            && FileSettingsStore::open(directory).is_ok_and(|saved| {
+                saved.get() == &previous && saved.system_proxy_enabled() == saved_enabled
+            })
+            && snapshot
+                .as_ref()
+                .is_none_or(|state| proxy.state().is_ok_and(|actual| actual == *state));
+        return Err(if verified {
+            PreferenceFailure::Restored(error)
+        } else {
+            PreferenceFailure::RecoveryFailed(error)
+        });
+    }
+    Ok(())
 }
 
 fn should_resume_proxy(
@@ -310,6 +441,10 @@ mod tests {
         recovery: Option<SystemProxyState>,
         fail_configure: bool,
         fail_disable: bool,
+        fail_restore: bool,
+        ignore_configure: bool,
+        fail_after_configure: bool,
+        sabotage_settings: Option<PathBuf>,
     }
     struct TestProxy(Arc<Mutex<FakeProxy>>);
     impl SystemProxyPlatform for TestProxy {
@@ -321,6 +456,9 @@ mod tests {
             let mut p = self.0.lock().unwrap();
             if p.fail_configure {
                 return Err(AppError::new(ErrorCode::PlatformFailed, "configure failed"));
+            }
+            if p.ignore_configure {
+                return Ok(p.current.clone());
             }
             if p.recovery.is_none() {
                 p.recovery = Some(p.current.clone());
@@ -348,6 +486,16 @@ mod tests {
                 }
             }
             p.current.recovery_pending = true;
+            if let Some(path) = &p.sabotage_settings {
+                fs::rename(path, path.with_extension("saved-test")).unwrap();
+                fs::create_dir(path).unwrap();
+            }
+            if p.fail_after_configure {
+                return Err(AppError::new(
+                    ErrorCode::PlatformFailed,
+                    "partial configure failure",
+                ));
+            }
             Ok(p.current.clone())
         }
         fn state(&mut self, _: &[String]) -> Result<SystemProxyState, AppError> {
@@ -357,7 +505,15 @@ mod tests {
             self.0.lock().unwrap().recovery.is_some()
         }
         fn restore_snapshot(&mut self, state: &SystemProxyState) -> Result<(), AppError> {
-            self.0.lock().unwrap().current = state.clone();
+            let mut proxy = self.0.lock().unwrap();
+            if proxy.fail_restore {
+                return Err(AppError::new(ErrorCode::PlatformFailed, "restore failed"));
+            }
+            proxy.current = state.clone();
+            if let Some(path) = proxy.sabotage_settings.take() {
+                fs::remove_dir(&path).unwrap();
+                fs::rename(path.with_extension("saved-test"), path).unwrap();
+            }
             Ok(())
         }
         fn recover_pending(&mut self) -> Result<SystemProxyState, AppError> {
@@ -425,11 +581,103 @@ mod tests {
             recovery: None,
             fail_configure: false,
             fail_disable: false,
+            fail_restore: false,
+            ignore_configure: false,
+            fail_after_configure: false,
+            sabotage_settings: None,
         }));
         (
             PlatformSystemProxy::new(TestProxy(state.clone()), vec!["Wi-Fi".into()]).unwrap(),
             state,
         )
+    }
+
+    #[test]
+    fn proxy_preference_changes_apply_persist_verify_and_restore() {
+        let dir = crate::config::tests::TestDir::new("ai-proxy-preferences");
+        let mut settings = FileSettingsStore::open(&dir.0).unwrap();
+        let (mut proxy, state) = fake_proxy();
+        let old_target = SystemProxyTarget::Manual {
+            endpoint: crate::domain::ProxyEndpoint::new("127.0.0.1", 7897).unwrap(),
+            bypass: settings.get().system_proxy.effective_bypass(),
+        };
+        enable_and_remember(&mut proxy, &mut settings, &old_target).unwrap();
+        let mut next = (*settings.get().system_proxy).clone();
+        next.bypass.push("*.example.com".into());
+        next.guard_enabled = true;
+        next.guard_interval_secs = 12;
+        let target = SystemProxyTarget::Manual {
+            endpoint: next.endpoint(7897).unwrap(),
+            bypass: next.effective_bypass(),
+        };
+        save_proxy_preferences(&mut proxy, &mut settings, &next, Some(&target), &dir.0).unwrap();
+        assert!(target.matches(&proxy.state().unwrap()));
+        assert_eq!(
+            *FileSettingsStore::open(&dir.0).unwrap().get().system_proxy,
+            next
+        );
+        assert!(settings.system_proxy_enabled());
+        // PAC and manual targets use the same verified platform transaction.
+        next.pac_mode = true;
+        let pac = SystemProxyTarget::Pac {
+            url: "http://127.0.0.1:30000/proxy.pac".into(),
+        };
+        save_proxy_preferences(&mut proxy, &mut settings, &next, Some(&pac), &dir.0).unwrap();
+        assert!(pac.matches(&proxy.state().unwrap()));
+        let previous_state = proxy.state().unwrap();
+        let previous_settings = settings.get().clone();
+        next.pac_mode = false;
+        state.lock().unwrap().ignore_configure = true;
+        assert!(matches!(
+            save_proxy_preferences(&mut proxy, &mut settings, &next, Some(&target), &dir.0),
+            Err(PreferenceFailure::Restored(_))
+        ));
+        assert_eq!(proxy.state().unwrap(), previous_state);
+        assert_eq!(settings.get(), &previous_settings);
+        state.lock().unwrap().ignore_configure = false;
+        state.lock().unwrap().fail_after_configure = true;
+        assert!(matches!(
+            save_proxy_preferences(&mut proxy, &mut settings, &next, Some(&target), &dir.0),
+            Err(PreferenceFailure::Restored(_))
+        ));
+        assert_eq!(proxy.state().unwrap(), previous_state);
+        state.lock().unwrap().fail_after_configure = false;
+        state.lock().unwrap().sabotage_settings = Some(dir.0.join("settings.json"));
+        assert!(matches!(
+            save_proxy_preferences(&mut proxy, &mut settings, &next, Some(&target), &dir.0),
+            Err(PreferenceFailure::Restored(_))
+        ));
+        assert_eq!(proxy.state().unwrap(), previous_state);
+        assert_eq!(
+            FileSettingsStore::open(&dir.0).unwrap().get(),
+            &previous_settings
+        );
+        // Unreadable settings fail before changing OS state.
+        fs::rename(
+            dir.0.join("settings.json"),
+            dir.0.join("saved-settings.json"),
+        )
+        .unwrap();
+        fs::create_dir(dir.0.join("settings.json")).unwrap();
+        assert!(
+            save_proxy_preferences(&mut proxy, &mut settings, &next, Some(&target), &dir.0)
+                .is_err()
+        );
+        assert_eq!(proxy.state().unwrap(), previous_state);
+        assert_eq!(settings.get(), &previous_settings);
+        fs::remove_dir(dir.0.join("settings.json")).unwrap();
+        fs::rename(
+            dir.0.join("saved-settings.json"),
+            dir.0.join("settings.json"),
+        )
+        .unwrap();
+        state.lock().unwrap().fail_restore = true;
+        state.lock().unwrap().ignore_configure = true;
+        assert!(matches!(
+            save_proxy_preferences(&mut proxy, &mut settings, &next, Some(&target), &dir.0),
+            Err(PreferenceFailure::RecoveryFailed(_))
+        ));
+        assert!(proxy.recovery_pending());
     }
 
     #[test]
