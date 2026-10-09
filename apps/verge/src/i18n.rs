@@ -514,7 +514,7 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("ai.source_config", "配置检查", "Configuration"),
     ("ai.just_now", "刚刚采集", "Captured just now"),
     ("ai.minutes_ago", "分钟前采集", "min ago"),
-    ("ai.title", "AI 助手", "AI Assistant"),
+    ("ai.title", "智能", "Intelligence"),
     ("ai.settings", "模型设置", "Provider"),
     ("ai.clear", "新对话", "New conversation"),
     ("ai.model", "模型", "Model"),
@@ -718,8 +718,6 @@ const ENTRIES: &[(&str, &str, &str)] = &[
     ("menu.project_page", "Verge 项目主页", "Verge Project Page"),
     // ---- 侧边栏 / 页面标题 ----
     ("nav.header", "导航", "Navigation"),
-    ("nav.group.proxy", "代理", "Proxy"),
-    ("nav.group.system", "系统", "System"),
     ("rules.providers", "订阅资源", "Providers"),
     ("rules.column.type", "类型", "Type"),
     ("rules.column.match", "匹配内容", "Match"),
