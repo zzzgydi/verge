@@ -1,4 +1,4 @@
-use super::ControllerEndpoint;
+use super::{ControllerEndpoint, endpoint::ControllerStream};
 use std::{
     fmt,
     io::{Read, Write},
@@ -105,30 +105,59 @@ impl ControllerTransport for TcpControllerTransport {
             body
         )
         .map_err(controller_io_error)?;
-        let mut response = Vec::new();
-        // Socket timeouts apply to each read, so enforce a total response budget too.
-        let deadline = Instant::now() + request.response_timeout.unwrap_or(self.timeout);
-        let mut buffer = [0; 8192];
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(controller_io_error(std::io::ErrorKind::TimedOut.into()));
-            }
-            stream.set_timeout(remaining).map_err(controller_io_error)?;
-            match stream.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(count) => {
-                    response.extend_from_slice(&buffer[..count]);
-                    if response.len() > 16 * 1024 * 1024 {
-                        return Err(controller_error("Mihomo response exceeds 16 MiB"));
-                    }
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(controller_io_error(error)),
-            }
-        }
-        parse_http_response(&response)
+        read_response(
+            &mut stream,
+            request.response_timeout.unwrap_or(self.timeout),
+        )
     }
+}
+
+fn read_response(
+    stream: &mut ControllerStream,
+    timeout: Duration,
+) -> Result<ControllerResponse, AppError> {
+    #[cfg(unix)]
+    stream.set_nonblocking(true).map_err(controller_io_error)?;
+    let mut response = Vec::new();
+    let deadline = Instant::now() + timeout;
+    let mut buffer = [0; 8192];
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(controller_io_error(std::io::ErrorKind::TimedOut.into()));
+        }
+        match stream.wait_readable(remaining) {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(controller_io_error(error)),
+            Ok(()) => {}
+        }
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => {
+                response.extend_from_slice(&buffer[..count]);
+                if response.len() > 16 * 1024 * 1024 {
+                    return Err(controller_error("Mihomo response exceeds 16 MiB"));
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(controller_io_error(error)),
+        }
+    }
+    parse_http_response(&response)
 }
 
 fn proxy_details(proxy: &serde_json::Value) -> ProxyDetails {
@@ -969,6 +998,71 @@ mod tests {
         let result = MihomoClient::new(transport).version();
         server.join().unwrap();
         assert_eq!(result.unwrap_err().code, ErrorCode::RequestTimeout);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn closed_unix_peer_still_delivers_buffered_response() {
+        use std::os::unix::net::UnixStream;
+
+        let (client, mut server) = UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        client
+            .set_write_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        server
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 18\r\nConnection: close\r\n\r\n{\"version\":\"test\"}",
+            )
+            .unwrap();
+        drop(server);
+
+        let response =
+            read_response(&mut ControllerStream::Unix(client), Duration::from_secs(2)).unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, r#"{"version":"test"}"#);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_response_budget_expires_while_peer_drips_bytes() {
+        use std::{os::unix::net::UnixStream, thread};
+
+        let (client, mut server) = UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let sender = thread::spawn(move || {
+            for _ in 0..4 {
+                if server.write_all(b"a").is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(80));
+            }
+        });
+        let error = read_response(
+            &mut ControllerStream::Unix(client),
+            Duration::from_millis(150),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::RequestTimeout);
+        sender.join().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "requires MIHOMO_SOCKET pointing to a running Mihomo controller"]
+    fn running_mihomo_unix_responses_survive_peer_close() {
+        let path = std::env::var_os("MIHOMO_SOCKET").expect("MIHOMO_SOCKET is required");
+        let transport = TcpControllerTransport::unix(path.into(), Duration::from_secs(2)).unwrap();
+        let mut client = MihomoClient::new(transport);
+        for _ in 0..20 {
+            assert!(!client.version().unwrap().is_empty());
+            client.proxy_groups().unwrap();
+            client.rules().unwrap();
+        }
     }
 
     #[test]

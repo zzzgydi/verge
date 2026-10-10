@@ -57,6 +57,14 @@ pub enum ControllerStream {
     Unix(std::os::unix::net::UnixStream),
 }
 impl ControllerStream {
+    pub fn set_nonblocking(&self, enabled: bool) -> io::Result<()> {
+        match self {
+            Self::Tcp(stream) => stream.set_nonblocking(enabled),
+            #[cfg(unix)]
+            Self::Unix(stream) => stream.set_nonblocking(enabled),
+        }
+    }
+
     pub fn set_timeout(&self, timeout: Duration) -> io::Result<()> {
         match self {
             Self::Tcp(stream) => {
@@ -69,6 +77,41 @@ impl ControllerStream {
                 stream.set_write_timeout(Some(timeout))
             }
         }
+    }
+
+    pub fn wait_readable(&self, timeout: Duration) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd as _;
+
+            // macOS rejects setsockopt(SO_RCVTIMEO) after a peer closes, even if
+            // its response is still buffered. Polling also keeps the total deadline.
+            let fd = match self {
+                Self::Tcp(stream) => stream.as_raw_fd(),
+                Self::Unix(stream) => stream.as_raw_fd(),
+            };
+            let mut ready = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let millis = timeout
+                .as_nanos()
+                .div_ceil(1_000_000)
+                .min(libc::c_int::MAX as u128) as libc::c_int;
+            let count = unsafe { libc::poll(&mut ready, 1, millis) };
+            if count < 0 {
+                Err(io::Error::last_os_error())
+            } else if count == 0 {
+                Err(io::ErrorKind::TimedOut.into())
+            } else if ready.revents & libc::POLLNVAL != 0 {
+                Err(io::Error::from_raw_os_error(libc::EBADF))
+            } else {
+                Ok(())
+            }
+        }
+        #[cfg(not(unix))]
+        self.set_timeout(timeout)
     }
 }
 impl Read for ControllerStream {
