@@ -2,7 +2,7 @@ use std::{path::Path, time::Duration};
 
 use futures::StreamExt;
 use gpui_kit::component::{
-    ActiveTheme as _, Root, TitleBar, WindowExt as _,
+    TitleBar, WindowExt as _,
     input::{Copy, Cut, Paste, Redo, SelectAll, Undo},
     notification::Notification,
 };
@@ -201,7 +201,7 @@ pub fn run() {
             window_min_size: Some(size(px(960.), px(640.))),
             ..TitleBar::window_options()
         };
-        cx.open_window(window_options, |window, cx| {
+        gpui_kit::open_window(window_options, cx, |window, cx| {
             window.set_window_title(crate::identity::AppChannel::current().name());
             let view = cx.new(|cx| MainView::new(request_tx, window, cx));
             view.update(cx, |view, cx| {
@@ -380,7 +380,7 @@ pub fn run() {
                 }
             })
             .detach();
-            cx.new(|cx| Root::new(view, window, cx).bg(cx.theme().background))
+            view
         })
         .expect("failed to open Verge window");
         // Activate after AppKit has finished creating and registering the window.
@@ -399,7 +399,13 @@ pub(crate) fn bind_window_actions(cx: &mut App) {
         KeyBinding::new("ctrl-cmd-f", ToggleFullScreen, None),
     ]);
     cx.on_action(|_: &CloseWindow, cx| {
-        if let Some(handle) = cx.active_window() {
+        // Modal focus can leave the platform with no active window during key dispatch.
+        // Only fall back when the target is unambiguous.
+        let handle = cx.active_window().or_else(|| {
+            let windows = cx.windows();
+            (windows.len() == 1).then(|| windows[0])
+        });
+        if let Some(handle) = handle {
             // Keyboard dispatch already leases the window. Update it after dispatch.
             cx.defer(move |cx| {
                 let _ = handle.update(cx, |_, window, _| window.remove_window());

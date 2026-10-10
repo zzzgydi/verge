@@ -1,8 +1,7 @@
 //! Root / Dialog / Sheet 机制的 UI 测试。
 //!
 //! 用 gpui 的 `add_window_view`（与 GPUI Kit 官方测试一致的环境）验证：
-//! 1. dialog/sheet 打开后 `Root::render_*_layer` 必须存在（MainView 已挂载
-//!    overlay 层——此前未挂载导致"点了没反应"）；
+//! 1. dialog/sheet 打开后由 Root 自动挂载到画面，不由 MainView 手动渲染浮层；
 //! 2. sheet builder 渲染时不能读 MainView 实体（已用 SheetState 解耦）。
 
 use std::cell::RefCell;
@@ -16,6 +15,13 @@ use crate::i18n::Lang;
 use crate::view::MainView;
 
 type ViewHolder = Rc<RefCell<Option<gpui_kit::Entity<MainView>>>>;
+
+fn sheet_content_is_visible(window: &gpui_kit::Window) -> bool {
+    let sheet_content = gpui_kit::ElementId::from("sheet-content");
+    gpui_kit::base::test_support::snapshots(window)
+        .iter()
+        .any(|element| element.visible() && element.path().contains(&sheet_content))
+}
 
 #[gpui_kit::test]
 fn ai_requests_are_gated_and_reconnect_does_not_restart_a_turn(cx: &mut TestAppContext) {
@@ -182,16 +188,10 @@ fn import_dialog_opens_and_renders(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
 
-    let (has_dialog, layer) = cx.update(|window, cx| {
-        (
-            window.has_active_dialog(cx),
-            Root::render_dialog_layer(window, cx).is_some(),
-        )
-    });
-    assert!(has_dialog, "open_import_dialog 后应有活跃 dialog");
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
     assert!(
-        layer,
-        "dialog 打开后渲染层必须存在（MainView 已挂载 overlay）"
+        cx.debug_bounds("dialog-layer").is_some(),
+        "dialog must reach the Root overlay"
     );
 }
 
@@ -209,16 +209,10 @@ fn yaml_sheet_opens_and_renders(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
 
-    let (has_sheet, layer) = cx.update(|window, cx| {
-        (
-            window.has_active_sheet(cx),
-            Root::render_sheet_layer(window, cx).is_some(),
-        )
-    });
-    assert!(has_sheet, "open_yaml_sheet 后应有活跃 sheet");
+    assert!(cx.update(|window, cx| window.has_active_sheet(cx)));
     assert!(
-        layer,
-        "sheet 打开后渲染层必须存在（MainView 已挂载 overlay）"
+        cx.update(|window, _| sheet_content_is_visible(window)),
+        "sheet must reach the Root overlay"
     );
 }
 
@@ -237,13 +231,11 @@ fn merge_sheet_opens_and_renders_without_reading_main_view(cx: &mut TestAppConte
     // 现在状态在 SheetState 实体里，渲染必须无 panic 且渲染层存在。
     cx.run_until_parked();
 
-    let (has_sheet, layer) = cx.update(|window, cx| {
-        (
-            window.has_active_sheet(cx),
-            Root::render_sheet_layer(window, cx).is_some(),
-        )
-    });
-    assert!(has_sheet && layer, "merge sheet 应打开且渲染层存在");
+    assert!(cx.update(|window, cx| window.has_active_sheet(cx)));
+    assert!(
+        cx.update(|window, _| sheet_content_is_visible(window)),
+        "merge sheet must reach the Root overlay"
+    );
 }
 
 #[gpui_kit::test]
@@ -260,13 +252,11 @@ fn merged_sheet_opens_and_renders(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
 
-    let (has_sheet, layer) = cx.update(|window, cx| {
-        (
-            window.has_active_sheet(cx),
-            Root::render_sheet_layer(window, cx).is_some(),
-        )
-    });
-    assert!(has_sheet && layer, "merged sheet 应打开且渲染层存在");
+    assert!(cx.update(|window, cx| window.has_active_sheet(cx)));
+    assert!(
+        cx.update(|window, _| sheet_content_is_visible(window)),
+        "merged sheet must reach the Root overlay"
+    );
 }
 
 /// 语言切换：设置写入后 MainView::lang 立即反映新语言，sync_form_inputs
@@ -803,8 +793,6 @@ fn system_proxy_dialog_keeps_draft_until_success_and_fits_small_window(cx: &mut 
                 data_directory: "/tmp/test".into(),
                 app_version: None,
             });
-            view.state.daemon_capabilities =
-                vec![crate::ipc::protocol::UNIFIED_SYSTEM_PROXY.into()];
             view.open_system_proxy_dialog(window, cx);
         })
     });
@@ -880,46 +868,6 @@ fn system_proxy_dialog_keeps_draft_until_success_and_fits_small_window(cx: &mut 
     });
     cx.run_until_parked();
     assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
-}
-
-#[gpui_kit::test]
-fn unified_proxy_writes_do_not_reach_an_older_daemon(cx: &mut TestAppContext) {
-    use crate::ui::UiAction;
-    cx.update(gpui_kit::init);
-    let (tx, rx) = mpsc::sync_channel(32);
-    let holder = Rc::new(RefCell::new(None));
-    let slot = holder.clone();
-    let (_window, cx) = cx.add_window_view(|window, cx| {
-        let view = cx.new(|cx| MainView::new(tx, window, cx));
-        *slot.borrow_mut() = Some(view.clone());
-        Root::new(view, window, cx)
-    });
-    let view = holder.borrow().clone().unwrap();
-    cx.update(|_, cx| {
-        view.update(cx, |view, cx| {
-            for action in [
-                UiAction::SetSystemProxy { enabled: true },
-                UiAction::UpdateSystemProxySettings(Box::default()),
-            ] {
-                view.dispatch(action, cx);
-                assert!(rx.try_recv().is_err());
-                assert_eq!(
-                    view.state.last_error.as_ref().unwrap().code,
-                    crate::domain::ErrorCode::Conflict
-                );
-            }
-            view.state
-                .daemon_capabilities
-                .push(crate::ipc::protocol::UNIFIED_SYSTEM_PROXY.into());
-            view.dispatch(UiAction::SetSystemProxy { enabled: true }, cx);
-            assert!(matches!(
-                rx.try_recv().unwrap().request,
-                crate::ui::UiRequest::SystemProxy(crate::domain::SystemProxyCommand::SetEnabled {
-                    enabled: true
-                })
-            ));
-        })
-    });
 }
 
 #[gpui_kit::test]
@@ -1110,7 +1058,7 @@ fn connection_details_and_close_all_use_real_overlays(cx: &mut TestAppContext) {
                 window,
                 cx,
             );
-            assert!(Root::render_sheet_layer(window, cx).is_some());
+            assert!(window.has_active_sheet(cx));
             view.confirm_close_all_connections(window, cx);
             assert!(window.has_active_dialog(cx));
             assert!(rx.try_recv().is_err());

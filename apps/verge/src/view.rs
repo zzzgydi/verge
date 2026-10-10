@@ -6,7 +6,7 @@ use crate::domain::{
 };
 use crate::ui::{CoreStatus, Page, UiAction, UiRequestEnvelope, UiState};
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Root, Sizable as _, StyledExt as _, TitleBar,
+    ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
     VirtualListScrollHandle,
     alert::Alert,
     button::{Button, ButtonVariants as _},
@@ -40,8 +40,7 @@ actions!(
 
 /// Sheet 加载状态：独立于 MainView 的实体。
 ///
-/// GPUI Kit 的 sheet builder 在渲染时执行（`render_sheet_layer` 调用），
-/// 而渲染期间 MainView 实体处于 lease 状态——builder 里直接 `view.read()` 读
+/// GPUI Kit 的 sheet builder 在 Root 渲染浮层时执行；builder 直接 `view.read()` 读
 /// MainView 会 double-lease panic。因此这些状态放进独立实体，builder 只读它。
 #[derive(Default)]
 pub struct SheetState {
@@ -485,23 +484,6 @@ impl MainView {
             cx.notify();
             return false;
         }
-        if matches!(
-            action,
-            UiAction::SetSystemProxy { .. } | UiAction::UpdateSystemProxySettings(_)
-        ) && !self
-            .state
-            .daemon_capabilities
-            .iter()
-            .any(|capability| capability == crate::ipc::protocol::UNIFIED_SYSTEM_PROXY)
-        {
-            self.pending_proxy_settings = None;
-            self.state.last_error = Some(crate::domain::AppError::new(
-                crate::domain::ErrorCode::Conflict,
-                tr(self.lang(), "proxy.restart_required"),
-            ));
-            cx.notify();
-            return false;
-        }
         if matches!(action, UiAction::CloseAllConnections)
             && !self
                 .state
@@ -847,13 +829,6 @@ impl MainView {
 
 impl Render for MainView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // GPUI Kit 的 Root::render 不挂载 overlay 层；dialog / sheet / 通知
-        // 必须由应用自己在渲染树里显式挂载，否则窗口状态注册了但屏幕上不显示
-        // （表现为"点了没反应"）。
-        let sheet_layer = Root::render_sheet_layer(window, cx);
-        let dialog_layer = Root::render_dialog_layer(window, cx);
-        let notification_layer = Root::render_notification_layer(window, cx);
-
         let page = self.state.page;
         let content = match page {
             Page::Home => pages::home::render(self, cx),
@@ -918,7 +893,7 @@ impl Render for MainView {
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .bg(cx.theme().tiles)
+                            .bg(cx.theme().group_box)
                             .border_1()
                             .border_color(cx.theme().border)
                             .rounded(px(16.))
@@ -955,9 +930,5 @@ impl Render for MainView {
                     ),
             )
             .child(self.status_bar(cx))
-            // overlay 层必须最后挂载（位于内容之上）。
-            .children(sheet_layer)
-            .children(dialog_layer)
-            .children(notification_layer)
     }
 }

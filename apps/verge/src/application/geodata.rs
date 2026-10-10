@@ -73,7 +73,7 @@ pub fn download_geo_candidate<F: ArtifactFetcher>(
     let bytes = fetcher.fetch(&url)?;
     if bytes.is_empty()
         || bytes.len() > 64 * 1024 * 1024
-        || format!("{:x}", Sha256::digest(&bytes)) != digest
+        || hex::encode(Sha256::digest(&bytes)) != digest
     {
         return Err(AppError::new(
             ErrorCode::ValidationFailed,
@@ -100,7 +100,8 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("verge-geodata-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
         let body = b"valid".to_vec();
-        let metadata = format!("{:x}  geosite.dat\n", Sha256::digest(&body)).into_bytes();
+        let metadata =
+            format!("{}  geosite.dat\n", hex::encode(Sha256::digest(&body))).into_bytes();
         let mut failed = Fetcher(vec![metadata.clone(), b"wrong".to_vec()]);
         assert!(download_geo_candidate(&mut failed, "geosite.dat", &directory).is_err());
         assert!(!directory.exists());

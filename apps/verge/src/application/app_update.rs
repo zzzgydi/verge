@@ -397,10 +397,7 @@ where
     fs::create_dir_all(&download_dir).map_err(storage_error)?;
     let bytes = fetcher.fetch(&release.asset_url)?;
     fs::write(&archive, bytes).map_err(storage_error)?;
-    let actual_sha256 = format!(
-        "{:x}",
-        Sha256::digest(&fs::read(&archive).map_err(storage_error)?)
-    );
+    let actual_sha256 = hex::encode(Sha256::digest(&fs::read(&archive).map_err(storage_error)?));
     if actual_sha256 != expected_sha256 {
         return Err(AppError::new(
             ErrorCode::ValidationFailed,
@@ -600,7 +597,7 @@ mod tests {
     }
 
     fn sha256_hex(bytes: &[u8]) -> String {
-        format!("{:x}", Sha256::digest(bytes))
+        hex::encode(Sha256::digest(bytes))
     }
 
     /// 造一个最小可用的 .app：Info.plist 带版本 + 主可执行文件。

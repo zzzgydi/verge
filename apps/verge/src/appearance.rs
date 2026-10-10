@@ -21,8 +21,7 @@ pub fn apply(mode: ThemeMode, cx: &mut App) {
     c.border = color(0x3a3245, 0xe6deeb);
     c.muted = color(0x302938, 0xede6f3);
     c.muted_foreground = color(0xb1a7bd, 0x6c6075);
-    c.tiles = color(0x221e2b, 0xffffff);
-    c.group_box = c.tiles;
+    c.group_box = color(0x221e2b, 0xffffff);
     c.group_box_foreground = c.foreground;
     c.title_bar = c.background;
     c.title_bar_border = c.background;
@@ -45,7 +44,7 @@ pub fn apply(mode: ThemeMode, cx: &mut App) {
     c.button_primary_foreground = c.primary_foreground;
     c.button_primary_hover = c.primary_hover;
     c.button_primary_active = c.primary_active;
-    c.button = c.tiles;
+    c.button = c.group_box;
     c.button_foreground = c.foreground;
     c.button_hover = c.accent;
     c.button_active = c.muted;
@@ -58,18 +57,18 @@ pub fn apply(mode: ThemeMode, cx: &mut App) {
     c.button_secondary_hover = c.secondary_hover;
     c.button_secondary_active = c.secondary_active;
     c.input = c.border;
-    c.list = c.tiles;
+    c.list = c.group_box;
     c.list_active = color(0x392744, 0xf0e3f6);
     c.list_active_border = color(0xbb83d0, 0xaf77c0);
     c.list_hover = c.accent;
-    c.table = c.tiles;
-    c.table_head = c.tiles;
+    c.table = c.group_box;
+    c.table_head = c.group_box;
     c.table_even = color(0x272230, 0xfaf7fc);
     c.table_active = c.list_active;
     c.table_active_border = c.list_active_border;
     c.table_hover = c.accent;
     c.table_row_border = c.border;
-    c.popover = c.tiles;
+    c.popover = c.group_box;
     c.popover_foreground = c.foreground;
     c.ring = c.primary;
     c.caret = c.primary;
@@ -134,7 +133,7 @@ mod tests {
                     [0., 0.04, 0.06, 0.08]
                 };
                 for fg in [t.success, t.warning, t.danger, neutral] {
-                    for surface in [t.tiles, t.background, t.list_active, t.list_hover] {
+                    for surface in [t.group_box, t.background, t.list_active, t.list_hover] {
                         for alpha in opacities {
                             let background =
                                 Rgba::from(surface).blend(Rgba::from(fg.opacity(alpha)));
@@ -156,7 +155,7 @@ mod tests {
                 apply(mode, cx);
                 let t = cx.theme();
                 for fg in [t.foreground, t.muted_foreground, t.primary, t.chart_2] {
-                    for bg in [t.tiles, t.background, t.list_active, t.list_hover] {
+                    for bg in [t.group_box, t.background, t.list_active, t.list_hover] {
                         assert!(contrast(fg, bg) >= 4.5, "{mode:?}: {fg:?} on {bg:?}");
                     }
                 }

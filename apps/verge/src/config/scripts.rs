@@ -113,7 +113,7 @@ impl FileProfileStore {
         }
         let key = serde_json::to_vec(&("boa-0.22-api-1", source, merge, &scripts, &profile.name))
             .map_err(storage_error)?;
-        let hash = format!("{:x}", Sha256::digest(key));
+        let hash = hex::encode(Sha256::digest(key));
         let directory = self.root.join("compiled").join(id.as_str());
         let preview = !matches!(mode, CompileMode::Runtime);
         let extension = if preview { "preview" } else { "json" };
@@ -193,7 +193,7 @@ impl FileProfileStore {
             &profile.name,
         ))
         .map_err(storage_error)?;
-        let hash = format!("{:x}", Sha256::digest(key));
+        let hash = hex::encode(Sha256::digest(key));
         let directory = self.root.join("compiled").join(id.as_str());
         // Do not replace a last-good pin with an uncompiled, failed version.
         if directory.join(format!("{hash}.json")).is_file() {

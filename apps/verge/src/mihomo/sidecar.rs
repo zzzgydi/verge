@@ -30,7 +30,7 @@ pub fn install_verified_artifact(
     let candidate = candidate.as_ref();
     let active = active.as_ref();
     let bytes = fs::read(candidate).map_err(sidecar_error)?;
-    let actual = format!("{:x}", Sha256::digest(&bytes));
+    let actual = hex::encode(Sha256::digest(&bytes));
     if actual != expected_sha256.to_ascii_lowercase() {
         return Err(AppError::new(
             ErrorCode::ValidationFailed,
@@ -168,7 +168,7 @@ fn verify_sha256(path: &Path, expected: &str) -> Result<(), AppError> {
             format!("cannot read Mihomo file {}: {error}", path.display()),
         )
     })?;
-    let actual = format!("{:x}", Sha256::digest(bytes));
+    let actual = hex::encode(Sha256::digest(bytes));
     if actual == expected {
         Ok(())
     } else {
@@ -214,7 +214,7 @@ mod tests {
                 .as_nanos()
         ));
         fs::write(&path, b"mihomo").unwrap();
-        let digest = format!("{:x}", Sha256::digest(b"mihomo"));
+        let digest = hex::encode(Sha256::digest(b"mihomo"));
         verify_sha256(&path, &digest).unwrap();
         let error = verify_sha256(&path, &"0".repeat(64)).unwrap_err();
         assert!(error.message.contains("mismatch"));
@@ -241,7 +241,7 @@ mod tests {
         let active = dir.join("active");
         fs::write(&candidate, b"new artifact").unwrap();
         fs::write(&active, b"old artifact").unwrap();
-        let digest = format!("{:x}", Sha256::digest(b"new artifact"));
+        let digest = hex::encode(Sha256::digest(b"new artifact"));
 
         let install = install_verified_artifact(&candidate, &active, &digest).unwrap();
         let previous = install.previous.clone().unwrap();
@@ -261,7 +261,7 @@ mod tests {
         let active = dir.join("active");
         fs::write(&candidate, b"new artifact").unwrap();
         fs::write(&active, b"old artifact").unwrap();
-        let digest = format!("{:x}", Sha256::digest(b"new artifact"));
+        let digest = hex::encode(Sha256::digest(b"new artifact"));
 
         install_verified_artifact(&candidate, &active, &digest)
             .unwrap()
@@ -296,7 +296,7 @@ mod tests {
         let candidate = dir.join("candidate");
         let active = dir.join("active");
         fs::write(&candidate, b"new artifact").unwrap();
-        let digest = format!("{:x}", Sha256::digest(b"new artifact"));
+        let digest = hex::encode(Sha256::digest(b"new artifact"));
 
         install_verified_artifact(&candidate, &active, &digest)
             .unwrap()

@@ -227,7 +227,7 @@ fn verify_bundle_source(bundle: &HelperBundle) -> Result<(), AppError> {
             ),
         )
     })?;
-    let actual = format!("{:x}", Sha256::digest(bytes));
+    let actual = hex::encode(Sha256::digest(bytes));
     if actual != expected {
         return Err(AppError::new(
             ErrorCode::ValidationFailed,
@@ -416,7 +416,7 @@ mod tests {
         fs::write(&binary, bytes).unwrap();
         HelperBundle {
             binary,
-            expected_sha256: format!("{:x}", Sha256::digest(bytes)),
+            expected_sha256: hex::encode(Sha256::digest(bytes)),
         }
     }
 
@@ -587,14 +587,14 @@ mod tests {
         fs::write(resources.join("helper/verge-helper"), b"helper").unwrap();
         fs::write(
             resources.join("helper/verge-helper.sha256"),
-            format!("{:x}\n", Sha256::digest(b"helper")),
+            format!("{}\n", hex::encode(Sha256::digest(b"helper"))),
         )
         .unwrap();
         let bundle = discover_bundled_helper(&resources).unwrap();
         assert_eq!(bundle.binary, resources.join("helper/verge-helper"));
         assert_eq!(
             bundle.expected_sha256,
-            format!("{:x}", Sha256::digest(b"helper"))
+            hex::encode(Sha256::digest(b"helper"))
         );
 
         let missing = discover_bundled_helper(&dir.0.join("empty")).unwrap_err();

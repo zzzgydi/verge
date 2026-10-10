@@ -75,7 +75,7 @@ impl FileProfileStore {
                 Err(e) => return Err(storage_error(e)),
             }
         }
-        Ok(format!("{:x}", hash.finalize()))
+        Ok(hex::encode(hash.finalize()))
     }
 
     pub fn isolated_preview(&self, root: PathBuf) -> Result<ConfigPreview, AppError> {

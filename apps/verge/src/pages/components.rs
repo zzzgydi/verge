@@ -45,7 +45,7 @@ pub fn panel(cx: &App) -> Div {
     v_flex()
         .p(px(metrics::PANEL_INSET))
         .gap(px(metrics::SECTION_GAP))
-        .bg(cx.theme().tiles)
+        .bg(cx.theme().group_box)
         .border_1()
         .border_color(cx.theme().border)
         .rounded(px(metrics::PANEL_RADIUS))

@@ -268,7 +268,7 @@ fn native_item(
             enabled,
         } => {
             let accelerator = matches!(command, Some(TrayCommand::Quit))
-                .then(|| Accelerator::new(Some(Modifiers::SUPER), Code::KeyQ));
+                .then(|| Accelerator::new(Modifiers::META, Code::KeyQ));
             let item: Box<dyn IsMenuItem> = if let Some(checked) = checked {
                 let item = CheckMenuItem::new(label, *enabled, *checked, accelerator);
                 checks.push((item.clone(), *checked));
@@ -311,8 +311,7 @@ impl TrayService {
         }));
         let tray = TrayIconBuilder::new()
             .with_tooltip(crate::identity::AppChannel::current().name())
-            .with_icon(load_icon()?)
-            .with_icon_as_template(true)
+            .with_icon_templated(load_icon()?)
             .build()
             .map_err(tray_error)?;
         let service = Self {

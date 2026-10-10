@@ -283,7 +283,7 @@ fn card(group: usize, member: usize, page: &ProxyPage, cx: &mut Context<ProxyPag
                     this.bg(selection_color(cx)).child(
                         Icon::new(IconName::Check)
                             .size(px(12.))
-                            .text_color(cx.theme().tiles),
+                            .text_color(cx.theme().group_box),
                     )
                 }),
         )
