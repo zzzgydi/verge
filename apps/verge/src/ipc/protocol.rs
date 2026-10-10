@@ -14,12 +14,10 @@ use serde::{Deserialize, Serialize};
 /// Keep this unchanged for internal/UI changes, optional fields with safe defaults, and
 /// new error codes (readers fall back to ErrorCode::Unknown and retain the message).
 /// Increment only for incompatible required fields, message shapes, or command semantics.
-/// Generation 6 is the baseline; earlier binaries lack the unknown-error fallback.
+/// Generation 7 rejects earlier binaries with retired backup commands.
 /// See README.md in this module for the evolution rules and compatibility tests.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
-/// Unified manual/PAC configuration and the SetEnabled command.
-pub const UNIFIED_SYSTEM_PROXY: &str = "unified_system_proxy";
 pub const MERGE_PREVIEW: &str = "merge_preview";
 pub const PROFILE_ORDER: &str = "profile_order";
 pub const GEO_DATA_UPDATE: &str = "geo_data_update";
@@ -35,10 +33,8 @@ pub enum DaemonMessage {
     Hello {
         protocol_version: u32,
         app_version: String,
-        #[serde(default)]
         maintenance: bool,
-        #[serde(default)]
-        channel: Option<String>,
+        channel: String,
     },
     /// 常规请求，语义与单进程时代 `UiRequestEnvelope` 完全一致。
     /// 实时订阅复用 `RuntimeCommand::StartRealtime` / `StopRealtime`，

@@ -7,10 +7,10 @@ use crate::domain::{
     AppCommand, AppCommandOutput, AppCommandResult, AppError, AppUpdateStatus, ApplicationSettings,
     ApplicationSettingsSnapshot, CommandContext, CommandRisk, ConnectionSnapshot, ErrorCode,
     HelperStatus, LogEvent, MemoryEvent, NetworkSettings, Profile, ProfileId, ProfileSource,
-    ProviderKind, ProviderSummary, ProxyEndpoint, ProxySnapshot, RealtimeEvent, RealtimeTopic,
-    RuleEntry, RunMode, RuntimeCommand, RuntimeCommandOutput, RuntimeCommandResult,
-    RuntimeSettings, SettingsImportPreview, SettingsScope, SystemProxyCommand,
-    SystemProxyCommandResult, SystemProxyState, TrafficEvent, UpdatePolicy,
+    ProviderKind, ProviderSummary, ProxySnapshot, RealtimeEvent, RealtimeTopic, RuleEntry, RunMode,
+    RuntimeCommand, RuntimeCommandOutput, RuntimeCommandResult, RuntimeSettings,
+    SettingsImportPreview, SettingsScope, SystemProxyCommand, SystemProxyCommandResult,
+    SystemProxyState, TrafficEvent, UpdatePolicy,
 };
 use serde::{Deserialize, Serialize};
 
@@ -334,16 +334,6 @@ pub enum UiAction {
     SetSystemProxy {
         enabled: bool,
     },
-    SetSocksProxy {
-        enabled: bool,
-        endpoint: ProxyEndpoint,
-    },
-    SetAutoProxy {
-        url: Option<String>,
-    },
-    SetProxyBypass {
-        domains: Vec<String>,
-    },
     SelectProxy {
         group: String,
         proxy: String,
@@ -578,22 +568,6 @@ impl UiAction {
             Self::SetSystemProxy { enabled } => {
                 vec![UiRequest::SystemProxy(SystemProxyCommand::SetEnabled {
                     enabled,
-                })]
-            }
-            Self::SetSocksProxy { enabled, endpoint } => {
-                vec![UiRequest::SystemProxy(SystemProxyCommand::SetSocks {
-                    enabled,
-                    endpoint,
-                })]
-            }
-            Self::SetAutoProxy { url } => {
-                vec![UiRequest::SystemProxy(SystemProxyCommand::SetAutoProxy {
-                    url,
-                })]
-            }
-            Self::SetProxyBypass { domains } => {
-                vec![UiRequest::SystemProxy(SystemProxyCommand::SetProxyBypass {
-                    domains,
                 })]
             }
             Self::SelectProxy { group, proxy } => {
@@ -883,8 +857,6 @@ impl UiState {
             AppCommandOutput::ApplicationSettingsImportPreview(preview) => {
                 self.settings_import_preview = Some(preview);
             }
-            // A generation-6 daemon may still encode this retired response.
-            AppCommandOutput::EncryptedBackupExported { .. } => {}
             AppCommandOutput::MihomoUpdated { version } => {
                 self.mihomo_version = Some(version);
             }
@@ -1082,12 +1054,7 @@ fn response_request(response: &UiResponse) -> Option<UiRequest> {
 fn is_write_request(request: &UiRequest) -> bool {
     match request {
         UiRequest::SystemProxy(
-            SystemProxyCommand::SetEnabled { .. }
-            | SystemProxyCommand::Enable { .. }
-            | SystemProxyCommand::Disable
-            | SystemProxyCommand::SetSocks { .. }
-            | SystemProxyCommand::SetAutoProxy { .. }
-            | SystemProxyCommand::SetProxyBypass { .. },
+            SystemProxyCommand::SetEnabled { .. } | SystemProxyCommand::RecoverPending,
         ) => true,
         UiRequest::Runtime(RuntimeCommand::SelectProxy { .. }) => true,
         _ => request_key(request).ends_with("_write"),
@@ -1118,8 +1085,6 @@ fn request_key(request: &UiRequest) -> &'static str {
             | AppCommand::ImportApplicationSettings { .. }
             | AppCommand::ResetApplicationSettingsScope { .. }
             | AppCommand::ExportDiagnostics { .. }
-            | AppCommand::ExportEncryptedBackup { .. }
-            | AppCommand::RestoreEncryptedBackup { .. }
             | AppCommand::UpdateGeoData { .. }
             | AppCommand::UpdateMihomo,
         ) => "application_settings_write",
@@ -1186,7 +1151,7 @@ fn log_meets_level(level: &str, minimum: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use crate::domain::{
-        ErrorCode, ProxyProtocolState, RuntimeCommandOutput, SystemProxyServiceState,
+        ErrorCode, ProxyEndpoint, ProxyProtocolState, RuntimeCommandOutput, SystemProxyServiceState,
     };
 
     use super::*;
@@ -1566,48 +1531,6 @@ mod tests {
             );
             assert_eq!(request_key(&requests[0]), "helper_write");
         }
-    }
-
-    #[test]
-    fn socks_pac_and_bypass_actions_map_to_privileged_system_proxy_writes() {
-        let endpoint = ProxyEndpoint::new("127.0.0.1", 7891).unwrap();
-        let socks = UiAction::SetSocksProxy {
-            enabled: true,
-            endpoint: endpoint.clone(),
-        }
-        .requests();
-        assert_eq!(
-            socks,
-            [UiRequest::SystemProxy(SystemProxyCommand::SetSocks {
-                enabled: true,
-                endpoint,
-            })]
-        );
-        assert!(is_write_request(&socks[0]));
-
-        let pac = UiAction::SetAutoProxy {
-            url: Some("http://127.0.0.1/proxy.pac".into()),
-        }
-        .requests();
-        assert!(matches!(
-            pac.as_slice(),
-            [UiRequest::SystemProxy(SystemProxyCommand::SetAutoProxy {
-                url: Some(_)
-            })]
-        ));
-        assert!(is_write_request(&pac[0]));
-
-        let bypass = UiAction::SetProxyBypass {
-            domains: vec!["*.local".into()],
-        }
-        .requests();
-        assert!(matches!(
-            bypass.as_slice(),
-            [UiRequest::SystemProxy(
-                SystemProxyCommand::SetProxyBypass { .. }
-            )]
-        ));
-        assert!(is_write_request(&bypass[0]));
     }
 
     #[test]

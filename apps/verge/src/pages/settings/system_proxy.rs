@@ -94,18 +94,6 @@ fn status_text(view: &MainView, lang: Lang) -> String {
 
 impl MainView {
     pub(crate) fn open_system_proxy_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self
-            .state
-            .daemon_capabilities
-            .iter()
-            .any(|c| c == crate::ipc::protocol::UNIFIED_SYSTEM_PROXY)
-        {
-            window.push_notification(
-                Notification::error(tr(self.lang(), "proxy.restart_required")),
-                cx,
-            );
-            return;
-        }
         let Some(snapshot) = &self.state.application_settings else {
             return;
         };

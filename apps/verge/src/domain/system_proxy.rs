@@ -174,9 +174,8 @@ impl SystemProxyTarget {
 mod tests {
     use super::*;
     #[test]
-    fn legacy_settings_and_default_bypass_are_safe() {
-        let settings: SystemProxySettings = serde_json::from_str("{}").unwrap();
-        assert_eq!(settings, SystemProxySettings::default());
+    fn default_bypass_deduplicates_custom_entries() {
+        let settings = SystemProxySettings::default();
         let custom = SystemProxySettings {
             bypass: vec!["example.com".into(), "localhost".into()],
             ..settings

@@ -14,8 +14,8 @@ use crate::config::{FileProfileStore, ProfileUpdateJob, UpdateScheduler, UpdateT
 use crate::domain::{
     AppCommand, AppCommandOutput, AppCommandResult, AppError, CommandActor, CommandContext,
     CommandRisk, ErrorCode, HelperStatus, NetworkSettings, Profile, ProfileId, ProviderKind,
-    ProviderSummary, ProxyEndpoint, ProxySnapshot, RealtimeEvent, RealtimeTopic, RuleEntry,
-    RunMode, RuntimeCommand, RuntimeCommandOutput, RuntimeCommandResult, SystemProxyCommand,
+    ProviderSummary, ProxySnapshot, RealtimeEvent, RealtimeTopic, RuleEntry, RunMode,
+    RuntimeCommand, RuntimeCommandOutput, RuntimeCommandResult, SystemProxyCommand,
     SystemProxyCommandResult, SystemProxyState,
 };
 use crate::mihomo::{
@@ -167,20 +167,8 @@ mod command_bus_tests {
 pub trait SystemProxyControl {
     fn recovery_pending(&self) -> bool;
     fn state(&mut self) -> Result<SystemProxyState, AppError>;
-    fn enable(
-        &mut self,
-        services: &[String],
-        endpoint: &ProxyEndpoint,
-    ) -> Result<SystemProxyState, AppError>;
     fn disable(&mut self) -> Result<SystemProxyState, AppError>;
     fn recover_pending(&mut self) -> Result<SystemProxyState, AppError>;
-    fn set_socks(
-        &mut self,
-        enabled: bool,
-        endpoint: &ProxyEndpoint,
-    ) -> Result<SystemProxyState, AppError>;
-    fn set_auto_proxy(&mut self, url: Option<&str>) -> Result<SystemProxyState, AppError>;
-    fn set_proxy_bypass(&mut self, domains: &[String]) -> Result<SystemProxyState, AppError>;
 }
 
 pub struct PlatformSystemProxy<P> {
@@ -223,43 +211,12 @@ impl<P: SystemProxyPlatform> SystemProxyControl for PlatformSystemProxy<P> {
         self.platform.state(&self.services)
     }
 
-    fn enable(
-        &mut self,
-        services: &[String],
-        endpoint: &ProxyEndpoint,
-    ) -> Result<SystemProxyState, AppError> {
-        let services = if services.is_empty() {
-            &self.services
-        } else {
-            services
-        };
-        let state = self.platform.enable(services, endpoint)?;
-        self.services = services.to_vec();
-        Ok(state)
-    }
-
     fn disable(&mut self) -> Result<SystemProxyState, AppError> {
         self.platform.disable(&self.services)
     }
 
     fn recover_pending(&mut self) -> Result<SystemProxyState, AppError> {
         self.platform.recover_pending()
-    }
-
-    fn set_socks(
-        &mut self,
-        enabled: bool,
-        endpoint: &ProxyEndpoint,
-    ) -> Result<SystemProxyState, AppError> {
-        self.platform.set_socks(&self.services, enabled, endpoint)
-    }
-
-    fn set_auto_proxy(&mut self, url: Option<&str>) -> Result<SystemProxyState, AppError> {
-        self.platform.set_auto_proxy(&self.services, url)
-    }
-
-    fn set_proxy_bypass(&mut self, domains: &[String]) -> Result<SystemProxyState, AppError> {
-        self.platform.set_bypass(&self.services, domains)
     }
 }
 
@@ -284,26 +241,9 @@ impl<'a, C: SystemProxyControl> SystemProxyCommandHandler<'a, C> {
                     "configured system proxy must be applied by the daemon",
                 ));
             }
-            SystemProxyCommand::Enable { services, endpoint } => (
-                self.proxy.enable(&services, &endpoint)?,
-                "System proxy enabled",
-            ),
-            SystemProxyCommand::Disable => (self.proxy.disable()?, "System proxy restored"),
             SystemProxyCommand::RecoverPending => (
                 self.proxy.recover_pending()?,
                 "Pending system proxy recovery applied",
-            ),
-            SystemProxyCommand::SetSocks { enabled, endpoint } => (
-                self.proxy.set_socks(enabled, &endpoint)?,
-                "SOCKS proxy settings updated",
-            ),
-            SystemProxyCommand::SetAutoProxy { url } => (
-                self.proxy.set_auto_proxy(url.as_deref())?,
-                "Automatic proxy settings updated",
-            ),
-            SystemProxyCommand::SetProxyBypass { domains } => (
-                self.proxy.set_proxy_bypass(&domains)?,
-                "Proxy bypass domains updated",
             ),
         };
         Ok(SystemProxyCommandResult {
@@ -1590,8 +1530,6 @@ impl<'a, C: CoreControl> ProfileCommandHandler<'a, C> {
             | AppCommand::ImportApplicationSettings { .. }
             | AppCommand::ResetApplicationSettingsScope { .. }
             | AppCommand::ExportDiagnostics { .. }
-            | AppCommand::ExportEncryptedBackup { .. }
-            | AppCommand::RestoreEncryptedBackup { .. }
             | AppCommand::UpdateGeoData { .. }
             | AppCommand::UpdateMihomo
             | AppCommand::CheckAppUpdate
@@ -1790,7 +1728,7 @@ mod tests {
 
     fn sha256(bytes: &[u8]) -> String {
         use sha2::{Digest, Sha256};
-        format!("{:x}", Sha256::digest(bytes))
+        hex::encode(Sha256::digest(bytes))
     }
 
     #[test]
@@ -2909,20 +2847,6 @@ mod tests {
                 .map_or_else(|| Ok(self.state.clone()), Err)
         }
 
-        fn enable(
-            &mut self,
-            services: &[String],
-            endpoint: &ProxyEndpoint,
-        ) -> Result<SystemProxyState, AppError> {
-            self.calls.push(format!(
-                "enable:{services:?}:{}:{}",
-                endpoint.host, endpoint.port
-            ));
-            self.failure
-                .take()
-                .map_or_else(|| Ok(self.state.clone()), Err)
-        }
-
         fn disable(&mut self) -> Result<SystemProxyState, AppError> {
             self.calls.push("disable".into());
             self.failure
@@ -2932,34 +2856,6 @@ mod tests {
 
         fn recover_pending(&mut self) -> Result<SystemProxyState, AppError> {
             self.calls.push("recover".into());
-            self.failure
-                .take()
-                .map_or_else(|| Ok(self.state.clone()), Err)
-        }
-
-        fn set_socks(
-            &mut self,
-            enabled: bool,
-            endpoint: &ProxyEndpoint,
-        ) -> Result<SystemProxyState, AppError> {
-            self.calls.push(format!(
-                "set_socks:{enabled}:{}:{}",
-                endpoint.host, endpoint.port
-            ));
-            self.failure
-                .take()
-                .map_or_else(|| Ok(self.state.clone()), Err)
-        }
-
-        fn set_auto_proxy(&mut self, url: Option<&str>) -> Result<SystemProxyState, AppError> {
-            self.calls.push(format!("set_auto_proxy:{url:?}"));
-            self.failure
-                .take()
-                .map_or_else(|| Ok(self.state.clone()), Err)
-        }
-
-        fn set_proxy_bypass(&mut self, domains: &[String]) -> Result<SystemProxyState, AppError> {
-            self.calls.push(format!("set_proxy_bypass:{domains:?}"));
             self.failure
                 .take()
                 .map_or_else(|| Ok(self.state.clone()), Err)
@@ -3053,53 +2949,8 @@ mod tests {
         let mut proxy = fake_system_proxy();
         let mut handler = SystemProxyCommandHandler::new(&mut proxy);
         handler.execute(SystemProxyCommand::GetState).unwrap();
-        handler
-            .execute(SystemProxyCommand::Enable {
-                services: vec!["Wi-Fi".into()],
-                endpoint: ProxyEndpoint::new("127.0.0.1", 7890).unwrap(),
-            })
-            .unwrap();
-        handler.execute(SystemProxyCommand::Disable).unwrap();
         handler.execute(SystemProxyCommand::RecoverPending).unwrap();
-        assert_eq!(
-            proxy.calls,
-            [
-                "state",
-                "enable:[\"Wi-Fi\"]:127.0.0.1:7890",
-                "disable",
-                "recover"
-            ]
-        );
-    }
-
-    #[test]
-    fn system_proxy_handler_routes_socks_pac_and_bypass_writes() {
-        let mut proxy = fake_system_proxy();
-        let mut handler = SystemProxyCommandHandler::new(&mut proxy);
-        handler
-            .execute(SystemProxyCommand::SetSocks {
-                enabled: true,
-                endpoint: ProxyEndpoint::new("127.0.0.1", 7891).unwrap(),
-            })
-            .unwrap();
-        handler
-            .execute(SystemProxyCommand::SetAutoProxy {
-                url: Some("http://127.0.0.1/proxy.pac".into()),
-            })
-            .unwrap();
-        handler
-            .execute(SystemProxyCommand::SetProxyBypass {
-                domains: vec!["*.local".into()],
-            })
-            .unwrap();
-        assert_eq!(
-            proxy.calls,
-            [
-                "set_socks:true:127.0.0.1:7891",
-                "set_auto_proxy:Some(\"http://127.0.0.1/proxy.pac\")",
-                "set_proxy_bypass:[\"*.local\"]"
-            ]
-        );
+        assert_eq!(proxy.calls, ["state", "recover"]);
     }
 
     #[test]
@@ -3110,7 +2961,9 @@ mod tests {
             "permission denied",
         ));
         let mut handler = SystemProxyCommandHandler::new(&mut proxy);
-        let error = handler.execute(SystemProxyCommand::Disable).unwrap_err();
+        let error = handler
+            .execute(SystemProxyCommand::RecoverPending)
+            .unwrap_err();
         assert_eq!(error.code, ErrorCode::PlatformFailed);
     }
 }

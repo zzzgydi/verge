@@ -410,7 +410,6 @@
   "proxy.pac_mode": "使用 PAC 模式",
   "proxy.pac_script": "PAC 脚本",
   "proxy.partial": "部分协议已启用",
-  "proxy.restart_required": "当前后台尚不支持统一系统代理设置，请从托盘退出 Verge 后重新启动。",
   "proxy.seconds": "秒",
   "proxy.title": "系统代理设置",
   "proxy.validate_bypass": "验证代理绕过格式",

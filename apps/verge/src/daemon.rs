@@ -548,12 +548,8 @@ impl Backend {
                 UiResponse::Runtime { request, result }
             }
             UiRequest::SystemProxy(request) => {
-                if matches!(
-                    request,
-                    SystemProxyCommand::SetEnabled { enabled: true }
-                        | SystemProxyCommand::Enable { .. }
-                        | SystemProxyCommand::SetSocks { enabled: true, .. }
-                ) && self.engine.is_none()
+                if matches!(request, SystemProxyCommand::SetEnabled { enabled: true })
+                    && self.engine.is_none()
                 {
                     return UiResponse::SystemProxy {
                         request,
@@ -655,7 +651,7 @@ impl Backend {
                 });
             }
             AppCommand::UpdateApplicationSettings { settings } => {
-                // Older GUIs omit proxy preferences; general saves must preserve them.
+                // Proxy preferences have their own command; general settings saves must not overwrite them.
                 let mut settings = settings.clone();
                 settings.system_proxy = self.settings.get().system_proxy.clone();
                 self.persist_settings(&settings)?;
@@ -701,15 +697,6 @@ impl Backend {
                     output: AppCommandOutput::DiagnosticsExported { path },
                     summary: "Redacted diagnostics exported".into(),
                 });
-            }
-            // Keep generation-6 requests decodable for a GUI from an older build.
-            // Removed operations must fail explicitly without reading or writing data.
-            AppCommand::ExportEncryptedBackup { .. }
-            | AppCommand::RestoreEncryptedBackup { .. } => {
-                return Err(AppError::new(
-                    ErrorCode::NotFound,
-                    "Encrypted backups are no longer supported",
-                ));
             }
             AppCommand::UpdateMihomo => {
                 let version = self.update_mihomo()?;
@@ -1152,8 +1139,7 @@ impl Backend {
         let bytes = self.read_settings_import(source)?;
         let (settings, portable) = crate::config::parse_portable_settings(&bytes)?;
         let current = self.profiles.network_settings()?;
-        let network = portable.map(|network| network.apply_to(&current));
-        self.persist_imported_settings(&settings, network)?;
+        self.persist_imported_settings(&settings, Some(portable.apply_to(&current)))?;
         Ok(settings)
     }
 
@@ -1581,7 +1567,6 @@ impl Backend {
     fn initial_snapshot(&self) -> InitialSnapshot {
         let mut snapshot = InitialSnapshot {
             capabilities: vec![
-                crate::ipc::protocol::UNIFIED_SYSTEM_PROXY.into(),
                 crate::ipc::protocol::CLOSE_ALL_CONNECTIONS.into(),
                 crate::ipc::protocol::GEO_DATA_UPDATE.into(),
                 crate::ipc::protocol::PROFILE_ORDER.into(),
@@ -1825,7 +1810,7 @@ fn run_daemon_backend(
                     conn_id,
                     protocol_version,
                     maintenance,
-                    channel.as_deref(),
+                    &channel,
                 );
             }
             DaemonEvent::Ipc(IpcServerEvent::Request { conn_id, envelope }) => {
@@ -2038,7 +2023,7 @@ fn handle_daemon_connected(
     conn_id: u64,
     protocol_version: u32,
     maintenance: bool,
-    channel: Option<&str>,
+    channel: &str,
 ) {
     if protocol_version != PROTOCOL_VERSION {
         let _ = server.send(
@@ -2052,9 +2037,7 @@ fn handle_daemon_connected(
         server.close(conn_id);
         return;
     }
-    if channel.unwrap_or("stable") != backend.config.channel.id()
-        || (maintenance && !backend.config.channel.is_dev())
-    {
+    if channel != backend.config.channel.id() || (maintenance && !backend.config.channel.is_dev()) {
         let _ = server.send(
             conn_id,
             ClientMessage::Closed {
@@ -2822,48 +2805,6 @@ mod tests {
     }
 
     #[test]
-    fn retired_backup_requests_preserve_existing_data_and_allow_followup_commands() {
-        let (mut backend, data_dir) = test_backend("retired-backup");
-        let backup_path = data_dir.join("backups/verge-backup.vgbak");
-        fs::create_dir_all(backup_path.parent().unwrap()).unwrap();
-        fs::write(&backup_path, b"existing backup must remain untouched").unwrap();
-        let id = ProfileId::parse("retained").unwrap();
-        backend
-            .profiles
-            .import(
-                Profile::new(
-                    id.clone(),
-                    "Retained",
-                    ProfileSource::Local,
-                    UpdatePolicy::Manual,
-                    0,
-                    None,
-                )
-                .unwrap(),
-                "mode: rule\n",
-            )
-            .unwrap();
-        let previous_settings = backend.settings.get().clone();
-        for request in ["export_encrypted_backup", "restore_encrypted_backup"] {
-            let command = serde_json::from_value(serde_json::json!({
-                "type": request,
-                "passphrase": "legacy client passphrase"
-            }))
-            .unwrap();
-            let error = backend.execute_profile(command).unwrap_err();
-            assert_eq!(error.code, ErrorCode::NotFound);
-            assert_eq!(
-                fs::read(&backup_path).unwrap(),
-                b"existing backup must remain untouched"
-            );
-            assert_eq!(backend.profiles.yaml(&id).unwrap(), "mode: rule\n");
-            assert_eq!(backend.settings.get(), &previous_settings);
-            assert!(backend.execute_profile(AppCommand::ListProfiles).is_ok());
-        }
-        let _ = fs::remove_dir_all(data_dir);
-    }
-
-    #[test]
     fn diagnostic_export_omits_subscription_urls_secrets_and_yaml() {
         let data_dir = std::env::temp_dir().join(format!(
             "verge-gpui-diagnostics-{}-{}",
@@ -2969,7 +2910,11 @@ mod tests {
         let import_path = data_dir.join("settings-import.json");
         fs::write(
             &import_path,
-            crate::config::export_settings_json(&incoming).unwrap(),
+            crate::config::export_portable_settings(
+                &incoming,
+                &crate::domain::CoreNetworkSettings::default(),
+            )
+            .unwrap(),
         )
         .unwrap();
 

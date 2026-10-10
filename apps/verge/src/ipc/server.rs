@@ -38,7 +38,7 @@ pub enum IpcServerEvent {
         protocol_version: u32,
         app_version: String,
         maintenance: bool,
-        channel: Option<String>,
+        channel: String,
     },
     Request {
         conn_id: u64,
@@ -426,7 +426,7 @@ mod tests {
                 protocol_version: PROTOCOL_VERSION,
                 app_version: "test".into(),
                 maintenance: false,
-                channel: Some("stable".into()),
+                channel: "stable".into(),
             },
         )
         .unwrap();

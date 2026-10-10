@@ -1,7 +1,7 @@
 //! Portable settings exclude controller credentials and preserve the receiving
-//! machine's controller configuration. Version 1 imports remain supported.
+//! machine's controller configuration.
 use super::*;
-use crate::domain::CoreNetworkSettings;
+use crate::domain::{CoreNetworkSettings, SettingsImportPreview};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,8 +45,7 @@ impl PortableNetwork {
 struct TransferFile {
     version: u32,
     settings: ApplicationSettings,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    network: Option<PortableNetwork>,
+    network: PortableNetwork,
 }
 
 pub fn export_portable_settings(
@@ -58,28 +57,26 @@ pub fn export_portable_settings(
     serde_json::to_vec_pretty(&TransferFile {
         version: 2,
         settings: settings.clone(),
-        network: Some(PortableNetwork::from_settings(network)),
+        network: PortableNetwork::from_settings(network),
     })
     .map_err(storage_error)
 }
 
 pub fn parse_portable_settings(
     bytes: &[u8],
-) -> Result<(ApplicationSettings, Option<PortableNetwork>), AppError> {
+) -> Result<(ApplicationSettings, PortableNetwork), AppError> {
     let file: TransferFile = serde_json::from_slice(bytes)
         .map_err(|_| AppError::new(ErrorCode::ValidationFailed, "invalid settings import file"))?;
-    if !(file.version == 1 || file.version == 2) || (file.version == 1 && file.network.is_some()) {
+    if file.version != 2 {
         return Err(AppError::new(
             ErrorCode::ValidationFailed,
             "unsupported settings import version",
         ));
     }
     file.settings.validate()?;
-    if let Some(network) = &file.network {
-        network
-            .apply_to(&CoreNetworkSettings::default())
-            .validate()?;
-    }
+    file.network
+        .apply_to(&CoreNetworkSettings::default())
+        .validate()?;
     Ok((file.settings, file.network))
 }
 
@@ -90,19 +87,17 @@ pub fn portable_settings_preview(
 ) -> Result<SettingsImportPreview, AppError> {
     let (settings, incoming) = parse_portable_settings(bytes)?;
     let mut changes = diff_application_settings(current, &settings);
-    if let Some(incoming) = incoming {
-        incoming.apply_to(network).validate()?;
-        let old =
-            serde_json::to_value(PortableNetwork::from_settings(network)).map_err(storage_error)?;
-        let new = serde_json::to_value(incoming).map_err(storage_error)?;
-        for (field, value) in new.as_object().unwrap() {
-            if old.get(field) != Some(value) {
-                changes.push(SettingsFieldChange {
-                    field: format!("network.{field}"),
-                    old: render_json_value(&old[field]),
-                    new: render_json_value(value),
-                });
-            }
+    incoming.apply_to(network).validate()?;
+    let old =
+        serde_json::to_value(PortableNetwork::from_settings(network)).map_err(storage_error)?;
+    let new = serde_json::to_value(incoming).map_err(storage_error)?;
+    for (field, value) in new.as_object().unwrap() {
+        if old.get(field) != Some(value) {
+            changes.push(SettingsFieldChange {
+                field: format!("network.{field}"),
+                old: render_json_value(&old[field]),
+                new: render_json_value(value),
+            });
         }
     }
     Ok(SettingsImportPreview { settings, changes })
@@ -129,7 +124,7 @@ mod tests {
         let (decoded, portable) = parse_portable_settings(&bytes).unwrap();
         assert_eq!(decoded, settings);
         let current = CoreNetworkSettings::default();
-        let applied = portable.unwrap().apply_to(&current);
+        let applied = portable.apply_to(&current);
         assert_eq!(applied.mixed_port, 18789);
         assert!(applied.dns_override);
         assert_eq!(applied.external_controller, current.external_controller);
@@ -140,11 +135,19 @@ mod tests {
                 .iter()
                 .any(|c| c.field == "network.mixed_port")
         );
-        assert!(
-            parse_portable_settings(&export_settings_json(&settings).unwrap())
-                .unwrap()
-                .1
-                .is_none()
+        let mut old: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        old["version"] = 1.into();
+        assert_eq!(
+            parse_portable_settings(&serde_json::to_vec(&old).unwrap())
+                .unwrap_err()
+                .code,
+            ErrorCode::ValidationFailed
+        );
+        assert_eq!(
+            parse_portable_settings(br#"{"version":2,"settings":{}}"#)
+                .unwrap_err()
+                .code,
+            ErrorCode::ValidationFailed
         );
     }
 }

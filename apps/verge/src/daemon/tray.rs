@@ -195,8 +195,7 @@ impl TrayState {
 }
 
 pub(super) fn send_response(server: &IpcServer, response: UiResponse) {
-    // Unsolicited tray changes must also decode in older GUIs, which do not know
-    // new write commands. They only need the resulting native state.
+    // Unsolicited tray changes only need the resulting native state.
     let response = match response {
         UiResponse::SystemProxy { result, .. } => UiResponse::SystemProxy {
             request: SystemProxyCommand::GetState,
@@ -379,7 +378,7 @@ mod tests {
             mode: RunMode::Rule
         })));
         assert!(changes_menu(&UiRequest::SystemProxy(
-            SystemProxyCommand::Disable
+            SystemProxyCommand::SetEnabled { enabled: false }
         )));
     }
 }

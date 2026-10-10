@@ -7,19 +7,28 @@ use crate::{
 use serde_json::json;
 
 #[test]
-fn old_hello_defaults_to_stable_gui_connection() {
+fn hello_requires_channel_and_maintenance_fields() {
     let message: DaemonMessage = serde_json::from_value(json!({"Hello": {
-        "protocol_version": 6, "app_version": "0.1.0"
+        "protocol_version": 7, "app_version": "0.1.0", "maintenance": false,
+        "channel": "stable"
     }}))
     .unwrap();
     assert!(matches!(
         message,
         DaemonMessage::Hello {
             maintenance: false,
-            channel: None,
+            channel,
             ..
-        }
+        } if channel == "stable"
     ));
+    for missing in ["channel", "maintenance"] {
+        let mut hello = json!({"Hello": {
+            "protocol_version": 7, "app_version": "0.1.0", "maintenance": false,
+            "channel": "stable"
+        }});
+        hello["Hello"].as_object_mut().unwrap().remove(missing);
+        assert!(serde_json::from_value::<DaemonMessage>(hello).is_err());
+    }
 }
 
 /// Wire fixtures are intentionally independent of the Rust serializer under test.
@@ -152,9 +161,9 @@ fn known_error_codes_keep_their_wire_names() {
 }
 
 #[test]
-fn legacy_welcome_has_no_unified_proxy_capability_and_settings_get_defaults() {
+fn welcome_handles_optional_capabilities_and_unknown_additions() {
     let old = json!({"Welcome": {
-        "protocol_version": 6,
+        "protocol_version": 7,
         "initial": {
             "profiles": [], "selected_profile": null, "runtime_settings": null,
             "application_settings": {"settings": {"theme": "dark", "language": "zh-CN", "log_limit": 2000}, "data_directory": "/tmp/test"}
@@ -170,25 +179,17 @@ fn legacy_welcome_has_no_unified_proxy_capability_and_settings_get_defaults() {
         crate::domain::SystemProxySettings::default()
     );
     let mut future = old;
-    future["Welcome"]["initial"]["capabilities"] =
-        json!(["unified_system_proxy", "future_unknown_capability"]);
+    future["Welcome"]["initial"]["capabilities"] = json!(["future_unknown_capability"]);
     let ClientMessage::Welcome { initial, .. } = serde_json::from_value(future).unwrap() else {
         panic!("expected welcome")
     };
-    assert!(
-        initial
-            .capabilities
-            .iter()
-            .any(|c| c == UNIFIED_SYSTEM_PROXY)
-    );
-    assert_eq!(PROTOCOL_VERSION, 6);
+    assert_eq!(initial.capabilities, ["future_unknown_capability"]);
+    assert_eq!(PROTOCOL_VERSION, 7);
 }
 
 #[test]
-fn unified_proxy_command_does_not_change_legacy_enable_shape() {
+fn system_proxy_set_enabled_requires_a_value() {
     use crate::domain::SystemProxyCommand;
-    let legacy: SystemProxyCommand = serde_json::from_value(json!({"type": "enable", "services": ["Wi-Fi"], "endpoint": {"host": "127.0.0.1", "port": 7890}})).unwrap();
-    assert!(matches!(legacy, SystemProxyCommand::Enable { .. }));
     let unified: SystemProxyCommand =
         serde_json::from_value(json!({"type": "set_enabled", "enabled": true})).unwrap();
     assert!(matches!(

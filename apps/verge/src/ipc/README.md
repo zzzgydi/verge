@@ -1,24 +1,23 @@
 # IPC compatibility
 
 `PROTOCOL_VERSION` identifies an incompatible wire generation, not an application
-release or feature revision. Keep generation **6** for compatible changes. Versions
-before this baseline do not support unknown error codes, so do not lower the
-constant or accept arbitrary older versions.
+release or feature revision. The current generation is **7**; it removes retired
+encrypted-backup commands and responses. Do not accept older generations.
 
 The GUI and daemon run separately. A window can reconnect to a daemon left running
-by an earlier build. Compatibility therefore needs to work in both directions.
+by an earlier build. A changed wire generation fails the handshake so requests
+cannot cross incompatible binaries; additive changes within a generation must
+remain safe in both directions.
 
-`Hello.channel` is optional; omission means `stable`. New daemons reject a
-different channel before claiming or activating the primary window. Dev also
-requires `dev_instance_v1` in the welcome snapshot, so an older stable daemon
-cannot silently serve a Dev GUI. This is build identity, independent of debug
-or release optimization.
+`Hello.channel` and `Hello.maintenance` are required. Daemons reject a different
+channel before claiming or activating the primary window. Dev also requires
+`dev_instance_v1` in the welcome snapshot; this identifies the build channel
+independently of debug or release optimization.
 
-`Hello.maintenance` defaults to false. Dev accepts a maintenance connection
-alongside its primary GUI and limits it to `QuitApplication`. `make dev-stop`
-checks the Dev capability before sending that request, then waits for graceful
-shutdown, socket removal and release of the instance lock. Stable daemons reject
-maintenance connections. The protocol generation remains 6.
+Dev accepts a maintenance connection alongside its primary GUI and limits it
+to `QuitApplication`. `make dev-stop` checks the Dev capability before sending
+that request, then waits for graceful shutdown, socket removal and release of the
+instance lock. Stable daemons reject maintenance connections.
 
 | Change | Handling |
 | --- | --- |
@@ -39,15 +38,9 @@ socket test ensures a future error does not terminate the event stream. Keep the
 fixtures when evolving the protocol; a round trip through one version alone does
 not establish compatibility. The privileged helper has its own separate protocol.
 
-The `unified_system_proxy` capability gates the new `SetEnabled` and `UpdateSystemProxySettings` commands. Older daemons omit it; the GUI asks the user to restart
-before dispatching either write. Legacy per-protocol commands keep their meanings. General application setting
-writes preserve proxy preferences, so an older GUI cannot reset them by omitting
-the new field.
-
-Encrypted backup export and restore have been retired. Generation-6 request
-variants remain decodable and return `NotFound` without accessing backup data.
-The new GUI has no backup actions; the old export result remains decode-only so
-mixed builds do not disconnect solely because of this retired message.
+General application setting writes preserve proxy preferences, which are edited
+through a separate command. The wire protocol no longer accepts encrypted-backup
+requests or responses.
 
 ## Runtime recovery
 
@@ -57,7 +50,7 @@ Each socket session owns its reader, writer, subscriptions and command failure s
 
 Disk logs use a bounded local socket and writer thread. All GUI/daemon writers lock a shared file before opening and appending to the active log, so rotation cannot strand another writer on an old inode. Current log plus three archives are capped at 2 MiB each. Abrupt process exit may lose the final buffered log bytes.
 
-AI uses the `ai_chat_v1` capability on generation 6. Commands cover configuration,
+AI uses the `ai_chat_v1` capability on generation 7. Commands cover configuration,
 provider testing, starting/cancelling a turn, clearing history and querying state.
 Responses identify the operation without echoing the request or its key. Only
 connections that request AI receive AI snapshots; snapshots are coalesced at the
@@ -75,7 +68,7 @@ Provider tests retain chat evidence. Drafts are consumed only after an accepted
 command response; saving and testing are sequenced after successful persistence.
 
 
-`ai_actions_v1` adds `Approve { id, digest }` and `Dismiss { id }` on generation 6.
+`ai_actions_v1` adds `Approve { id, digest }` and `Dismiss { id }` on generation 7.
 `AiSnapshot.proposals` is additive and defaults to an empty list. The GUI gates
 both commands; the dispatcher rejects confirmation from non-UI actors. Only a
 locally created proposal can be consumed. Its random ID and digest bind the

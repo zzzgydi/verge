@@ -29,7 +29,7 @@ fn fixture() -> (TestDirectory, BackendConfig) {
         manifest: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets/mihomo/manifest.json"),
         controller: available_controller().unwrap(),
-        secret: "unused-legacy-test-secret".into(),
+        secret: "unused-test-secret".into(),
         // Supplying services skips discovery; this test never changes system proxy or TUN.
         services: vec!["Wi-Fi".into()],
         recovery_path: dir.0.join("recovery.json"),
@@ -631,7 +631,7 @@ fn daemon_queries_use_internal_socket_with_external_controller_disabled() {
             protocol_version: crate::ipc::protocol::PROTOCOL_VERSION,
             app_version: "test".into(),
             maintenance: false,
-            channel: None,
+            channel: "stable".into(),
         },
     )
     .unwrap();

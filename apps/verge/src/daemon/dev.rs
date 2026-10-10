@@ -72,7 +72,7 @@ pub fn stop_dev_daemon() -> Result<(), AppError> {
             protocol_version: PROTOCOL_VERSION,
             app_version: env!("CARGO_PKG_VERSION").into(),
             maintenance: true,
-            channel: Some("dev".into()),
+            channel: "dev".into(),
         },
     )
     .map_err(stop_error)?;
@@ -148,7 +148,7 @@ mod tests {
                 protocol_version: PROTOCOL_VERSION,
                 app_version: "test".into(),
                 maintenance: true,
-                channel: Some("dev".into()),
+                channel: "dev".into(),
             },
         )
         .unwrap();
@@ -162,14 +162,7 @@ mod tests {
         else {
             panic!("expected hello")
         };
-        handle_daemon_connected(
-            &server,
-            &backend,
-            conn_id,
-            PROTOCOL_VERSION,
-            true,
-            Some("dev"),
-        );
+        handle_daemon_connected(&server, &backend, conn_id, PROTOCOL_VERSION, true, "dev");
         assert!(!server.is_connected(conn_id));
         let (tx, _) = mpsc::channel();
         handle_daemon_request(
@@ -210,7 +203,7 @@ mod tests {
                     protocol_version: PROTOCOL_VERSION,
                     app_version: "test".into(),
                     maintenance,
-                    channel: Some(channel.into()),
+                    channel: channel.into(),
                 },
             )
             .unwrap();
@@ -227,7 +220,7 @@ mod tests {
                 conn_id,
                 PROTOCOL_VERSION,
                 maintenance,
-                Some(channel),
+                channel,
             );
             let message: ClientMessage = frame::read_message(&mut stream).unwrap();
             (stream, conn_id, message)
@@ -277,7 +270,6 @@ mod tests {
             );
         }
         for command in [
-            SystemProxyCommand::Disable,
             SystemProxyCommand::SetEnabled { enabled: false },
             SystemProxyCommand::RecoverPending,
         ] {

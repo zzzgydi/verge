@@ -16,7 +16,6 @@ use std::{
 
 use crate::domain::{
     AppError, ApplicationSettings, ErrorCode, ProfileId, ProxyEndpoint, SettingsFieldChange,
-    SettingsImportPreview,
 };
 pub use crate::domain::{Profile, ProfileSource, UpdatePolicy};
 pub(crate) fn restore_runtime_artifact(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
@@ -312,34 +311,6 @@ pub(crate) fn with_settings_file<T>(
     update(&mut file, &path)
 }
 
-/// 明文设置导出:带版本号的 JSON,只含 ApplicationSettings 本身。
-/// ApplicationSettings 不含 AI 密钥、订阅地址或运行凭据,
-/// 导出文件因此可以跨机器迁移。
-pub fn export_settings_json(settings: &ApplicationSettings) -> Result<Vec<u8>, AppError> {
-    settings.validate()?;
-    serde_json::to_vec_pretty(&SettingsFile {
-        version: SETTINGS_VERSION,
-        settings: settings.clone(),
-        system_proxy_enabled: None,
-        ai: None,
-    })
-    .map_err(storage_error)
-}
-
-/// 解析导入文件:版本必须匹配,字段走与 UpdateApplicationSettings 相同的校验。
-pub fn parse_settings_import(bytes: &[u8]) -> Result<ApplicationSettings, AppError> {
-    let file: SettingsFile = serde_json::from_slice(bytes)
-        .map_err(|_| AppError::new(ErrorCode::ValidationFailed, "invalid settings import file"))?;
-    if file.version != SETTINGS_VERSION {
-        return Err(AppError::new(
-            ErrorCode::ValidationFailed,
-            format!("unsupported settings version {}", file.version),
-        ));
-    }
-    file.settings.validate()?;
-    Ok(file.settings)
-}
-
 /// 逐字段(old→new)差异列表,供导入前预览。按 JSON 顶层键比较,
 /// ApplicationSettings 新增字段时自动纳入。
 pub fn diff_application_settings(
@@ -364,18 +335,6 @@ pub fn diff_application_settings(
         .collect::<Vec<_>>();
     changes.sort_by(|left, right| left.field.cmp(&right.field));
     changes
-}
-
-/// 导入预览:解析校验 + 与当前设置的差异。
-pub fn settings_import_preview(
-    current: &ApplicationSettings,
-    bytes: &[u8],
-) -> Result<SettingsImportPreview, AppError> {
-    let settings = parse_settings_import(bytes)?;
-    Ok(SettingsImportPreview {
-        changes: diff_application_settings(current, &settings),
-        settings,
-    })
 }
 
 fn render_json_value(value: &serde_json::Value) -> String {
@@ -1375,7 +1334,11 @@ pub(crate) mod tests {
         store.update(changed).unwrap();
         let mut reopened = FileSettingsStore::open(&directory.0).unwrap();
         assert!(reopened.system_proxy_enabled());
-        let exported = export_settings_json(reopened.get()).unwrap();
+        let exported = export_portable_settings(
+            reopened.get(),
+            &crate::domain::CoreNetworkSettings::default(),
+        )
+        .unwrap();
         assert!(
             !serde_json::from_slice::<serde_json::Value>(&exported)
                 .unwrap()
@@ -1383,10 +1346,11 @@ pub(crate) mod tests {
                 .unwrap()
                 .contains_key("system_proxy_enabled")
         );
-        // Legacy/imported settings lack local intent and remain disabled by default.
-        fs::write(directory.0.join("settings.json"), exported).unwrap();
+        // Importing portable settings must not replace the local proxy intent.
+        let (imported, _) = parse_portable_settings(&exported).unwrap();
+        reopened.update(imported).unwrap();
         assert!(
-            !FileSettingsStore::open(&directory.0)
+            FileSettingsStore::open(&directory.0)
                 .unwrap()
                 .system_proxy_enabled()
         );
@@ -1904,88 +1868,6 @@ pub(crate) mod tests {
         // 清空文本回到默认空配置。
         store.set_merge_yaml("\n").unwrap();
         assert_eq!(store.merge(), &MergeConfig::default());
-    }
-
-    #[test]
-    fn settings_export_contains_only_versioned_settings_without_secrets() {
-        let settings = ApplicationSettings {
-            theme: crate::domain::ThemePreference::Dark,
-            language: "zh-CN".into(),
-            log_limit: 1_000,
-            ..ApplicationSettings::default()
-        };
-        let bytes = export_settings_json(&settings).unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        let object = value.as_object().unwrap();
-        assert_eq!(object.len(), 2);
-        assert!(object.contains_key("settings"));
-        assert!(object.contains_key("version"));
-        assert_eq!(value["version"], 1);
-        let settings_object = value["settings"].as_object().unwrap();
-        assert_eq!(settings_object.len(), 6);
-        for key in [
-            "global_hotkey",
-            "language",
-            "launch_at_login",
-            "log_limit",
-            "theme",
-        ] {
-            assert!(settings_object.contains_key(key));
-        }
-        let text = String::from_utf8(bytes.clone()).unwrap();
-        for forbidden in ["secret", "keychain", "password", "token"] {
-            assert!(!text.to_lowercase().contains(forbidden));
-        }
-        assert_eq!(parse_settings_import(&bytes).unwrap(), settings);
-    }
-
-    #[test]
-    fn settings_import_rejects_version_mismatch_and_invalid_values() {
-        let wrong_version = br#"{"version": 99, "settings": {"theme": "dark", "language": "en", "log_limit": 500}}"#;
-        assert_eq!(
-            parse_settings_import(wrong_version).unwrap_err().code,
-            ErrorCode::ValidationFailed
-        );
-        let invalid =
-            br#"{"version": 1, "settings": {"theme": "dark", "language": "en", "log_limit": 99}}"#;
-        assert_eq!(
-            parse_settings_import(invalid).unwrap_err().code,
-            ErrorCode::InvalidInput
-        );
-        assert_eq!(
-            parse_settings_import(b"not json").unwrap_err().code,
-            ErrorCode::ValidationFailed
-        );
-    }
-
-    #[test]
-    fn settings_import_preview_lists_field_changes() {
-        let current = ApplicationSettings::default();
-        let incoming = ApplicationSettings {
-            theme: crate::domain::ThemePreference::Dark,
-            language: "zh-CN".into(),
-            log_limit: 500,
-            ..ApplicationSettings::default()
-        };
-        let bytes = export_settings_json(&incoming).unwrap();
-        let preview = settings_import_preview(&current, &bytes).unwrap();
-        assert_eq!(preview.settings, incoming);
-        assert_eq!(
-            preview.changes,
-            vec![
-                SettingsFieldChange {
-                    field: "language".into(),
-                    old: "en".into(),
-                    new: "zh-CN".into(),
-                },
-                SettingsFieldChange {
-                    field: "theme".into(),
-                    old: "system".into(),
-                    new: "dark".into(),
-                },
-            ]
-        );
-        assert!(diff_application_settings(&incoming, &incoming).is_empty());
     }
 
     #[test]

@@ -81,7 +81,7 @@ impl Backend {
                 self.refresh_pac_script();
                 state
             }
-            SystemProxyCommand::SetEnabled { enabled: false } | SystemProxyCommand::Disable => {
+            SystemProxyCommand::SetEnabled { enabled: false } => {
                 // Persist explicit intent before cleanup. Even if restoring the OS
                 // fails, the next launch must not re-enable a switch the user turned off.
                 disable_and_remember(
@@ -530,31 +530,6 @@ mod tests {
             self.recover_pending()
         }
         fn list_network_services(&mut self) -> Result<Vec<String>, AppError> {
-            unreachable!()
-        }
-        fn enable(
-            &mut self,
-            _: &[String],
-            _: &crate::domain::ProxyEndpoint,
-        ) -> Result<SystemProxyState, AppError> {
-            unreachable!()
-        }
-        fn set_socks(
-            &mut self,
-            _: &[String],
-            _: bool,
-            _: &crate::domain::ProxyEndpoint,
-        ) -> Result<SystemProxyState, AppError> {
-            unreachable!()
-        }
-        fn set_auto_proxy(
-            &mut self,
-            _: &[String],
-            _: Option<&str>,
-        ) -> Result<SystemProxyState, AppError> {
-            unreachable!()
-        }
-        fn set_bypass(&mut self, _: &[String], _: &[String]) -> Result<SystemProxyState, AppError> {
             unreachable!()
         }
     }

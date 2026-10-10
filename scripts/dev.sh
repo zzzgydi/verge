@@ -22,6 +22,7 @@ case "$profile" in
     *) echo "VERGE_DEV_PROFILE must be dev or release" >&2; exit 1 ;;
 esac
 export VERGE_BUILD_CHANNEL=dev
+export MACOSX_DEPLOYMENT_TARGET=15.0
 mihomo_bin=$("$script_dir/ensure-mihomo.sh")
 cd "$repo_dir"
 cargo +1.97.1 build --manifest-path "$repo_dir/Cargo.toml" -p verge --bin verge-gpui --profile "$profile" --locked
@@ -51,7 +52,11 @@ version=$(/usr/bin/sed -n 's/^version = "\(.*\)"/\1/p' "$repo_dir/apps/verge/Car
 
 # The Dev-only maintenance handshake also works while its GUI is connected.
 # A failed build or stop never replaces the existing bundle.
-"$contents/MacOS/verge-gpui" --dev-stop
+if [ -x "$bundle/Contents/MacOS/verge-gpui" ]; then
+    "$bundle/Contents/MacOS/verge-gpui" --dev-stop
+else
+    "$contents/MacOS/verge-gpui" --dev-stop
+fi
 rm -rf "$bundle"
 mv "$candidate" "$bundle"
 rm -rf "$staging"

@@ -70,7 +70,7 @@ pub(crate) fn error_text(lang: Lang, error: &str) -> String {
     } else if error == "AI connection reset" || error == "AI stream disconnected" {
         "ai.error_disconnected"
     } else if error == "AI connection failed or timed out" {
-        // Compatibility with older daemons that discarded the underlying cause.
+        // Keep the generic network error as a fallback when no underlying cause is available.
         "ai.error_network"
     } else if error.contains("timed out") || error.contains("deadline") {
         "ai.error_timeout"

@@ -1,8 +1,7 @@
 use super::*;
 use crate::{
     config::{
-        FileSettingsStore, export_portable_settings, export_settings_json, parse_portable_settings,
-        parse_settings_import, tests::TestDir,
+        FileSettingsStore, export_portable_settings, parse_portable_settings, tests::TestDir,
     },
     domain::{ApplicationSettings, CoreNetworkSettings, ThemePreference},
 };
@@ -129,29 +128,21 @@ fn export_and_import_keep_local_ai_and_proxy_intent_out_of_portable_settings() {
         false,
     )
     .unwrap();
-    let exports = [
-        export_settings_json(&application()).unwrap(),
-        export_portable_settings(&application(), &CoreNetworkSettings::default()).unwrap(),
-    ];
-    for bytes in exports {
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert!(json.get("ai").is_none());
-        assert!(json.get("system_proxy_enabled").is_none());
-        assert!(!String::from_utf8_lossy(&bytes).contains("local-test-key"));
-        if json["version"] == 1 {
-            assert_eq!(parse_settings_import(&bytes).unwrap(), application());
-        }
-        let (incoming, _) = parse_portable_settings(&bytes).unwrap();
-        general.update(incoming).unwrap();
-        assert_eq!(load(&directory.0).unwrap().api_key, saved.api_key);
-        let reopened = FileSettingsStore::open(&directory.0).unwrap();
-        assert!(reopened.system_proxy_enabled());
-        assert_eq!(reopened.get(), &application());
-    }
-    let mut json: serde_json::Value =
-        serde_json::from_slice(&fs::read(directory.0.join("settings.json")).unwrap()).unwrap();
-    json["version"] = "local-test-key".into();
-    let error = parse_settings_import(&serde_json::to_vec(&json).unwrap()).unwrap_err();
+    let bytes = export_portable_settings(&application(), &CoreNetworkSettings::default()).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(json.get("ai").is_none());
+    assert!(json.get("system_proxy_enabled").is_none());
+    assert!(!String::from_utf8_lossy(&bytes).contains("local-test-key"));
+    assert_eq!(json["version"], 2);
+    let (incoming, _) = parse_portable_settings(&bytes).unwrap();
+    general.update(incoming).unwrap();
+    assert_eq!(load(&directory.0).unwrap().api_key, saved.api_key);
+    let reopened = FileSettingsStore::open(&directory.0).unwrap();
+    assert!(reopened.system_proxy_enabled());
+    assert_eq!(reopened.get(), &application());
+    let mut invalid = json;
+    invalid["version"] = "local-test-key".into();
+    let error = parse_portable_settings(&serde_json::to_vec(&invalid).unwrap()).unwrap_err();
     assert!(!format!("{error:?}").contains("local-test-key"));
 }
 

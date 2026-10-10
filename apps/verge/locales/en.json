@@ -410,7 +410,6 @@
   "proxy.pac_mode": "Use PAC mode",
   "proxy.pac_script": "PAC script",
   "proxy.partial": "Partially enabled",
-  "proxy.restart_required": "The running daemon does not support unified system proxy settings. Quit Verge from the tray and restart.",
   "proxy.seconds": "s",
   "proxy.title": "System proxy settings",
   "proxy.validate_bypass": "Validate bypass format",

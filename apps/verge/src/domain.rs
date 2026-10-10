@@ -122,14 +122,6 @@ pub enum AppCommand {
     ExportDiagnostics {
         destination: String,
     },
-    /// Retired generation-6 request; the daemon returns NotFound without side effects.
-    ExportEncryptedBackup {
-        passphrase: String,
-    },
-    /// Retired generation-6 request; the daemon returns NotFound without side effects.
-    RestoreEncryptedBackup {
-        passphrase: String,
-    },
     UpdateMihomo,
     /// 检查应用自身更新（GitHub Releases），只读，不写任何系统状态。
     CheckAppUpdate,
@@ -308,10 +300,6 @@ pub enum AppCommandOutput {
     },
     ApplicationSettingsImportPreview(SettingsImportPreview),
     DiagnosticsExported {
-        path: String,
-    },
-    /// Decode-only compatibility with older generation-6 daemons.
-    EncryptedBackupExported {
         path: String,
     },
     MihomoUpdated {
@@ -935,35 +923,14 @@ pub enum SystemProxyCommand {
     SetEnabled {
         enabled: bool,
     },
-    Enable {
-        services: Vec<String>,
-        endpoint: ProxyEndpoint,
-    },
-    Disable,
     RecoverPending,
-    SetSocks {
-        enabled: bool,
-        endpoint: ProxyEndpoint,
-    },
-    SetAutoProxy {
-        url: Option<String>,
-    },
-    SetProxyBypass {
-        domains: Vec<String>,
-    },
 }
 
 impl SystemProxyCommand {
     pub fn risk(&self) -> CommandRisk {
         match self {
             Self::GetState => CommandRisk::ReadOnly,
-            Self::SetEnabled { .. }
-            | Self::Enable { .. }
-            | Self::Disable
-            | Self::RecoverPending
-            | Self::SetSocks { .. }
-            | Self::SetAutoProxy { .. }
-            | Self::SetProxyBypass { .. } => CommandRisk::PrivilegedWrite,
+            Self::SetEnabled { .. } | Self::RecoverPending => CommandRisk::PrivilegedWrite,
         }
     }
 }
@@ -1005,8 +972,7 @@ impl AppCommand {
             | Self::ExportApplicationSettings { .. }
             | Self::ImportApplicationSettings { .. }
             | Self::ResetApplicationSettingsScope { .. }
-            | Self::ExportDiagnostics { .. }
-            | Self::ExportEncryptedBackup { .. } => CommandRisk::LowRiskWrite,
+            | Self::ExportDiagnostics { .. } => CommandRisk::LowRiskWrite,
             Self::UpdateCoreNetworkSettings { .. }
             | Self::UpdateSystemProxySettings { .. }
             | Self::UpdateGeoData { .. }
@@ -1014,10 +980,9 @@ impl AppCommand {
             | Self::InstallHelper
             | Self::UpdateApplication
             | Self::RestartApplication => CommandRisk::PrivilegedWrite,
-            Self::QuitApplication
-            | Self::UninstallHelper
-            | Self::DeleteProfile { .. }
-            | Self::RestoreEncryptedBackup { .. } => CommandRisk::Destructive,
+            Self::QuitApplication | Self::UninstallHelper | Self::DeleteProfile { .. } => {
+                CommandRisk::Destructive
+            }
         }
     }
 }
@@ -1075,10 +1040,6 @@ mod tests {
             ProfileId::parse("../profile").unwrap_err().code,
             ErrorCode::InvalidInput
         );
-        assert_eq!(
-            SystemProxyCommand::Disable.risk(),
-            CommandRisk::PrivilegedWrite
-        );
     }
 
     #[test]
@@ -1116,20 +1077,9 @@ mod tests {
 
     #[test]
     fn system_proxy_write_variants_are_privileged() {
-        let endpoint = ProxyEndpoint::new("127.0.0.1", 7890).unwrap();
         for command in [
             SystemProxyCommand::SetEnabled { enabled: true },
             SystemProxyCommand::SetEnabled { enabled: false },
-            SystemProxyCommand::SetSocks {
-                enabled: true,
-                endpoint,
-            },
-            SystemProxyCommand::SetAutoProxy {
-                url: Some("http://127.0.0.1/proxy.pac".into()),
-            },
-            SystemProxyCommand::SetProxyBypass {
-                domains: vec!["*.local".into()],
-            },
         ] {
             assert_eq!(command.risk(), CommandRisk::PrivilegedWrite);
         }

@@ -99,7 +99,7 @@ impl IpcClient {
                 protocol_version: PROTOCOL_VERSION,
                 app_version: app_version.to_string(),
                 maintenance: false,
-                channel: Some(crate::identity::AppChannel::current().id().into()),
+                channel: crate::identity::AppChannel::current().id().into(),
             },
         )
         .map_err(ConnectError::Io)?;
@@ -397,18 +397,20 @@ mod tests {
 
     #[test]
     fn version_mismatch_is_reported() {
-        let socket = temp_socket("mismatch");
-        spawn_fake_daemon(
-            &socket,
-            ClientMessage::Welcome {
-                protocol_version: PROTOCOL_VERSION + 1,
-                initial: test_snapshot(),
-            },
-        );
-        std::thread::sleep(Duration::from_millis(100));
-        let error = IpcClient::connect(&socket, "test").unwrap_err();
-        assert!(matches!(error, ConnectError::VersionMismatch { .. }));
-        let _ = std::fs::remove_file(&socket);
+        for version in [PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1] {
+            let socket = temp_socket(&format!("mismatch-{version}"));
+            spawn_fake_daemon(
+                &socket,
+                ClientMessage::Welcome {
+                    protocol_version: version,
+                    initial: test_snapshot(),
+                },
+            );
+            std::thread::sleep(Duration::from_millis(100));
+            let error = IpcClient::connect(&socket, "test").unwrap_err();
+            assert!(matches!(error, ConnectError::VersionMismatch { .. }));
+            let _ = std::fs::remove_file(&socket);
+        }
     }
 
     #[test]
