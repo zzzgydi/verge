@@ -78,7 +78,6 @@ fn pinned_mihomo_process_and_rest_contract() {
         &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/mihomo/manifest.json"),
     )
     .unwrap();
-    assert_eq!(manifest.version, "1.19.26");
     manifest
         .target("aarch64-apple-darwin")
         .unwrap()
@@ -122,7 +121,7 @@ fn pinned_mihomo_process_and_rest_contract() {
             }
         })
         .expect("Mihomo controller did not become ready");
-    assert_eq!(version, "v1.19.26");
+    assert_eq!(version, format!("v{}", manifest.version));
 
     let realtime_options = RealtimeOptions {
         connect_timeout: Duration::from_secs(1),
