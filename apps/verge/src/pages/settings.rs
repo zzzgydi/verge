@@ -103,10 +103,11 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                     ),
                 )
                 .child(
-                    field()
-                        .label(tr(lang, "settings.language"))
-                        .child(h_flex().gap_2().children(
-                            [("en", "English"), ("zh-CN", "中文")].map(|(language, label)| {
+                    field().label(tr(lang, "settings.language")).child(
+                        h_flex()
+                            .gap_2()
+                            .flex_wrap()
+                            .children(i18n::supported_languages().map(|(language, label)| {
                                 let mut updated = settings.clone();
                                 updated.language = language.into();
                                 Button::new(format!("language-{language}"))
@@ -121,8 +122,8 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                             cx,
                                         );
                                     }))
-                            }),
-                        )),
+                            })),
+                    ),
                 )
                 .child(
                     field()

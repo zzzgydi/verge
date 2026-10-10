@@ -1,6 +1,6 @@
 //! 数值与时间的小格式化函数，供各页面和状态栏共用。
 
-use crate::i18n::Lang;
+use crate::i18n::{self, Lang};
 
 /// 字节速率：`123 B/s`、`1.2 KB/s`、`3.4 MB/s`。
 pub fn rate(bytes_per_second: u64) -> String {
@@ -24,29 +24,24 @@ pub fn bytes(value: u64) -> String {
     }
 }
 
-/// 更新间隔秒数的人性化描述（双语）。
+/// Update interval in the selected locale.
 pub fn interval(lang: Lang, seconds: u64) -> String {
-    if seconds.is_multiple_of(3600) {
-        let hours = seconds / 3600;
-        match lang {
-            Lang::ZhCn => format!("每 {hours} 小时"),
-            Lang::En if hours == 1 => "every hour".to_owned(),
-            Lang::En => format!("every {hours} hours"),
-        }
+    let (value, unit) = if seconds.is_multiple_of(3600) {
+        (seconds / 3600, "hours")
     } else if seconds.is_multiple_of(60) {
-        let minutes = seconds / 60;
-        match lang {
-            Lang::ZhCn => format!("每 {minutes} 分钟"),
-            Lang::En if minutes == 1 => "every minute".to_owned(),
-            Lang::En => format!("every {minutes} minutes"),
-        }
+        (seconds / 60, "minutes")
     } else {
-        match lang {
-            Lang::ZhCn => format!("每 {seconds} 秒"),
-            Lang::En if seconds == 1 => "every second".to_owned(),
-            Lang::En => format!("every {seconds} seconds"),
-        }
-    }
+        (seconds, "seconds")
+    };
+    let key = match (unit, value == 1) {
+        ("hours", true) => "profile.interval.hours_one",
+        ("hours", false) => "profile.interval.hours",
+        ("minutes", true) => "profile.interval.minutes_one",
+        ("minutes", false) => "profile.interval.minutes",
+        ("seconds", true) => "profile.interval.seconds_one",
+        _ => "profile.interval.seconds",
+    };
+    i18n::fmt(lang, key, &[("count", &value.to_string())])
 }
 
 /// Profile update time in the user's local timezone; absent dates stay explicit.

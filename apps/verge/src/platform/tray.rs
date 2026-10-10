@@ -8,6 +8,7 @@ use std::{
 };
 
 use crate::domain::{AppError, ErrorCode, ProfileId, ProxyGroup, RunMode};
+use crate::i18n::{self, Lang, tr};
 use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
     menu::{
@@ -92,12 +93,12 @@ impl Entry {
 }
 
 fn menu_entries(state: &TrayMenuState) -> Vec<Entry> {
-    let tr = |zh: &'static str, en: &'static str| if state.language == "zh-CN" { zh } else { en };
+    let lang = Lang::from_code(&state.language);
     let mode_label = |mode| match mode {
-        Some(RunMode::Rule) => tr("规则", "Rule"),
-        Some(RunMode::Global) => tr("全局", "Global"),
-        Some(RunMode::Direct) => tr("直连", "Direct"),
-        None => tr("内核未运行", "Core offline"),
+        Some(RunMode::Rule) => tr(lang, "tray.mode.rule"),
+        Some(RunMode::Global) => tr(lang, "tray.mode.global"),
+        Some(RunMode::Direct) => tr(lang, "tray.mode.direct"),
+        None => tr(lang, "tray.mode.offline"),
     };
     let profiles = state
         .profiles
@@ -154,17 +155,20 @@ fn menu_entries(state: &TrayMenuState) -> Vec<Entry> {
             if crate::identity::AppChannel::current().is_dev() {
                 "Verge Dev"
             } else {
-                tr("显示 Verge", "Show Verge")
+                tr(lang, "tray.show")
             },
             TrayCommand::ShowMainWindow,
             true,
         ),
         Entry::Separator,
         Entry::Submenu(
-            format!(
-                "{}（{}）",
-                tr("出站模式", "Outbound mode"),
-                mode_label(state.mode)
+            i18n::fmt(
+                lang,
+                "tray.outbound_mode_title",
+                &[
+                    ("mode", tr(lang, "tray.outbound_mode")),
+                    ("value", mode_label(state.mode)),
+                ],
             ),
             [RunMode::Rule, RunMode::Global, RunMode::Direct]
                 .into_iter()
@@ -179,11 +183,11 @@ fn menu_entries(state: &TrayMenuState) -> Vec<Entry> {
                 .collect(),
         ),
         Entry::Separator,
-        Entry::Submenu(tr("配置", "Profiles").into(), profiles),
-        Entry::Submenu(tr("代理", "Proxies").into(), proxies),
+        Entry::Submenu(tr(lang, "tray.profiles").into(), profiles),
+        Entry::Submenu(tr(lang, "tray.proxies").into(), proxies),
         Entry::Separator,
         Entry::check(
-            tr("系统代理", "System Proxy"),
+            tr(lang, "tray.system_proxy"),
             TrayCommand::ToggleSystemProxy,
             state.system_proxy_enabled,
             !crate::identity::AppChannel::current().is_dev()
@@ -191,40 +195,40 @@ fn menu_entries(state: &TrayMenuState) -> Vec<Entry> {
         ),
         Entry::Separator,
         Entry::Submenu(
-            tr("打开目录", "Open Directory").into(),
+            tr(lang, "tray.open_directory").into(),
             vec![
                 Entry::action(
-                    tr("数据目录", "Data"),
+                    tr(lang, "tray.directory.data"),
                     TrayCommand::OpenDirectory(TrayDirectory::Data),
                     true,
                 ),
                 Entry::action(
-                    tr("配置目录", "Profiles"),
+                    tr(lang, "tray.directory.profiles"),
                     TrayCommand::OpenDirectory(TrayDirectory::Profiles),
                     true,
                 ),
                 Entry::action(
-                    tr("日志目录", "Logs"),
+                    tr(lang, "tray.directory.logs"),
                     TrayCommand::OpenDirectory(TrayDirectory::Logs),
                     true,
                 ),
             ],
         ),
         Entry::Submenu(
-            tr("更多", "More").into(),
+            tr(lang, "tray.more").into(),
             vec![
                 Entry::action(
-                    tr("更新当前订阅", "Update Current Subscription"),
+                    tr(lang, "tray.update_profile"),
                     TrayCommand::UpdateCurrentProfile,
                     state.can_update_profile,
                 ),
                 Entry::action(
-                    tr("重启内核", "Restart Core"),
+                    tr(lang, "tray.restart_core"),
                     TrayCommand::RestartCore,
                     state.selected_profile.is_some(),
                 ),
                 Entry::action(
-                    tr("重启 Verge", "Restart Verge"),
+                    tr(lang, "tray.restart_app"),
                     TrayCommand::RestartApplication,
                     state.can_restart_application,
                 ),
@@ -238,7 +242,7 @@ fn menu_entries(state: &TrayMenuState) -> Vec<Entry> {
             ],
         ),
         Entry::Separator,
-        Entry::action(tr("退出", "Quit"), TrayCommand::Quit, true),
+        Entry::action(tr(lang, "tray.quit"), TrayCommand::Quit, true),
     ]
 }
 
@@ -442,5 +446,16 @@ mod tests {
             } if *enabled == !crate::identity::AppChannel::current().is_dev()
         ));
         assert_eq!(format_bytes(2048), "2.0 KiB");
+    }
+    #[test]
+    fn tray_uses_embedded_locale() {
+        let state = TrayMenuState {
+            language: "zh-CN".into(),
+            ..Default::default()
+        };
+        assert!(
+            matches!(&menu_entries(&state)[2], Entry::Submenu(title, _) if title == "出站模式（内核未运行）")
+        );
+        assert!(matches!(&menu_entries(&state)[5], Entry::Submenu(title, _) if title == "代理"));
     }
 }

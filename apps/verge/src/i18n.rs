@@ -1,1393 +1,99 @@
-//! 手写查表 i18n：不引第三方依赖。
-//!
-//! `ENTRIES` 是唯一的文案表，每行 `(key, zh-CN, en)`，两语言 key 集合
-//! 由构造保证一致（测试再强制 key 唯一、两语言非空）。`tr` 线性查找，
-//! 文案量级小、渲染开销可忽略。带参数的文案用本模块的 `fmt_*` 函数，
-//! 保持中英文语序/标点差异集中在表和函数里，调用点不拼句子。
+//! JSON locales are validated and embedded as static tables by build.rs.
 
-/// 界面语言。`ApplicationSettings.language` 已校验只可能是 `"zh-CN"` / `"en"`。
+/// A known locale; additional JSON files are discovered at build time.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Lang {
     ZhCn,
     En,
+    Other(&'static str),
 }
 
 impl Lang {
-    /// 设置里的语言码到枚举的映射；未加载设置或未知值回退英文（与 domain 默认值一致）。
     pub fn from_code(code: &str) -> Self {
         match code {
             "zh-CN" => Self::ZhCn,
-            _ => Self::En,
+            "en" => Self::En,
+            _ => LOCALES
+                .iter()
+                .find(|locale| locale.code == code)
+                .map_or(Self::En, |locale| Self::Other(locale.code)),
+        }
+    }
+
+    fn code(self) -> &'static str {
+        match self {
+            Self::ZhCn => "zh-CN",
+            Self::En => "en",
+            Self::Other(code) => code,
         }
     }
 }
 
-/// 文案表：`(key, zh-CN, en)`。key 按页面/用途命名。
-const ENTRIES: &[(&str, &str, &str)] = &[
-    (
-        "ai.proxy_settings_title",
-        "系统代理设置",
-        "System proxy settings",
-    ),
-    ("ai.proxy_bypass", "自定义绕过列表", "Custom bypass"),
-    (
-        "ai.proxy_effective_bypass",
-        "最终绕过列表",
-        "Effective bypass",
-    ),
-    (
-        "ai.proxy_defaults",
-        "包含默认绕过列表",
-        "Include default bypass",
-    ),
-    ("ai.proxy_pac", "PAC 模式", "PAC mode"),
-    ("ai.proxy_guard", "代理守卫", "Proxy guard"),
-    (
-        "ai.proxy_guard_interval",
-        "守卫检查间隔（秒）",
-        "Guard interval (seconds)",
-    ),
-    ("ai.proxy_no_custom", "无自定义条目", "No custom entries"),
-    (
-        "ai.proxy_apply_now",
-        "立即应用到当前系统代理，并保存设置",
-        "Apply to the current system proxy and save preferences",
-    ),
-    (
-        "ai.proxy_save_only",
-        "仅保存，下一次开启系统代理时生效",
-        "Save for the next enable; keep the system proxy off",
-    ),
-    (
-        "ai.proxy_settings_impact",
-        "bypass 只作用于手动系统代理；PAC 使用已保存的脚本，TUN 规则不变。保持代理开关状态，失败时尝试恢复原设置。",
-        "Bypass applies to manual system proxy. PAC uses the saved script; TUN rules stay unchanged. The proxy enable state is preserved; failures attempt to restore prior settings.",
-    ),
-    ("ai.change_scope", "影响范围", "Affected scope"),
-    (
-        "ai.dns_impact",
-        "保存全局 DNS 配置并重载内核，可能短暂中断解析。失败时尝试恢复原配置。",
-        "Save global DNS settings and reload the core. Resolution may pause briefly; failures attempt to restore the previous configuration.",
-    ),
-    (
-        "ai.tun_impact",
-        "更改当前 TUN 路由，可能短暂中断连接。失败时尝试恢复；此操作不会安装系统服务。",
-        "Change current TUN routing; connections may briefly interrupt. Failures attempt recovery. This does not install the helper.",
-    ),
-    (
-        "ai.proxy_impact",
-        "使用已保存的系统代理设置，并记住下次启动时的开关状态。关闭时恢复原网络服务设置；恢复失败时保留恢复记录。",
-        "Use saved proxy settings and remember startup intent. Disabling restores prior network service settings; failed recovery retains its recovery record.",
-    ),
-    ("ai.source_dns", "DNS 解析", "DNS resolution"),
-    ("ai.source_tun", "TUN 状态", "TUN status"),
-    ("ai.source_logs", "近期日志", "Recent logs"),
-    ("ai.dns_status_code", "状态码", "Status"),
-    (
-        "ai.no_matching_logs",
-        "近期缓冲中没有匹配的日志",
-        "No matching logs in the recent buffer",
-    ),
-    ("ai.helper", "系统服务", "Helper"),
-    ("ai.helper_ready", "就绪", "Ready"),
-    ("ai.helper_missing", "未安装", "Not installed"),
-    ("ai.helper_incompatible", "需修复", "Needs repair"),
-    ("ai.tun_verified", "设备已核验", "Device verified"),
-    ("ai.close_details", "关闭说明", "Close details"),
-    ("ai.starter_network_title", "排查网络", "Network check"),
-    ("ai.starter_node_title", "检查节点", "Check nodes"),
-    ("ai.starter_config_title", "检查配置", "Review config"),
-    ("ai.test_connection", "测试连接", "Test connection"),
-    (
-        "ai.test_hint",
-        "使用当前填写的配置测试，有修改时先保存。",
-        "Test the current form; changes are saved first.",
-    ),
-    ("ai.unsaved", "有未保存的修改", "Unsaved changes"),
-    ("ai.saving", "正在保存…", "Saving…"),
-    ("ai.loading_settings", "正在读取设置…", "Loading settings…"),
-    ("ai.stopping", "正在停止…", "Stopping…"),
-    ("ai.stopped", "已停止", "Stopped"),
-    ("ai.undo_clear_key", "撤销清除", "Undo removal"),
-    (
-        "ai.key_will_clear",
-        "保存后清除密钥。",
-        "The key will be removed when you save.",
-    ),
-    (
-        "ai.key_keep_hint",
-        "已保存，留空可保留现有密钥。",
-        "Saved. Leave blank to keep the current key.",
-    ),
-    (
-        "ai.key_optional",
-        "无须认证的本地服务可以留空。",
-        "Leave blank for local services without authentication.",
-    ),
-    ("profiles.edit_details", "编辑资料", "Edit details"),
-    ("profiles.script", "配置脚本", "Profile script"),
-    ("profiles.global_script", "全局脚本", "Global script"),
-    (
-        "script.desc",
-        "按 Merge → 全局脚本 → 配置脚本的顺序处理，最后应用网络设置。返回修改后的 config；支持 console.log，不支持异步、网络和文件访问。",
-        "Runs after Merge: global script, then profile script, followed by Network settings. Return config. console.log is supported; async, network and file access are unavailable.",
-    ),
-    ("script.preview", "预览结果", "Preview result"),
-    ("script.save", "保存草稿", "Save draft"),
-    ("script.enable", "保存并启用", "Save and enable"),
-    ("script.disable", "停用", "Disable"),
-    (
-        "script.enabled",
-        "已启用 · 草稿修改后需重新启用",
-        "Enabled · Enable again to apply draft edits",
-    ),
-    (
-        "script.disabled",
-        "未启用 · 保存草稿不会影响运行配置",
-        "Disabled · Saving a draft does not change the running configuration",
-    ),
-    ("script.saved", "草稿已保存", "Draft saved"),
-    (
-        "script.applied",
-        "脚本设置已应用",
-        "Script settings applied",
-    ),
-    ("script.preview_target", "预览配置：", "Preview profile: "),
-    (
-        "script.no_profile",
-        "导入配置后即可预览或启用脚本。",
-        "Import a profile to preview or enable the script.",
-    ),
-    (
-        "profile.details.desc",
-        "修改名称或订阅资料。订阅地址保存后，从下次更新开始使用。",
-        "Edit the name or subscription details. A new subscription URL is used on the next update.",
-    ),
-    (
-        "profile.interval_optional",
-        "留空为手动更新；填写大于 0 的秒数。",
-        "Leave blank for manual updates, or enter a positive interval in seconds.",
-    ),
-    (
-        "profile.local_edit_desc",
-        "编辑名称。配置内容通过卡片上的“编辑 YAML”修改。",
-        "Edit the name. Use Edit YAML on the profile card to change its contents.",
-    ),
-    (
-        "dev.system_read_only",
-        "开发版只读取系统代理状态，由正式版管理系统网络。",
-        "Verge Dev only reads system proxy status. The installed app manages system networking.",
-    ),
-    (
-        "dev.notice",
-        "Verge Dev · 独立开发数据 · 系统代理与 TUN 操作已禁用",
-        "Verge Dev · Separate development data · System proxy and TUN controls disabled",
-    ),
-    ("filters.all", "全部", "All"),
-    ("filters.clear", "清空", "Clear"),
-    ("filters.empty", "没有匹配结果", "No matching results"),
-    (
-        "filters.empty.desc",
-        "调整筛选条件，或点击清空查看全部。",
-        "Adjust the filters or clear them to show all results.",
-    ),
-    (
-        "rules.search",
-        "搜索规则或提供者",
-        "Search rules or providers",
-    ),
-    (
-        "connections.search",
-        "搜索域名、IP、进程、规则",
-        "Search host, IP, process, rule",
-    ),
-    (
-        "logs.search",
-        "包含关键词（空格分隔）",
-        "Include words (space-separated)",
-    ),
-    (
-        "logs.exclude",
-        "排除关键词（空格分隔）",
-        "Exclude words (space-separated)",
-    ),
-    ("logs.filter.level", "级别", "Level"),
-    ("logs.level.problems", "警告及错误", "Warnings & errors"),
-    ("ai.proposal", "待审阅建议", "Proposal"),
-    ("ai.review_apply", "审阅并应用", "Review and apply"),
-    ("ai.confirm_apply", "确认应用此更改", "Confirm this change"),
-    ("ai.dismiss", "忽略", "Dismiss"),
-    ("ai.applied", "已应用并验证", "Applied and verified"),
-    (
-        "ai.merge_operations",
-        "新增 Merge 操作",
-        "Added Merge operations",
-    ),
-    (
-        "ai.recovery_failed",
-        "应用和恢复均未成功，请先检查内核和当前配置。",
-        "Application and recovery failed. Check the core and current configuration.",
-    ),
-    (
-        "ai.audit_failed",
-        " 操作结果未能保存到审计记录。",
-        " The audit result could not be saved.",
-    ),
-    (
-        "ai.restored",
-        "未应用，已恢复原状态",
-        "Not applied; previous state restored",
-    ),
-    (
-        "ai.rejected",
-        "状态已变化，请重新预览",
-        "State changed; preview again",
-    ),
-    (
-        "ai.apply_failed",
-        "未完成，请核对当前状态",
-        "Not completed; check current state",
-    ),
-    ("ai.dismissed", "已忽略", "Dismissed"),
-    ("ai.expired", "已过期，请重新预览", "Expired; preview again"),
-    (
-        "ai.awaiting_approval",
-        "等待确认 · 5 分钟内有效",
-        "Awaiting confirmation · valid for 5 minutes",
-    ),
-    (
-        "ai.confirm_impact",
-        "请核对上方目标和全部改动。确认后执行；若当前配置已变化，本次操作会被拒绝。",
-        "Check the target and every change above. Confirmation executes it; changed configuration invalidates this proposal.",
-    ),
-    (
-        "ai.merge_impact",
-        "更改全局 Merge，会影响所有配置并重载当前内核，可能中断连接。失败时尝试恢复上一份配置与运行选择。",
-        "Changes global Merge for all profiles and reloads the core, which may interrupt connections. Failure attempts to restore the previous configuration and runtime choices.",
-    ),
-    (
-        "ai.runtime_impact",
-        "更改当前流量的模式或出站节点。失败时尝试恢复原值；已有连接可能仍沿用原出站。",
-        "Changes the current mode or selected node. Failure attempts to restore the original value; existing connections may retain their outbound.",
-    ),
-    (
-        "ai.validated",
-        "Mihomo 校验通过",
-        "Mihomo validation passed",
-    ),
-    (
-        "ai.not_checked",
-        "尚未运行本轮 Mihomo 校验",
-        "Mihomo validation has not run for this turn",
-    ),
-    ("ai.source_probe", "节点测速", "Node probes"),
-    ("ai.source_explain", "规则解释", "Rule explanation"),
-    ("ai.error_details", "技术详情", "Technical details"),
-    ("ai.reload_settings", "重新加载配置", "Reload settings"),
-    (
-        "ai.welcome",
-        "有什么网络问题需要排查？",
-        "What would you like to troubleshoot?",
-    ),
-    (
-        "ai.welcome_body",
-        "结合当前代理和内核运行状态，帮你找原因、核对配置、理清下一步。",
-        "Use your current proxy and core state to find causes, check settings and decide the next step.",
-    ),
-    (
-        "ai.connect_title",
-        "让 AI 帮你排查网络问题",
-        "Troubleshoot your network with AI",
-    ),
-    (
-        "ai.connect_body",
-        "先在设置页配置你使用的模型，完成后就可以在这里直接提问。",
-        "Configure your model in Settings, then ask a question here.",
-    ),
-    ("ai.connect", "前往设置", "Open Settings"),
-    ("ai.provider_title", "连接你的模型", "Connect your model"),
-    (
-        "ai.provider_body",
-        "支持兼容 OpenAI 的服务。API Key 保存在本机应用设置中。",
-        "Use an OpenAI-compatible service. The API key is saved in local app settings.",
-    ),
-    (
-        "ai.base",
-        "服务地址（Base URL）",
-        "Service address (Base URL)",
-    ),
-    (
-        "ai.base_hint",
-        "填写服务商提供的 API 地址，通常以 /v1 结尾；无需添加 /chat/completions。",
-        "Use the API base address, usually ending in /v1; omit /chat/completions.",
-    ),
-    ("ai.back", "返回对话", "Back to chat"),
-    ("ai.advanced", "高级设置", "Advanced settings"),
-    (
-        "ai.data_scope",
-        "发送的数据与操作范围",
-        "Data sent and available actions",
-    ),
-    (
-        "ai.data_scope_detail",
-        "模型会收到对话和运行概况。排查时可按需读取 DNS 结果、应用与域名连接、命中规则和出站链、过滤后的近期日志，以及 TUN、系统服务和 bypass 等系统代理设置。完整配置和凭据不会发送。日志最多读取 20 条，连接最多 20 条，节点测速每轮最多 6 个。节点、模式、Merge、DNS、系统代理和 TUN 修改均需你确认。",
-        "The model receives your conversation and runtime summaries. On demand, it can read DNS results, app/domain connections with matched rules and outbound chains, sanitized recent logs, TUN/helper state, and saved bypass/PAC/guard preferences. Full configurations and credentials are excluded. Limits: 20 logs, 20 connections, 6 node probes per turn. Node, mode, Merge, DNS, system proxy and TUN changes require your confirmation.",
-    ),
-    (
-        "ai.readonly",
-        "诊断与建议 · 更改需确认",
-        "Diagnostics and proposals · changes need confirmation",
-    ),
-    (
-        "ai.starter_network",
-        "为什么现在无法联网？",
-        "Why is my network not working?",
-    ),
-    (
-        "ai.starter_node",
-        "帮我检查当前节点和代理状态",
-        "Check my current node and proxy status",
-    ),
-    (
-        "ai.starter_config",
-        "当前配置有哪些需要注意的地方？",
-        "What should I check in my current configuration?",
-    ),
-    (
-        "ai.keyboard",
-        "Enter 发送 · Shift + Enter 换行",
-        "Enter to send · Shift + Enter for a new line",
-    ),
-    ("ai.prompt", "描述你遇到的问题", "Describe your problem"),
-    (
-        "ai.privacy_short",
-        "问题和诊断摘要会发送给模型。测速最多检查 6 个节点；更改设置前需单独确认。",
-        "Questions and summaries go to your model. Tests probe up to 6 nodes; setting changes require separate confirmation.",
-    ),
-    (
-        "ai.clear_confirm",
-        "开始新对话会清除当前聊天记录，输入框中的草稿会保留。",
-        "Starting a new conversation clears this chat. Your draft stays in the input.",
-    ),
-    ("ai.keep", "保留当前对话", "Keep this conversation"),
-    ("ai.copy", "复制", "Copy"),
-    ("ai.copied", "已复制", "Copied"),
-    ("ai.latest", "↓ 最新回复", "↓ Latest reply"),
-    ("ai.thinking", "正在等待模型回复…", "Waiting for the model…"),
-    (
-        "ai.no_answer",
-        "尚未收到回复，可以重试这个问题。",
-        "No response received. You can retry this question.",
-    ),
-    (
-        "ai.preparing",
-        "正在准备诊断信息…",
-        "Preparing diagnostic context…",
-    ),
-    ("ai.responding", "正在生成回复…", "Writing a response…"),
-    ("ai.complete", "回答完成", "Response complete"),
-    ("ai.saved", "设置已保存", "Settings saved"),
-    ("ai.testing", "正在测试连接…", "Testing the connection…"),
-    ("ai.connected", "连接成功", "Connection successful"),
-    (
-        "ai.cancelled",
-        "已停止，已收到的内容保留在上方。",
-        "Stopped. Any response received is preserved above.",
-    ),
-    (
-        "ai.failed",
-        "本次请求未完成",
-        "This request could not complete",
-    ),
-    (
-        "ai.reading",
-        "正在核对诊断依据…",
-        "Checking diagnostic evidence…",
-    ),
-    (
-        "ai.too_long",
-        "问题太长，请缩短后再发送（最多 8 KiB）。",
-        "Question too long. Shorten it to at most 8 KiB.",
-    ),
-    (
-        "ai.error_auth",
-        "模型服务拒绝了认证，请在模型设置中检查 API 密钥。",
-        "Authentication failed. Check the API key in provider settings.",
-    ),
-    (
-        "ai.error_quota",
-        "服务暂时限流或额度不足，请稍后重试，或检查服务商额度。",
-        "Rate or quota limit reached. Retry later or check your provider quota.",
-    ),
-    (
-        "ai.error_model",
-        "未找到接口或模型，请检查服务地址和模型名称。",
-        "Endpoint or model not found. Check the service address and model name.",
-    ),
-    (
-        "ai.error_network",
-        "无法连接服务，请检查网络、代理和服务地址后重试。",
-        "Could not connect to the service. Check your network, proxy and service address, then retry.",
-    ),
-    (
-        "ai.error_timeout",
-        "等待服务响应超时，请检查网络和代理，或在高级设置中延长超时时间。",
-        "The service did not respond in time. Check your network and proxy, or increase the timeout in advanced settings.",
-    ),
-    (
-        "ai.error_api_address",
-        "这个地址返回的是网页。请填写服务商的 API 地址，通常需在域名后添加 /v1。",
-        "This address returned a web page. Use the provider's API base address, usually with /v1 after the domain.",
-    ),
-    (
-        "ai.error_stream_format",
-        "服务没有返回流式回复，请确认地址和模型支持 Chat Completions 流式接口。",
-        "The service did not return a stream. Check that the address and model support streaming Chat Completions.",
-    ),
-    (
-        "ai.error_refused",
-        "服务或代理拒绝连接，请检查地址、端口，并确认对应服务已启动。",
-        "The service or proxy refused the connection. Check its address and port, and make sure it is running.",
-    ),
-    (
-        "ai.error_dns",
-        "无法解析服务或代理的域名，请检查地址和 DNS 设置。",
-        "Could not resolve the service or proxy hostname. Check the address and DNS settings.",
-    ),
-    (
-        "ai.error_tls",
-        "无法建立安全连接，请检查服务证书、系统时间，以及代理是否正常。",
-        "Could not establish a secure connection. Check the service certificate, system time and proxy.",
-    ),
-    (
-        "ai.error_disconnected",
-        "连接在响应完成前断开，请检查服务和代理后重试。",
-        "The connection closed before the response completed. Check the service and proxy, then retry.",
-    ),
-    (
-        "ai.error_limit",
-        "这段对话已达到长度上限，请开始新对话。",
-        "This conversation reached its limit. Start a new conversation.",
-    ),
-    (
-        "ai.error_config",
-        "模型设置不完整或格式有误，请核对地址、模型及高级设置。",
-        "Provider settings are invalid. Check the address, model and advanced settings.",
-    ),
-    (
-        "ai.error_key",
-        "请检查 API Key；更换服务地址时需重新填写密钥，或清除旧密钥。",
-        "Check the API key. When changing the service address, enter a new key or clear the old one.",
-    ),
-    (
-        "ai.error_generic",
-        "请求未完成，可以重试；若持续失败，请检查模型设置。",
-        "Request failed. Retry, or check provider settings if it persists.",
-    ),
-    ("ai.yes", "是", "Yes"),
-    ("ai.no", "否", "No"),
-    (
-        "ai.evidence_unavailable",
-        "暂时无法读取这项信息，不能据此判断状态。",
-        "This information is unavailable; no conclusion can be drawn from it.",
-    ),
-    ("ai.proxy_enabled", "系统代理已启用", "System proxy enabled"),
-    ("ai.recovery_pending", "等待恢复", "Recovery pending"),
-    ("ai.groups", "代理组", "Proxy groups"),
-    ("ai.connections", "连接数", "Connections"),
-    ("ai.rules", "规则数", "Rules"),
-    ("ai.errors", "错误", "Errors"),
-    ("ai.warnings", "警告", "Warnings"),
-    ("ai.selected", "已选配置", "Profile selected"),
-    ("ai.merge_valid", "配置合并通过", "Merge compiled"),
-    (
-        "ai.config_scope",
-        "仅检查配置合并结果，未重新运行 Mihomo 校验。",
-        "Checks the Merge result only; Mihomo validation was not rerun.",
-    ),
-    ("ai.source_runtime", "内核运行状态", "Core status"),
-    ("ai.source_proxy", "系统代理", "System proxy"),
-    ("ai.source_nodes", "代理组与节点", "Groups and nodes"),
-    ("ai.source_connections", "连接概况", "Connections"),
-    ("ai.source_rules", "规则概况", "Rules"),
-    ("ai.source_errors", "近期错误", "Recent errors"),
-    ("ai.source_config", "配置检查", "Configuration"),
-    ("ai.just_now", "刚刚采集", "Captured just now"),
-    ("ai.minutes_ago", "分钟前采集", "min ago"),
-    ("ai.title", "智能", "Intelligence"),
-    ("ai.settings", "模型设置", "Provider"),
-    ("ai.clear", "新对话", "New conversation"),
-    ("ai.model", "模型", "Model"),
-    (
-        "ai.key_saved",
-        "API key（已保存，留空保留）",
-        "API key (saved; blank keeps it)",
-    ),
-    ("ai.timeout", "单轮超时（秒）", "Turn timeout (seconds)"),
-    ("ai.steps", "工具轮数上限", "Maximum tool rounds"),
-    ("ai.save", "保存设置", "Save settings"),
-    ("ai.test", "测试已保存的连接", "Test saved provider"),
-    ("ai.clear_key", "清除密钥", "Clear key"),
-    (
-        "ai.empty",
-        "配置模型后，可以问：为什么现在无法联网？",
-        "Configure a provider, then ask: Why is my network not working?",
-    ),
-    ("ai.you", "你", "You"),
-    ("ai.retry", "重试上个问题", "Retry last question"),
-    (
-        "ai.evidence",
-        "查看本轮诊断依据",
-        "View diagnostic evidence",
-    ),
-    ("ai.send", "发送", "Send"),
-    ("ai.stop", "停止", "Stop"),
-    (
-        "connection.recovered",
-        "已重新连接。断线前未收到结果的操作没有重试，请核对当前状态。",
-        "Reconnected. Unconfirmed operations were not retried. Please check the current state.",
-    ),
-    (
-        "connection.reconnecting",
-        "与后台断开，正在重连。编辑内容已保留；未收到结果的操作请在恢复后核对。",
-        "Disconnected from the daemon. Reconnecting; drafts are preserved. Check any unconfirmed operations after recovery.",
-    ),
-    (
-        "connection.incompatible",
-        "后台版本不兼容，请退出并重新打开 Verge。编辑内容仍保留在当前窗口。",
-        "The daemon version is incompatible. Quit and reopen Verge. Drafts remain in this window.",
-    ),
-    (
-        "connection.busy",
-        "后台请求较多，请稍后重试。",
-        "Too many pending requests. Please retry shortly.",
-    ),
-    (
-        "proxy.restart_required",
-        "当前后台尚不支持统一系统代理设置，请从托盘退出 Verge 后重新启动。",
-        "The running daemon does not support unified system proxy settings. Quit Verge from the tray and restart.",
-    ),
-    ("proxy.master", "系统代理", "System proxy"),
-    ("proxy.title", "系统代理设置", "System proxy settings"),
-    ("proxy.host", "代理主机", "Proxy host"),
-    ("proxy.enabled", "已启用", "Enabled"),
-    ("proxy.disabled", "未启用", "Disabled"),
-    ("proxy.partial", "部分协议已启用", "Partially enabled"),
-    ("proxy.pac_mode", "使用 PAC 模式", "Use PAC mode"),
-    ("proxy.guard", "系统代理守卫", "System proxy guard"),
-    ("proxy.guard_interval", "代理守卫间隔", "Guard interval"),
-    (
-        "proxy.guard.desc",
-        "定期检查并恢复被修改的代理设置",
-        "Periodically restore changed proxy settings",
-    ),
-    ("proxy.seconds", "秒", "s"),
-    (
-        "proxy.default_bypass",
-        "始终使用默认绕过",
-        "Always include default bypass",
-    ),
-    (
-        "proxy.validate_bypass",
-        "验证代理绕过格式",
-        "Validate bypass format",
-    ),
-    ("proxy.bypass", "自定义代理绕过", "Custom proxy bypass"),
-    (
-        "proxy.bypass.help",
-        "每行一项，也可用逗号分隔。支持 IP、CIDR、域名和通配符。",
-        "One entry per line or comma-separated. Supports IP, CIDR, domains and wildcards.",
-    ),
-    ("proxy.pac_script", "PAC 脚本", "PAC script"),
-    (
-        "proxy.pac.help",
-        "使用 %proxy_host% 和 %mixed-port% 引用当前代理地址。",
-        "Use %proxy_host% and %mixed-port% for the current proxy address.",
-    ),
-    (
-        "proxy.interval.invalid",
-        "守卫间隔须为 1–86400 秒",
-        "Guard interval must be 1–86400 seconds",
-    ),
-    ("network.saved", "网络设置已保存", "Network settings saved"),
-    ("network.lan", "局域网连接", "Allow LAN"),
-    (
-        "network.lan.desc",
-        "允许同一网络中的设备使用此代理",
-        "Allow devices on your network to use this proxy",
-    ),
-    (
-        "network.ipv6.desc",
-        "允许 IPv6 连接与解析",
-        "Enable IPv6 connections and resolution",
-    ),
-    ("network.delay", "统一延迟", "Unified delay"),
-    (
-        "network.delay.desc",
-        "使用统一方式计算节点延迟",
-        "Use a consistent method to measure proxy latency",
-    ),
-    ("network.dns", "DNS 覆写", "DNS override"),
-    (
-        "network.dns.desc",
-        "关闭后使用订阅配置中的 DNS 设置",
-        "When off, use DNS settings from the profile",
-    ),
-    (
-        "network.dns.title",
-        "DNS 覆写配置",
-        "DNS override configuration",
-    ),
-    ("network.log", "日志等级", "Log level"),
-    ("network.port", "代理端口", "Proxy port"),
-    (
-        "network.port.desc",
-        "HTTP 与 SOCKS 共用端口",
-        "Shared port for HTTP and SOCKS",
-    ),
-    (
-        "network.port.invalid",
-        "端口必须在 1–65535 之间",
-        "Port must be between 1 and 65535",
-    ),
-    ("network.controller", "外部控制器", "External controller"),
-    (
-        "network.controller.desc",
-        "供外部面板或 API 客户端访问",
-        "Access from external dashboards and API clients",
-    ),
-    (
-        "network.controller.enable",
-        "启用外部控制器",
-        "Enable external controller",
-    ),
-    ("network.controller.address", "监听地址", "Listen address"),
-    ("network.controller.secret", "API 访问密钥", "API secret"),
-    ("network.disabled", "已关闭", "Disabled"),
-    ("home.traffic", "实时流量", "Network activity"),
-    ("home.samples", "最近 40 次采样", "LAST 40 SAMPLES"),
-    (
-        "home.traffic_waiting",
-        "内核启动后显示实时流量",
-        "Traffic appears when the core is running",
-    ),
-    ("home.recent", "较早", "Earlier"),
-    ("home.now", "现在", "Now"),
-    ("home.core_memory", "Mihomo 内存", "Mihomo memory"),
-    ("home.active_profile", "当前配置", "Active profile"),
-    ("home.no_profile", "尚未选择配置", "No profile selected"),
-    (
-        "home.profile_hint",
-        "导入并启用配置，开始连接。",
-        "Import and activate a profile to get connected.",
-    ),
-    ("home.manage_profiles", "管理配置", "Manage profiles"),
-    // ---- 通用 ----
-    ("common.refresh", "刷新", "Refresh"),
-    ("common.cancel", "取消", "Cancel"),
-    ("common.save", "保存", "Save"),
-    ("common.delete", "删除", "Delete"),
-    ("common.copy", "复制", "Copy"),
-    ("common.copied", "已复制到剪贴板", "Copied to clipboard"),
-    ("common.enable", "启用", "Enable"),
-    ("common.disable", "关闭", "Disable"),
-    ("common.update_now", "立即更新", "Update Now"),
-    ("common.more", "更多", "More"),
-    ("common.unknown", "未知", "Unknown"),
-    // ---- macOS 应用菜单 ----
-    ("menu.about", "关于 Verge", "About Verge"),
-    ("menu.services", "服务", "Services"),
-    ("menu.hide", "隐藏 Verge", "Hide Verge"),
-    ("menu.hide_others", "隐藏其他", "Hide Others"),
-    ("menu.show_all", "全部显示", "Show All"),
-    ("menu.quit", "退出 Verge", "Quit Verge"),
-    ("menu.file", "文件", "File"),
-    ("menu.close_window", "关闭窗口", "Close Window"),
-    ("menu.edit", "编辑", "Edit"),
-    ("menu.undo", "撤销", "Undo"),
-    ("menu.redo", "重做", "Redo"),
-    ("menu.cut", "剪切", "Cut"),
-    ("menu.copy", "复制", "Copy"),
-    ("menu.paste", "粘贴", "Paste"),
-    ("menu.select_all", "全选", "Select All"),
-    ("menu.window", "窗口", "Window"),
-    ("menu.minimize", "最小化", "Minimize"),
-    ("menu.zoom", "缩放", "Zoom"),
-    ("menu.full_screen", "进入全屏幕", "Enter Full Screen"),
-    ("menu.help", "帮助", "Help"),
-    ("menu.project_page", "Verge 项目主页", "Verge Project Page"),
-    // ---- 侧边栏 / 页面标题 ----
-    ("nav.header", "导航", "Navigation"),
-    ("rules.providers", "订阅资源", "Providers"),
-    ("rules.column.type", "类型", "Type"),
-    ("rules.column.match", "匹配内容", "Match"),
-    ("rules.column.target", "目标策略", "Policy"),
-    ("home.network", "网络与流量", "Network & traffic"),
-    ("home.port", "代理端口", "Proxy port"),
-    ("home.enabled", "已开启", "On"),
-    ("home.disabled", "已关闭", "Off"),
-    ("home.total_upload", "内核累计上传", "Core upload total"),
-    ("home.total_download", "内核累计下载", "Core download total"),
-    ("home.core_total", "内核累计", "Core total"),
-    ("home.nodes", "个节点", "nodes"),
-    ("home.groups", "代理组", "Groups"),
-    ("home.sample_peak", "近期峰值", "Recent peak"),
-    ("home.routes", "当前代理", "Current proxies"),
-    ("home.rule_count", "条规则", "rules"),
-    (
-        "home.no_routes",
-        "暂无可用代理组",
-        "No proxy groups available",
-    ),
-    ("home.title", "概览", "Overview"),
-    ("proxies.title", "代理", "Proxies"),
-    ("rules.title", "规则", "Rules"),
-    ("connections.title", "连接", "Connections"),
-    ("sheet.merge.preview", "预览草稿", "Preview draft"),
-    (
-        "sheet.merge.preview_note",
-        "仅预览草稿与网络覆盖的合并结果；尚未保存或应用。",
-        "Preview of this draft and network overrides; not saved or applied.",
-    ),
-    ("profiles.move_up", "上移", "Move up"),
-    ("profiles.move_down", "下移", "Move down"),
-    ("settings.geo", "Geo 数据", "Geo data"),
-    (
-        "settings.geo.desc",
-        "从 MetaCubeX 更新并校验摘要；重启内核后生效，连接会短暂中断。",
-        "Update from MetaCubeX with checksum verification. Restarts the core and briefly interrupts connections.",
-    ),
-    ("toast.geo_updated", "Geo 数据已更新", "Geo data updated"),
-    ("connections.details", "连接详情", "Connection details"),
-    ("connections.close_all", "全部关闭", "Close all"),
-    (
-        "connections.close_all.desc",
-        "关闭当前全部连接，正在进行的下载和请求可能中断。应用可能自动重新连接。",
-        "Close all current connections. Active requests and downloads may be interrupted; apps may reconnect automatically.",
-    ),
-    ("connections.network", "协议", "Network"),
-    ("connections.source", "来源", "Source"),
-    ("connections.started", "开始时间", "Started"),
-    ("profiles.title", "配置", "Profiles"),
-    ("logs.title", "日志", "Logs"),
-    ("settings.title", "设置", "Settings"),
-    // ---- 内核 / 模式状态 ----
-    ("status.core_running", "内核运行中", "Core running"),
-    ("status.core_offline", "内核离线", "Core offline"),
-    ("status.core_unknown", "状态未知", "Status unknown"),
-    (
-        "status.core_state_unknown",
-        "内核状态未知",
-        "Core status unknown",
-    ),
-    ("status.mode_unknown", "模式未知", "Mode unknown"),
-    (
-        "status.connections_waiting",
-        "连接等待中",
-        "Waiting for connections…",
-    ),
-    ("home.mode.rule", "规则", "Rule"),
-    ("home.mode.global", "全局", "Global"),
-    ("home.mode.direct", "直连", "Direct"),
-    // ---- 标题栏 ----
-    (
-        "titlebar.theme.system",
-        "主题：跟随系统（点击切换）",
-        "Theme: System (click to change)",
-    ),
-    (
-        "titlebar.theme.light",
-        "主题：浅色（点击切换）",
-        "Theme: Light (click to change)",
-    ),
-    (
-        "titlebar.theme.dark",
-        "主题：深色（点击切换）",
-        "Theme: Dark (click to change)",
-    ),
-    // ---- 概览页 ----
-    ("home.core.running", "运行中", "Running"),
-    ("home.core.offline", "离线", "Offline"),
-    ("home.tile.core", "内核状态", "Core Status"),
-    ("home.tile.upload", "上传速率", "Upload"),
-    ("home.tile.download", "下载速率", "Download"),
-    ("home.tile.memory", "内存占用", "Memory"),
-    ("home.tile.connections", "连接数", "Connections"),
-    ("home.proxy_control", "代理控制", "Proxy Control"),
-    ("home.run_mode", "运行模式", "Mode"),
-    ("home.system_proxy", "系统代理", "System Proxy"),
-    // ---- 代理页 ----
-    (
-        "proxies.search",
-        "筛选代理名称、分组或协议",
-        "Filter names, groups or protocols",
-    ),
-    ("proxies.collapse_all", "全部收起", "Collapse all"),
-    ("proxies.locate", "定位选中", "Locate selected"),
-    ("proxies.timeout", "超时", "Timeout"),
-    ("proxies.direct.title", "直连模式", "Direct mode"),
-    (
-        "proxies.direct.desc",
-        "流量直接连接目标。切换规则或全局模式以选择代理。",
-        "Traffic connects directly. Switch to Rule or Global to select proxies.",
-    ),
-    (
-        "proxies.no_match",
-        "没有可显示的代理",
-        "No proxies to display",
-    ),
-    (
-        "proxies.no_match.desc",
-        "尝试清除筛选，或启用配置后刷新。",
-        "Clear the filter, or activate a profile and refresh.",
-    ),
-    ("proxies.test_delay", "测速", "Test"),
-    ("proxies.filter_nodes", "过滤节点", "Filter nodes"),
-    ("proxies.test_all", "测速全部", "Test all"),
-    ("proxies.sort_default", "原始顺序", "Original order"),
-    ("proxies.sort_name", "名称排序", "Name"),
-    ("proxies.sort_delay", "延迟排序", "Latency"),
-    ("proxies.hide_unavailable", "隐藏不可用", "Hide unavailable"),
-    ("proxies.testing", "测速中…", "Testing…"),
-    ("proxies.empty.title", "暂无代理组", "No Proxy Groups"),
-    (
-        "proxies.empty.desc",
-        "启用配置后，这里会显示代理组和节点。",
-        "Activate a profile to see proxy groups and nodes here.",
-    ),
-    ("proxies.empty.action", "前往配置", "Go to Profiles"),
-    // ---- 连接页 ----
-    ("connections.col.process", "进程", "Process"),
-    ("connections.col.target", "目标", "Target"),
-    ("connections.col.rule", "规则", "Rule"),
-    ("connections.col.chains", "链路", "Chains"),
-    ("connections.col.upload_rate", "上传速率", "Upload rate"),
-    ("connections.col.download_rate", "下载速率", "Download rate"),
-    ("connections.col.upload", "上传", "Upload"),
-    ("connections.col.download", "下载", "Download"),
-    ("connections.col.actions", "操作", "Actions"),
-    ("connections.unknown_process", "未知进程", "Unknown process"),
-    ("connections.direct", "直连", "Direct"),
-    ("connections.close", "关闭", "Close"),
-    ("connections.close_menu", "关闭连接", "Close Connection"),
-    (
-        "connections.waiting",
-        "等待连接快照…",
-        "Waiting for connection snapshot…",
-    ),
-    // ---- 日志页 ----
-    ("logs.level.all", "全部", "All"),
-    ("logs.level.info", "信息", "Info"),
-    ("logs.level.warning", "警告", "Warning"),
-    ("logs.level.error", "错误", "Error"),
-    ("logs.level.debug", "调试", "Debug"),
-    ("logs.empty.title", "没有符合条件的日志", "No Matching Logs"),
-    (
-        "logs.empty.filtered",
-        "当前级别过滤下暂无日志，可清除过滤或等待新日志。",
-        "No logs at this level. Clear the filter or wait for new logs.",
-    ),
-    (
-        "logs.empty.unfiltered",
-        "内核产生日志后会显示在这里。",
-        "Core logs will appear here once available.",
-    ),
-    ("logs.clear_filter", "清除过滤", "Clear Filter"),
-    // ---- 配置页 ----
-    ("profiles.updated_at", "上次更新", "Last updated"),
-    ("profiles.never_updated", "尚未更新", "Not updated yet"),
-    ("profiles.policy.manual", "手动更新", "Manual update"),
-    ("profiles.policy.unscheduled", "未安排", "not scheduled"),
-    ("profiles.policy.next", "下次更新", "next update"),
-    (
-        "profiles.policy.failures",
-        "连续失败",
-        "consecutive failures",
-    ),
-    ("profiles.source.local", "本地", "Local"),
-    ("profiles.source.remote", "远程", "Remote"),
-    ("profiles.selected", "已启用", "Active"),
-    ("profiles.select", "启用", "Activate"),
-    ("profiles.view_yaml", "查看 YAML", "View YAML"),
-    ("profiles.merged", "合并结果", "Merged Result"),
-    ("profiles.set_interval", "设置间隔", "Set Interval"),
-    ("profiles.delete_menu", "删除配置", "Delete Profile"),
-    ("profiles.current", "当前", "Current"),
-    ("profiles.merge_config", "Merge 配置", "Merge Config"),
-    ("profiles.import", "导入配置", "Import Profile"),
-    ("profiles.empty.title", "暂无配置", "No Profiles"),
-    (
-        "profiles.empty.desc",
-        "导入本地 YAML 或远程订阅后开始使用。",
-        "Import a local YAML or a remote subscription to get started.",
-    ),
-    // ---- 规则页 ----
-    ("rules.providers.empty", "暂无 Provider。", "No providers."),
-    ("rules.provider_kind.proxy", "代理", "Proxy"),
-    ("rules.provider_kind.rule", "规则", "Rule"),
-    ("rules.update", "更新", "Update"),
-    ("rules.empty.title", "暂无规则", "No Rules"),
-    (
-        "rules.empty.desc",
-        "启用配置后点击“刷新”加载规则列表。",
-        "Activate a profile, then click \"Refresh\" to load rules.",
-    ),
-    ("rules.section", "规则", "Rules"),
-    // ---- 设置页 ----
-    ("settings.group.general", "通用", "General"),
-    ("settings.group.network", "网络", "Network"),
-    ("settings.group.proxy", "系统代理", "System Proxy"),
-    ("settings.group.core", "Mihomo 内核", "Mihomo Core"),
-    ("settings.group.app_update", "应用更新", "App Update"),
-    ("settings.group.system", "系统", "System"),
-    ("settings.theme", "主题", "Theme"),
-    ("settings.theme.system", "跟随系统", "System"),
-    ("settings.theme.light", "浅色", "Light"),
-    ("settings.theme.dark", "深色", "Dark"),
-    ("settings.language", "语言", "Language"),
-    ("settings.log_limit", "日志缓冲", "Log Buffer"),
-    (
-        "settings.log_limit.desc",
-        "100 – 5000 条，超出后丢弃最旧的日志",
-        "Keep 100 – 5000 entries; the oldest are dropped beyond the limit",
-    ),
-    ("settings.launch_at_login", "开机启动", "Launch at Login"),
-    (
-        "settings.launch_at_login.desc",
-        "登录 macOS 后自动启动 Verge，需打包为 .app 才能生效",
-        "Start Verge automatically after signing in to macOS; requires the packaged .app",
-    ),
-    ("settings.global_hotkey", "全局快捷键", "Global Hotkey"),
-    (
-        "settings.global_hotkey.desc",
-        "显示/隐藏主窗口；留空保存即禁用，组合键被占用时会回滚到旧快捷键",
-        "Show/hide the main window. Save empty to disable; if the shortcut is taken, the previous one is restored",
-    ),
-    ("settings.reset_default", "恢复默认", "Reset to Defaults"),
-    (
-        "settings.reset_default.desc",
-        "按作用域恢复默认值，不影响配置",
-        "Reset one scope to defaults; profiles are not affected",
-    ),
-    ("settings.scope.appearance", "外观", "Appearance"),
-    ("settings.scope.network", "网络", "Network"),
-    ("settings.scope.system", "系统", "System"),
-    ("settings.network.tun", "TUN 模式", "TUN Mode"),
-    (
-        "settings.network.tun.desc",
-        "使用当前 DNS 与 IPv6 设置；关闭后恢复解析器，应用重启后默认关闭。",
-        "Uses current DNS and IPv6 settings. Restores the resolver when off; stays off after app restart.",
-    ),
-    (
-        "settings.network.not_loaded",
-        "网络设置尚未加载。",
-        "Network settings not loaded yet.",
-    ),
-    ("settings.proxy.socks", "SOCKS 代理", "SOCKS Proxy"),
-    (
-        "settings.proxy.socks.unavailable",
-        "配置未声明 mixed-port 或 socks-port，无法启用",
-        "The profile does not declare mixed-port or socks-port; cannot enable",
-    ),
-    (
-        "settings.proxy.socks.available",
-        "使用配置的 mixed-port 或 socks-port",
-        "Uses the profile's mixed-port or socks-port",
-    ),
-    ("settings.proxy.pac", "自动代理（PAC）", "Auto Proxy (PAC)"),
-    ("settings.proxy.pac.enabled", "已启用", "Enabled"),
-    ("settings.proxy.not_set", "未设置", "Not set"),
-    ("settings.proxy.bypass", "代理绕过列表", "Proxy Bypass List"),
-    (
-        "settings.proxy.bypass.empty",
-        "未设置；输入框留空保存即清空",
-        "Not set; save with an empty input to clear",
-    ),
-    (
-        "settings.proxy.not_loaded",
-        "系统代理状态尚未加载。",
-        "System proxy state not loaded yet.",
-    ),
-    ("settings.core.update", "内核更新", "Core Update"),
-    (
-        "settings.core.update.desc",
-        "下载、校验并更新 Mihomo 内核",
-        "Download, verify, and update the Mihomo core",
-    ),
-    ("settings.core.version", "当前版本", "Current Version"),
-    (
-        "settings.app.version_dev",
-        "未打包运行（开发模式），应用更新不可用",
-        "Running unpackaged (dev mode); app updates are unavailable",
-    ),
-    ("settings.app.check", "检查更新", "Check for Updates"),
-    (
-        "settings.app.check.desc",
-        "从 GitHub Releases 检查最新版本",
-        "Check GitHub Releases for the latest version",
-    ),
-    ("settings.app.latest", "最新版本", "Latest Version"),
-    ("settings.app.update", "更新", "Update"),
-    (
-        "settings.app.update.download",
-        "下载并更新",
-        "Download & Update",
-    ),
-    ("settings.app.pending_restart", "待重启", "Pending Restart"),
-    ("settings.app.restart", "重启应用", "Restart App"),
-    ("settings.system.data_dir", "数据目录", "Data Directory"),
-    ("settings.system.helper", "特权 Helper", "Privileged Helper"),
-    (
-        "settings.system.helper.install",
-        "安装/修复",
-        "Install/Repair",
-    ),
-    ("settings.system.helper.uninstall", "卸载", "Uninstall"),
-    ("settings.helper.not_installed", "未安装", "Not installed"),
-    (
-        "settings.system.diagnostics",
-        "诊断导出",
-        "Diagnostics Export",
-    ),
-    (
-        "settings.system.diagnostics.export",
-        "导出脱敏诊断",
-        "Export Redacted Diagnostics",
-    ),
-    (
-        "settings.system.settings_export",
-        "设置导出",
-        "Settings Export",
-    ),
-    (
-        "settings.system.settings_export.desc",
-        "明文设置文件，不含密钥和订阅凭据，可跨机器迁移",
-        "Plain-text settings file without keys or subscription credentials; suitable for migration",
-    ),
-    (
-        "settings.system.settings_export.button",
-        "导出设置",
-        "Export Settings",
-    ),
-    (
-        "settings.system.settings_import",
-        "设置导入",
-        "Settings Import",
-    ),
-    (
-        "settings.system.settings_import.desc",
-        "先预览字段差异，确认后才应用",
-        "Preview field differences first; applied only after confirmation",
-    ),
-    (
-        "settings.system.settings_import.button",
-        "预览差异并导入",
-        "Preview & Import",
-    ),
-    // ---- 输入框占位 ----
-    (
-        "placeholder.profile_id",
-        "配置 ID（如 daily）",
-        "Profile ID (e.g. daily)",
-    ),
-    ("placeholder.profile_name", "显示名称", "Display name"),
-    (
-        "placeholder.profile_interval",
-        "更新间隔（秒）",
-        "Update interval (seconds)",
-    ),
-    (
-        "placeholder.profile_user_agent",
-        "可选，如 ClashX/1.0（留空用默认）",
-        "Optional, e.g. ClashX/1.0 (empty for default)",
-    ),
-    (
-        "placeholder.settings_import_path",
-        "设置导出文件的绝对路径",
-        "Absolute path of the settings export file",
-    ),
-    (
-        "placeholder.proxy_bypass",
-        "以逗号分隔，如 *.local, 192.168.0.0/16",
-        "Comma-separated, e.g. *.local, 192.168.0.0/16",
-    ),
-    (
-        "placeholder.global_hotkey",
-        "如 CmdOrCtrl+Shift+V，留空即禁用",
-        "e.g. CmdOrCtrl+Shift+V; empty to disable",
-    ),
-    // ---- 对话框 / Sheet ----
-    ("dialog.import.title", "导入配置", "Import Profile"),
-    ("dialog.import.id", "配置 ID", "Profile ID"),
-    ("dialog.import.name", "显示名称", "Display Name"),
-    ("dialog.import.url", "订阅地址", "Subscription URL"),
-    (
-        "dialog.import.url.desc",
-        "填写订阅地址后可作为远程配置导入，按间隔自动更新",
-        "Fill in a subscription URL to import as a remote profile with automatic updates",
-    ),
-    (
-        "dialog.import.interval",
-        "更新间隔（秒）",
-        "Update Interval (seconds)",
-    ),
-    (
-        "dialog.import.user_agent.desc",
-        "订阅下载请求的 UA，留空使用默认值",
-        "User-Agent for subscription downloads; empty for default",
-    ),
-    ("dialog.import.yaml", "本地 YAML 内容", "Local YAML Content"),
-    (
-        "dialog.import.local",
-        "导入本地配置",
-        "Import Local Profile",
-    ),
-    (
-        "dialog.import.remote",
-        "导入远程配置",
-        "Import Remote Profile",
-    ),
-    ("dialog.interval.title", "更新间隔", "Update Interval"),
-    (
-        "dialog.interval.desc",
-        "仅对远程配置生效",
-        "Only applies to remote profiles",
-    ),
-    (
-        "dialog.delete_profile.desc",
-        "该配置的本地文件将被移除，此操作不可恢复。",
-        "The local files of this profile will be removed. This cannot be undone.",
-    ),
-    (
-        "dialog.uninstall_helper.title",
-        "卸载特权 Helper？",
-        "Uninstall Privileged Helper?",
-    ),
-    (
-        "dialog.uninstall_helper.desc",
-        "将移除 LaunchDaemon 和特权 helper 程序，TUN 模式随即不可用；之后可在本页重新安装。",
-        "Removes the LaunchDaemon and the privileged helper; TUN mode will stop working. You can reinstall it on this page later.",
-    ),
-    (
-        "dialog.update_app.desc",
-        "将下载、校验并替换当前 Verge.app，更新在重启后生效；替换失败会自动还原现有安装。",
-        "Downloads, verifies, and replaces the current Verge.app. The update takes effect after restart; a failed replacement automatically restores the current install.",
-    ),
-    ("dialog.restart.title", "重启 Verge？", "Restart Verge?"),
-    (
-        "dialog.restart.desc",
-        "应用将立即退出并以新版本启动；代理内核会先停止再随新实例恢复。",
-        "The app quits immediately and relaunches on the new version; the proxy core stops first and resumes with the new instance.",
-    ),
-    ("dialog.restart.ok", "重启", "Restart"),
-    (
-        "dialog.reset_scope.desc",
-        "只重置该作用域的设置字段，配置和其它设置不受影响。",
-        "Only settings in this scope are reset; profiles and other settings are not affected.",
-    ),
-    ("dialog.reset_scope.ok", "恢复默认", "Reset"),
-    (
-        "dialog.import_settings.title",
-        "导入设置",
-        "Import Settings",
-    ),
-    (
-        "dialog.import_settings.no_changes",
-        "与当前设置一致，导入后没有字段变化。",
-        "Identical to current settings; importing changes nothing.",
-    ),
-    (
-        "dialog.import_settings.field_diff",
-        "字段差异",
-        "Field Differences",
-    ),
-    ("dialog.import_settings.ok", "应用导入", "Apply Import"),
-    (
-        "settings_import.empty_path",
-        "请先填写设置文件的绝对路径",
-        "Enter the absolute path of the settings file first",
-    ),
-    (
-        "sheet.yaml.loading",
-        "正在加载配置 YAML…",
-        "Loading profile YAML…",
-    ),
-    ("sheet.yaml.title", "配置 YAML", "Profile YAML"),
-    (
-        "sheet.yaml.load_failed",
-        "无法加载配置 YAML",
-        "Failed to load profile YAML",
-    ),
-    ("sheet.yaml.save", "保存到该配置", "Save to This Profile"),
-    (
-        "sheet.yaml.confirm_desc",
-        "编辑器内容将覆盖该配置的现有 YAML。",
-        "The editor content will overwrite this profile's existing YAML.",
-    ),
-    (
-        "sheet.merge.loading",
-        "正在加载 Merge 配置…",
-        "Loading merge config…",
-    ),
-    (
-        "sheet.merge.load_failed",
-        "无法加载 Merge 配置",
-        "Failed to load merge config",
-    ),
-    (
-        "sheet.merge.title",
-        "全局 Merge 配置",
-        "Global Merge Config",
-    ),
-    (
-        "sheet.merge.desc",
-        "对激活配置的顶层键做受控合并：override / merge / prepend / append / remove。",
-        "Controlled merge of top-level keys onto the active profile: override / merge / prepend / append / remove.",
-    ),
-    ("sheet.merge.save", "保存 Merge 配置", "Save Merge Config"),
-    (
-        "sheet.merge.confirm_title",
-        "保存 Merge 配置？",
-        "Save Merge Config?",
-    ),
-    (
-        "sheet.merge.confirm_desc",
-        "将立即应用到当前激活配置，校验或健康检查失败会自动回退。",
-        "Applied to the active profile immediately; rolls back automatically if validation or the health check fails.",
-    ),
-    (
-        "sheet.merged.loading",
-        "正在生成合并结果…",
-        "Generating merged result…",
-    ),
-    ("sheet.merged.title", "合并结果", "Merged Result"),
-    (
-        "sheet.merged.load_failed",
-        "无法生成合并结果",
-        "Failed to generate merged result",
-    ),
-    // ---- 全局错误条 ----
-    ("alert.op_failed", "操作未完成", "Operation failed"),
-    // ---- Toast / OS 通知 ----
-    (
-        "notify.profile_done",
-        "配置操作已完成",
-        "Profile operation completed",
-    ),
-    (
-        "notify.diagnostics_exported",
-        "脱敏诊断已导出",
-        "Redacted diagnostics exported",
-    ),
-    (
-        "hint.invalid_input",
-        "请检查输入后重试",
-        "Check your input and try again",
-    ),
-    (
-        "hint.not_found",
-        "目标可能已被移除，请刷新后重试",
-        "The target may have been removed; refresh and try again",
-    ),
-    (
-        "hint.conflict",
-        "请刷新确认当前状态后重试",
-        "Refresh to confirm the current state, then try again",
-    ),
-    (
-        "hint.permission_denied",
-        "该操作需要明确确认后才能执行",
-        "This operation requires explicit confirmation",
-    ),
-    (
-        "hint.core_unavailable",
-        "无法连接 Mihomo，请检查内核运行状态和日志",
-        "Cannot connect to Mihomo; check the core status and logs",
-    ),
-    (
-        "hint.request_timeout",
-        "请求超时，请稍后重试",
-        "Request timed out; try again shortly",
-    ),
-    (
-        "hint.proxy_delay_failed",
-        "检查节点或测速地址后重试",
-        "Check the proxy or test URL and try again",
-    ),
-    ("proxies.delay_failed", "失败", "Failed"),
-    (
-        "proxies.delay_retry",
-        "点击重试测速",
-        "Click to retry delay test",
-    ),
-    (
-        "hint.core_rejected",
-        "请检查配置 YAML 后重试",
-        "Check the profile YAML and try again",
-    ),
-    ("toast.profile_imported", "配置已导入", "Profile imported"),
-    ("toast.profile_selected", "已启用配置", "Profile activated"),
-    ("toast.yaml_saved", "配置 YAML 已保存", "Profile YAML saved"),
-    (
-        "toast.merge_saved",
-        "Merge 配置已保存",
-        "Merge config saved",
-    ),
-    (
-        "toast.remote_updated",
-        "远程配置已更新",
-        "Remote profile updated",
-    ),
-    (
-        "toast.policy_saved",
-        "更新策略已保存",
-        "Update policy saved",
-    ),
-    ("toast.profile_deleted", "配置已删除", "Profile deleted"),
-    (
-        "toast.diagnostics_exported",
-        "诊断已导出",
-        "Diagnostics exported",
-    ),
-    ("toast.settings_exported", "设置已导出", "Settings exported"),
-    ("toast.settings_imported", "设置已导入", "Settings imported"),
-    (
-        "toast.settings_reset",
-        "已恢复默认设置",
-        "Settings reset to defaults",
-    ),
-    (
-        "toast.mihomo_updated",
-        "Mihomo 内核已更新",
-        "Mihomo core updated",
-    ),
-    (
-        "toast.app_updated",
-        "应用更新已就绪，重启后生效",
-        "Update ready; takes effect after restart",
-    ),
-    (
-        "toast.app_restarting",
-        "正在重启 Verge…",
-        "Restarting Verge…",
-    ),
-    (
-        "toast.provider_updated",
-        "Provider 已更新",
-        "Provider updated",
-    ),
-];
+struct Locale {
+    code: &'static str,
+    name: &'static str,
+    entries: &'static [(&'static str, &'static str)],
+}
 
-/// 查表：缺失 key 在 debug 构建下直接 panic（测试会兜住），release 下回退 key 本身。
-pub fn tr(lang: Lang, key: &'static str) -> &'static str {
-    let Some((_, zh, en)) = ENTRIES.iter().find(|(k, _, _)| *k == key) else {
-        debug_assert!(false, "missing i18n key: {key}");
-        return key;
-    };
-    match lang {
-        Lang::ZhCn => zh,
-        Lang::En => en,
+include!(concat!(env!("OUT_DIR"), "/locales.rs"));
+
+pub fn supported_languages() -> impl Iterator<Item = (&'static str, &'static str)> {
+    LOCALES.iter().map(|locale| (locale.code, locale.name))
+}
+
+pub fn supports_language(code: &str) -> bool {
+    LOCALES.iter().any(|locale| locale.code == code)
+}
+
+fn lookup(locale: &Locale, key: &str) -> Option<&'static str> {
+    locale
+        .entries
+        .binary_search_by_key(&key, |(entry, _)| entry)
+        .ok()
+        .map(|index| locale.entries[index].1)
+}
+
+fn resolve(locale: Option<&Locale>, english: &Locale, key: &'static str) -> &'static str {
+    if let Some(value) = locale.and_then(|locale| lookup(locale, key)) {
+        return value;
     }
+    if let Some(value) = lookup(english, key) {
+        return value;
+    }
+    debug_assert!(false, "missing English i18n key: {key}");
+    key
+}
+
+/// Missing translations use English; missing English keys are programming errors.
+pub fn tr(lang: Lang, key: &'static str) -> &'static str {
+    let english = LOCALES.iter().find(|locale| locale.code == "en").unwrap();
+    let localized = LOCALES.iter().find(|locale| locale.code == lang.code());
+    resolve(localized, english, key)
+}
+
+/// Insert named fields in one pass so user-provided text is never re-interpolated.
+pub fn fmt(lang: Lang, key: &'static str, fields: &[(&str, &str)]) -> String {
+    let mut remaining = tr(lang, key);
+    let mut result = String::new();
+    while let Some((prefix, rest)) = remaining.split_once('{') {
+        result.push_str(prefix);
+        let Some((name, suffix)) = rest.split_once('}') else {
+            result.push('{');
+            remaining = rest;
+            break;
+        };
+        if let Some((_, value)) = fields.iter().find(|(field, _)| *field == name) {
+            result.push_str(value);
+        } else {
+            debug_assert!(false, "missing i18n field {name} for {key}");
+            result.push('{');
+            result.push_str(name);
+            result.push('}');
+        }
+        remaining = suffix;
+    }
+    result.push_str(remaining);
+    result
 }
 
 /// “标题 · 名称”式的对话框/Sheet 标题（两种语言结构一致）。
@@ -1397,125 +103,113 @@ pub fn fmt_titled(lang: Lang, key: &'static str, name: &str) -> String {
 
 /// 删除配置确认弹窗标题。
 pub fn fmt_delete_profile_title(lang: Lang, name: &str) -> String {
-    match lang {
-        Lang::ZhCn => format!("删除“{name}”？"),
-        Lang::En => format!("Delete \"{name}\"?"),
-    }
+    fmt(lang, "dialog.delete_profile_title", &[("name", name)])
 }
 
 /// YAML Sheet 保存确认弹窗标题。
 pub fn fmt_save_yaml_title(lang: Lang, id: &str) -> String {
-    match lang {
-        Lang::ZhCn => format!("保存到“{id}”？"),
-        Lang::En => format!("Save to \"{id}\"?"),
-    }
+    fmt(lang, "dialog.save_yaml_title", &[("id", id)])
 }
 
 /// 应用更新确认弹窗标题。
 pub fn fmt_update_app_title(lang: Lang, version: &str) -> String {
-    match lang {
-        Lang::ZhCn => format!("更新到 v{version}？"),
-        Lang::En => format!("Update to v{version}?"),
-    }
+    fmt(lang, "dialog.update_app_title", &[("version", version)])
 }
 
 /// 恢复默认值确认弹窗标题（中英文语序不同）。
 pub fn fmt_reset_scope_title(lang: Lang, scope_label: &str) -> String {
-    match lang {
-        Lang::ZhCn => format!("恢复{scope_label}默认值？"),
-        Lang::En => format!("Reset {scope_label} to defaults?"),
-    }
+    fmt(lang, "dialog.reset_scope_title", &[("scope", scope_label)])
 }
 
 /// Sheet 加载失败的内联错误（冒号后换行接后端英文 message）。
 pub fn fmt_load_failed(lang: Lang, key: &'static str, message: &str) -> String {
-    match lang {
-        Lang::ZhCn => format!("{}：\n{message}", tr(lang, key)),
-        Lang::En => format!("{}:\n{message}", tr(lang, key)),
-    }
+    fmt(
+        lang,
+        "dialog.load_failed",
+        &[("label", tr(lang, key)), ("message", message)],
+    )
 }
 
 /// 设置导入预览的字段差异行。
 pub fn fmt_field_change(lang: Lang, field: &str, old: &str, new: &str) -> String {
-    match lang {
-        Lang::ZhCn => format!("{field}：{old} → {new}"),
-        Lang::En => format!("{field}: {old} → {new}"),
-    }
+    fmt(
+        lang,
+        "settings.field_change",
+        &[("field", field), ("old", old), ("new", new)],
+    )
 }
 
 /// 状态栏连接数。
 pub fn fmt_statusbar_connections(lang: Lang, count: usize) -> String {
-    match lang {
-        Lang::ZhCn => format!("连接 {count}"),
-        Lang::En => format!("{count} connections"),
-    }
+    fmt(
+        lang,
+        "statusbar.connections",
+        &[("count", &count.to_string())],
+    )
 }
 
 /// 连接页汇总行。
 pub fn fmt_connections_summary(lang: Lang, count: usize, upload: &str, download: &str) -> String {
-    match lang {
-        Lang::ZhCn => format!("{count} 条连接 · ↑ {upload} · ↓ {download}"),
-        Lang::En => {
-            format!("{count} connections · ↑ {upload} · ↓ {download}")
-        }
-    }
+    fmt(
+        lang,
+        "connections.summary",
+        &[
+            ("count", &count.to_string()),
+            ("upload", upload),
+            ("download", download),
+        ],
+    )
 }
 
 /// 日志页级别过滤按钮文案。
 pub fn fmt_logs_filter(lang: Lang, level_label: &str) -> String {
-    match lang {
-        Lang::ZhCn => format!("级别：{level_label}"),
-        Lang::En => format!("Level: {level_label}"),
-    }
+    fmt(lang, "logs.filter_label", &[("level", level_label)])
 }
 
 /// 特权 Helper 状态行。
 pub fn fmt_helper_ready(lang: Lang, protocol_version: u32) -> String {
-    match lang {
-        Lang::ZhCn => format!("就绪（协议版本 {protocol_version}）"),
-        Lang::En => format!("Ready (protocol v{protocol_version})"),
-    }
+    fmt(
+        lang,
+        "settings.helper.ready",
+        &[("version", &protocol_version.to_string())],
+    )
 }
 
 pub fn fmt_helper_incompatible(lang: Lang, message: &str) -> String {
-    match lang {
-        Lang::ZhCn => format!("需要修复：{message}"),
-        Lang::En => format!("Needs repair: {message}"),
-    }
+    fmt(
+        lang,
+        "settings.helper.incompatible",
+        &[("message", message)],
+    )
 }
 
 /// Mihomo 内核已安装版本行。
 pub fn fmt_core_installed(lang: Lang, version: &str) -> String {
-    match lang {
-        Lang::ZhCn => format!("已安装并校验：{version}"),
-        Lang::En => format!("Installed and verified: {version}"),
-    }
+    fmt(lang, "settings.core.installed", &[("version", version)])
 }
 
 /// 应用更新最新版本行。
 pub fn fmt_app_latest(lang: Lang, version: &str, update_available: bool) -> String {
-    match (lang, update_available) {
-        (Lang::ZhCn, true) => format!("v{version}（有可用更新）"),
-        (Lang::ZhCn, false) => format!("v{version}（已是最新）"),
-        (Lang::En, true) => format!("v{version} (update available)"),
-        (Lang::En, false) => format!("v{version} (up to date)"),
-    }
+    let key = if update_available {
+        "settings.app.latest_available"
+    } else {
+        "settings.app.latest_current"
+    };
+    fmt(lang, key, &[("version", version)])
 }
 
 /// 应用更新待重启行。
 pub fn fmt_pending_restart(lang: Lang, version: &str) -> String {
-    match lang {
-        Lang::ZhCn => format!("v{version} 已就位，重启后生效"),
-        Lang::En => format!("v{version} is ready; takes effect after restart"),
-    }
+    fmt(
+        lang,
+        "settings.app.pending_version",
+        &[("version", version)],
+    )
 }
 
 /// 诊断/设置导出完成后的路径回显。
 pub fn fmt_exported(lang: Lang, path: &str) -> String {
-    match lang {
-        Lang::ZhCn => format!("已导出：{path}"),
-        Lang::En => format!("Exported: {path}"),
-    }
+    fmt(lang, "export.completed", &[("path", path)])
 }
 
 /// 全局错误条标题。
@@ -1525,12 +219,16 @@ pub fn fmt_alert_title(lang: Lang, code_debug: &str) -> String {
 
 /// 失败 toast 正文：后端英文 message + 本地化恢复指引。
 pub fn fmt_toast_error(lang: Lang, message: &str, hint: Option<&str>) -> String {
-    match (lang, hint) {
-        (Lang::ZhCn, Some(hint)) => format!("{message}。{hint}。"),
-        (Lang::ZhCn, None) => message.to_owned(),
-        (Lang::En, Some(hint)) => format!("{message}. {hint}"),
-        (Lang::En, None) => message.to_owned(),
-    }
+    hint.map_or_else(
+        || message.to_owned(),
+        |hint| {
+            fmt(
+                lang,
+                "toast.error_hint",
+                &[("message", message), ("hint", hint)],
+            )
+        },
+    )
 }
 
 #[cfg(test)]
@@ -1538,17 +236,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn entries_have_unique_keys_and_both_languages() {
-        let mut keys: Vec<&str> = ENTRIES.iter().map(|(key, _, _)| *key).collect();
-        let total = keys.len();
-        keys.sort_unstable();
-        keys.dedup();
-        assert_eq!(keys.len(), total, "i18n key 存在重复");
-        for (key, zh, en) in ENTRIES {
-            assert!(!zh.is_empty(), "{key} 缺少 zh-CN 文案");
-            assert!(!en.is_empty(), "{key} 缺少 en 文案");
-            assert_ne!(zh, en, "{key} 两语言文案相同（疑似漏翻）");
+    fn locales_have_english_base_and_sorted_keys() {
+        let english = LOCALES.iter().find(|locale| locale.code == "en").unwrap();
+        for locale in LOCALES {
+            assert!(locale.entries.windows(2).all(|pair| pair[0].0 < pair[1].0));
+            for (key, value) in locale.entries {
+                assert!(!value.is_empty(), "{key} has an empty translation");
+                assert!(
+                    lookup(english, key).is_some(),
+                    "{key} has no English translation"
+                );
+            }
         }
+    }
+
+    #[test]
+    fn missing_locale_entry_falls_back_to_english() {
+        let english = Locale {
+            code: "en",
+            name: "English",
+            entries: &[("a", "Hello"), ("b", "Goodbye")],
+        };
+        let partial = Locale {
+            code: "test",
+            name: "Test",
+            entries: &[("a", "Hola")],
+        };
+        assert_eq!(resolve(Some(&partial), &english, "a"), "Hola");
+        assert_eq!(resolve(Some(&partial), &english, "b"), "Goodbye");
+        assert_eq!(resolve(None, &english, "a"), "Hello");
     }
 
     #[test]
@@ -1564,6 +280,16 @@ mod tests {
         assert_eq!(Lang::from_code("zh-CN"), Lang::ZhCn);
         assert_eq!(Lang::from_code("en"), Lang::En);
         assert_eq!(Lang::from_code("anything-else"), Lang::En);
+        assert!(supports_language("en"));
+        assert!(supports_language("zh-CN"));
+        let english = LOCALES.iter().find(|locale| locale.code == "en").unwrap();
+        for locale in LOCALES {
+            let lang = Lang::from_code(locale.code);
+            assert_eq!(lang.code(), locale.code);
+            for &(key, english_text) in english.entries {
+                assert_eq!(tr(lang, key), lookup(locale, key).unwrap_or(english_text));
+            }
+        }
     }
 
     #[test]
@@ -1585,5 +311,9 @@ mod tests {
             "boom. try again"
         );
         assert_eq!(fmt_toast_error(Lang::ZhCn, "boom", None), "boom");
+        assert_eq!(
+            fmt(Lang::En, "dialog.delete_profile_title", &[("name", "{id}")]),
+            "Delete \"{id}\"?"
+        );
     }
 }

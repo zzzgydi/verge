@@ -385,10 +385,10 @@ impl Default for ApplicationSettings {
 impl ApplicationSettings {
     pub fn validate(&self) -> Result<(), AppError> {
         self.system_proxy.validate()?;
-        if !matches!(self.language.as_str(), "en" | "zh-CN") {
+        if !crate::i18n::supports_language(&self.language) {
             return Err(AppError::new(
                 ErrorCode::InvalidInput,
-                "language must be 'en' or 'zh-CN'",
+                "language must be a supported locale",
             ));
         }
         if !(100..=5_000).contains(&self.log_limit) {
@@ -1179,6 +1179,20 @@ mod tests {
         settings.reset_scope(SettingsScope::System);
         assert_eq!(settings.log_limit, 500);
         assert_eq!(settings.theme, ThemePreference::System);
+    }
+
+    #[test]
+    fn settings_language_must_be_embedded() {
+        let mut settings = ApplicationSettings::default();
+        for (code, _) in crate::i18n::supported_languages() {
+            settings.language = code.into();
+            assert!(settings.validate().is_ok(), "{code}");
+        }
+        settings.language = "not-embedded".into();
+        assert_eq!(
+            settings.validate().unwrap_err().code,
+            ErrorCode::InvalidInput
+        );
     }
 
     #[test]
