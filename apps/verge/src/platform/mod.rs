@@ -36,7 +36,9 @@ pub use helper_install::{
 #[cfg(target_os = "macos")]
 mod tray;
 #[cfg(target_os = "macos")]
-pub use tray::{TrayCommand, TrayDirectory, TrayMenuState, TrayService, TraySnapshot};
+pub use tray::{
+    EarFrame, TrayCommand, TrayDirectory, TrayIndicator, TrayMenuState, TrayService, TraySnapshot,
+};
 
 #[cfg(target_os = "macos")]
 mod hotkey;

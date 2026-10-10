@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     sync::{
         Arc, Mutex,
@@ -18,6 +18,41 @@ use tray_icon::{
 };
 
 const TRAY_ICON: &[u8] = include_bytes!("../../../../assets/icons/tray-logo.png");
+const SYSTEM_PROXY_ICON: &[u8] = include_bytes!("../../../../assets/icons/tray/system-proxy.png");
+const TUN_ICON: &[u8] = include_bytes!("../../../../assets/icons/tray/tun.png");
+const LEFT_EAR: &[u8] = include_bytes!("../../../../assets/icons/tray/left-ear.png");
+const RIGHT_EAR: &[u8] = include_bytes!("../../../../assets/icons/tray/right-ear.png");
+const SETTLE_EARS: &[u8] = include_bytes!("../../../../assets/icons/tray/settle.png");
+const TRAY_ICON_SIZE: f64 = 18.0;
+const EAR_HEIGHT: u32 = 8;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum EarFrame {
+    Rest,
+    Left,
+    Right,
+    Settle,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum TrayIndicator {
+    #[default]
+    None,
+    SystemProxy,
+    Tun,
+}
+
+impl TrayIndicator {
+    pub fn from_state(system_proxy: bool, tun: bool) -> Self {
+        if tun {
+            Self::Tun
+        } else if system_proxy {
+            Self::SystemProxy
+        } else {
+            Self::None
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TrayCommand {
@@ -56,6 +91,7 @@ pub struct TrayMenuState {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TraySnapshot {
     pub menu: Arc<TrayMenuState>,
+    pub indicator: TrayIndicator,
     pub upload_bytes_per_second: u64,
     pub download_bytes_per_second: u64,
 }
@@ -286,6 +322,9 @@ fn native_item(
 
 pub struct TrayService {
     tray: TrayIcon,
+    icons: HashMap<(TrayIndicator, EarFrame), Icon>,
+    indicator: Cell<TrayIndicator>,
+    animation_generation: Cell<u64>,
     commands: Arc<Mutex<HashMap<String, TrayCommand>>>,
     state: RefCell<Option<Arc<TrayMenuState>>>,
     checks: RefCell<Vec<(CheckMenuItem, bool)>>,
@@ -293,6 +332,10 @@ pub struct TrayService {
 }
 
 impl TrayService {
+    pub fn tray_id(&self) -> &tray_icon::TrayIconId {
+        self.tray.id()
+    }
+
     pub fn new(on_command: impl Fn(TrayCommand) + Send + Sync + 'static) -> Result<Self, AppError> {
         let commands = Arc::new(Mutex::new(HashMap::<String, TrayCommand>::new()));
         let event_commands = commands.clone();
@@ -314,13 +357,32 @@ impl TrayService {
             .with_icon_templated(load_icon()?)
             .build()
             .map_err(tray_error)?;
+        let mut icons = HashMap::new();
+        for indicator in [
+            TrayIndicator::None,
+            TrayIndicator::SystemProxy,
+            TrayIndicator::Tun,
+        ] {
+            for frame in [
+                EarFrame::Rest,
+                EarFrame::Left,
+                EarFrame::Right,
+                EarFrame::Settle,
+            ] {
+                icons.insert((indicator, frame), render_icon(indicator, frame)?);
+            }
+        }
         let service = Self {
             tray,
+            icons,
+            indicator: Cell::new(TrayIndicator::None),
+            animation_generation: Cell::new(0),
             commands,
             state: RefCell::new(None),
             checks: RefCell::new(Vec::new()),
             clicked,
         };
+        service.set_icon(TrayIndicator::None, EarFrame::Rest)?;
         if crate::identity::AppChannel::current().is_dev() {
             service.tray.set_title(Some("Dev"));
         }
@@ -329,6 +391,12 @@ impl TrayService {
     }
 
     pub fn update(&self, snapshot: &TraySnapshot) -> Result<(), AppError> {
+        if self.indicator.get() != snapshot.indicator {
+            self.animation_generation
+                .set(self.animation_generation.get().wrapping_add(1));
+            self.set_icon(snapshot.indicator, EarFrame::Rest)?;
+            self.indicator.set(snapshot.indicator);
+        }
         // Traffic ticks never recreate the menu or its native objects.
         if self.state.borrow().as_ref() != Some(&snapshot.menu) {
             let menu = Menu::new();
@@ -359,14 +427,88 @@ impl TrayService {
             )))
             .map_err(tray_error)
     }
+
+    fn set_icon(&self, indicator: TrayIndicator, frame: EarFrame) -> Result<(), AppError> {
+        let icon = self.icons.get(&(indicator, frame)).ok_or_else(|| {
+            AppError::new(ErrorCode::InvalidInput, "missing tray icon animation frame")
+        })?;
+        self.tray
+            .set_icon_templated(Some(icon.clone()))
+            .map_err(tray_error)?;
+        // tray-icon 0.26 recreates NSImage at 22pt each time; retain all 32 source pixels.
+        let marker = objc2::MainThreadMarker::new().expect("tray requires the main thread");
+        let button = self
+            .tray
+            .ns_status_item()
+            .and_then(|item| item.button(marker))
+            .ok_or_else(|| tray_error("tray status button unavailable"))?;
+        let image = button
+            .image()
+            .ok_or_else(|| tray_error("tray icon image unavailable"))?;
+        image.setSize(objc2_foundation::NSSize::new(
+            TRAY_ICON_SIZE,
+            TRAY_ICON_SIZE,
+        ));
+        button.setImage(Some(&image));
+        Ok(())
+    }
+
+    pub fn start_click_animation(&self) -> Result<u64, AppError> {
+        let generation = self.animation_generation.get().wrapping_add(1);
+        self.animation_generation.set(generation);
+        self.set_icon(self.indicator.get(), EarFrame::Left)?;
+        Ok(generation)
+    }
+
+    pub fn advance_click_animation(&self, generation: u64, frame: EarFrame) {
+        if self.animation_generation.get() == generation
+            && let Err(error) = self.set_icon(self.indicator.get(), frame)
+        {
+            eprintln!("[verge] tray animation: {}", error.message);
+        }
+    }
+}
+
+fn icon_image(indicator: TrayIndicator, frame: EarFrame) -> Result<image::RgbaImage, AppError> {
+    let base = match indicator {
+        TrayIndicator::None => TRAY_ICON,
+        TrayIndicator::SystemProxy => SYSTEM_PROXY_ICON,
+        TrayIndicator::Tun => TUN_ICON,
+    };
+    let mut image = image::load_from_memory(base)
+        .map_err(tray_error)?
+        .into_rgba8();
+    if frame != EarFrame::Rest {
+        let ears = match frame {
+            EarFrame::Left => LEFT_EAR,
+            EarFrame::Right => RIGHT_EAR,
+            EarFrame::Settle => SETTLE_EARS,
+            EarFrame::Rest => unreachable!(),
+        };
+        let ears = image::load_from_memory(ears)
+            .map_err(tray_error)?
+            .into_rgba8();
+        if image.dimensions() != ears.dimensions() {
+            return Err(tray_error("tray icon frames have different dimensions"));
+        }
+        // Only the ears differ in the preview. Keep the status cutout and head untouched.
+        for y in 0..EAR_HEIGHT {
+            for x in 0..image.width() {
+                image.put_pixel(x, y, *ears.get_pixel(x, y));
+            }
+        }
+    }
+    Ok(image)
+}
+
+fn render_icon(indicator: TrayIndicator, frame: EarFrame) -> Result<Icon, AppError> {
+    let image = icon_image(indicator, frame)?;
+    let (width, height) = image.dimensions();
+    Icon::from_rgba(image.into_raw(), width, height).map_err(tray_error)
 }
 
 fn load_icon() -> Result<Icon, AppError> {
-    let image = image::load_from_memory(TRAY_ICON)
-        .map_err(tray_error)?
-        .into_rgba8();
-    let (width, height) = image.dimensions();
-    Icon::from_rgba(image.into_raw(), width, height).map_err(tray_error)
+    render_icon(TrayIndicator::None, EarFrame::Rest)
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -383,6 +525,65 @@ fn tray_error(error: impl std::fmt::Display) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indicator_prefers_active_tun_and_keeps_original_bitmap_resolution() {
+        assert_eq!(TrayIndicator::from_state(false, false), TrayIndicator::None);
+        assert_eq!(
+            TrayIndicator::from_state(true, false),
+            TrayIndicator::SystemProxy
+        );
+        assert_eq!(TrayIndicator::from_state(false, true), TrayIndicator::Tun);
+        assert_eq!(TrayIndicator::from_state(true, true), TrayIndicator::Tun);
+
+        let original = image::load_from_memory(TRAY_ICON).unwrap().into_rgba8();
+        assert_eq!(
+            icon_image(TrayIndicator::None, EarFrame::Rest).unwrap(),
+            original
+        );
+        assert_ne!(
+            icon_image(TrayIndicator::SystemProxy, EarFrame::Rest).unwrap(),
+            icon_image(TrayIndicator::Tun, EarFrame::Rest).unwrap()
+        );
+        for indicator in [
+            TrayIndicator::None,
+            TrayIndicator::SystemProxy,
+            TrayIndicator::Tun,
+        ] {
+            let rest = icon_image(indicator, EarFrame::Rest).unwrap();
+            for frame in [EarFrame::Left, EarFrame::Right, EarFrame::Settle] {
+                let image = icon_image(indicator, frame).unwrap();
+                assert_eq!(image.dimensions(), original.dimensions());
+                assert_ne!(image, rest);
+                for y in EAR_HEIGHT..image.height() {
+                    for x in 0..image.width() {
+                        assert_eq!(image.get_pixel(x, y), rest.get_pixel(x, y));
+                    }
+                }
+            }
+        }
+        for indicator in [TrayIndicator::SystemProxy, TrayIndicator::Tun] {
+            let image = icon_image(indicator, EarFrame::Rest).unwrap();
+            assert_eq!(image.dimensions(), original.dimensions());
+            let mut cutout_pixels = 0;
+            // Only the lower central glyph is cut out; the outline and ears stay intact.
+            for (x, y, source) in original.enumerate_pixels() {
+                let marked = image.get_pixel(x, y);
+                assert!(marked.0[3] <= source.0[3]);
+                if marked.0[3] != source.0[3] {
+                    assert!((11..=21).contains(&x) && (16..=27).contains(&y));
+                    cutout_pixels += 1;
+                }
+            }
+            assert!(cutout_pixels > 0);
+            for y in 0..EAR_HEIGHT {
+                for x in 0..image.width() {
+                    assert_eq!(image.get_pixel(x, y), original.get_pixel(x, y));
+                }
+            }
+        }
+    }
+
     fn proxy_entries(state: &TrayMenuState) -> Vec<Entry> {
         let Entry::Submenu(_, entries) = menu_entries(state).remove(5) else {
             panic!("proxy submenu")

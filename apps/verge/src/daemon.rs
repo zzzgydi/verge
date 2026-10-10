@@ -2257,16 +2257,58 @@ fn run_daemon_appkit(
     hotkey_sync: Receiver<Option<String>>,
     shutdown: Receiver<()>,
 ) {
-    use crate::platform::{GlobalHotKeyBackend, HotkeyRegistration, MacNotifier};
+    use crate::platform::{EarFrame, GlobalHotKeyBackend, HotkeyRegistration, MacNotifier};
+    use block2::RcBlock;
     use dispatch2::MainThreadBound;
     use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+    use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSEventTrackingRunLoopMode};
+    use objc2_foundation::{NSDefaultRunLoopMode, NSRunLoop, NSTimer};
 
     let marker = MainThreadMarker::new().expect("daemon main must run on the main thread");
     let app = NSApplication::sharedApplication(marker);
     // spawn 出来的守护进程不走 LaunchServices，激活策略必须在代码里设置。
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+    let tray_id = tray.tray_id().clone();
     let bound = Arc::new(MainThreadBound::new(tray, marker));
+    let animated_tray = Arc::downgrade(&bound);
+    tray_icon::TrayIconEvent::set_event_handler(Some(move |event| {
+        if let tray_icon::TrayIconEvent::Click {
+            id,
+            button: tray_icon::MouseButton::Left,
+            button_state: tray_icon::MouseButtonState::Down,
+            ..
+        } = event
+            && id == tray_id
+            && let Some(animated_tray) = animated_tray.upgrade()
+            && let Ok(generation) = animated_tray.get_on_main(|tray| tray.start_click_animation())
+        {
+            for (delay, frame) in [
+                (85, EarFrame::Right),
+                (170, EarFrame::Settle),
+                (250, EarFrame::Rest),
+            ] {
+                let animated_tray = animated_tray.clone();
+                let block = RcBlock::new(move |_: std::ptr::NonNull<NSTimer>| {
+                    animated_tray
+                        .get_on_main(|tray| tray.advance_click_animation(generation, frame));
+                });
+                // The menu starts a nested event loop after mouseDown returns. Register
+                // for tracking explicitly so the ears move while the menu is open.
+                let timer = unsafe {
+                    NSTimer::timerWithTimeInterval_repeats_block(
+                        f64::from(delay) / 1000.0,
+                        false,
+                        &block,
+                    )
+                };
+                let run_loop = NSRunLoop::mainRunLoop();
+                unsafe {
+                    run_loop.addTimer_forMode(&timer, NSDefaultRunLoopMode);
+                    run_loop.addTimer_forMode(&timer, NSEventTrackingRunLoopMode);
+                }
+            }
+        }
+    }));
     std::thread::spawn(move || {
         while let Ok(snapshot) = tray_updates.recv() {
             bound.get_on_main(|tray| {

@@ -1,7 +1,7 @@
 //! Daemon-side tray projection. Slow OS/controller reads never run on traffic ticks.
 use super::*;
 use crate::domain::{ProfileSource, ProxySnapshot, RunMode, SystemProxyState};
-use crate::platform::{TrayDirectory, TrayMenuState};
+use crate::platform::{TrayDirectory, TrayIndicator, TrayMenuState};
 
 pub(super) struct RefreshResult {
     generation: u64,
@@ -184,6 +184,16 @@ impl TrayState {
         }
         let snapshot = TraySnapshot {
             menu: self.menu.clone(),
+            indicator: TrayIndicator::from_state(
+                self.system_proxy
+                    .as_ref()
+                    .is_some_and(SystemProxyState::unified_enabled),
+                backend.engine.is_some()
+                    && backend
+                        .tun_lease
+                        .as_ref()
+                        .is_some_and(crate::platform::TunLease::connected),
+            ),
             upload_bytes_per_second: backend.last_traffic.as_ref().map_or(0, |t| t.up),
             download_bytes_per_second: backend.last_traffic.as_ref().map_or(0, |t| t.down),
         };

@@ -9024,6 +9024,7 @@ name = "verge"
 version = "0.1.0"
 dependencies = [
  "auto-launch",
+ "block2 0.6.2",
  "boa_engine",
  "chrono",
  "dispatch2",
