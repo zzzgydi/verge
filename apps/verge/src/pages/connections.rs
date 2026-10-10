@@ -63,7 +63,7 @@ impl ConnectionsDelegate {
             // Retain readable widths; the table scrolls horizontally in smaller windows.
             columns: vec![
                 Column::new("process", tr(language, COLUMN_KEYS[0]))
-                    .width(80.)
+                    .width(160.)
                     .sortable(),
                 Column::new("target", tr(language, COLUMN_KEYS[1]))
                     .width(160.)
