@@ -4,7 +4,7 @@
 
 Verge 是使用 Rust、GPUI Kit 和 Mihomo 开发的 macOS 原生代理客户端，采用原生界面、常驻守护进程、类型明确的应用命令，以及权限范围受限的 helper。
 
-> 开发状态：项目仍在重写阶段。GPUI 分支已经可以开发和测试，但发布构建目前只支持 macOS 13 及以上的 Apple Silicon 设备。
+> 开发状态：项目仍在重写阶段。GPUI 分支已经可以开发和测试，但发布构建目前只支持 macOS 15 及以上的 Apple Silicon 设备。
 
 ## 功能
 
@@ -68,8 +68,7 @@ IPv6 路由前需先关闭 TUN。关闭 IPv6 时，IPv6 流量不由 TUN 接管�
 
 ## 环境要求
 
-- 开发环境按 GPUI Kit 当前要求使用 macOS 15 或更高版本。
-  应用包最低版本仍为 13.0；升级后的 macOS 13/14 运行兼容性尚未复核。
+- 开发环境和应用包均要求 macOS 15 或更高版本，与当前 GPUI Kit 的要求一致。
 - 当前 `.app` 打包流程要求 Apple Silicon。
 - Xcode Command Line Tools。
 - Rust `1.97.1`，并安装 `rustfmt` 和 `clippy`。
@@ -134,6 +133,7 @@ make dev
 |---|---|
 | `VERGE_DATA_DIR` | 自定义绝对路径；Dev 默认 `~/Library/Application Support/Verge Dev`，正式版默认 `~/Library/Application Support/Verge` |
 | `VERGE_DEV_PROFILE` | `dev`（默认）或 `release` 优化编译，均保留 Dev 身份 |
+| `VERGE_DIST_DIR` | `make release` 的绝对路径输出目录；默认使用仓库的 `dist/` |
 | `VERGE_MIHOMO_BIN` | 指定 Mihomo 可执行文件 |
 | `VERGE_MIHOMO_CACHE_DIR` | 覆盖 `make dev` 使用的仓库 Mihomo 缓存目录 |
 | `VERGE_MIHOMO_MANIFEST` | 指定 sidecar manifest |
@@ -168,6 +168,8 @@ SHA-256；helper 的摘要在签名完成后生成。
 打开 DMG，将 Verge 拖到 Applications，然后从“应用程序”启动。
 `make release` 只生成产物，不安装、启动或退出应用。日常使用安装后的版本，
 不要长期从 `dist` 运行；下次构建会替换这个目录中的应用包。
+如果只想构建隔离产物，可用 `VERGE_DIST_DIR=/tmp/verge-release make release`，
+不会替换仓库 `dist/Verge.app`。
 
 DMG 脚本自动下载并校验固定版本的 `create-dmg` v1.3.0，缓存在 `.cache/`。
 Finder 布局需要 macOS 图形会话，并允许执行命令的终端控制 Finder。ZIP 继续
@@ -237,7 +239,7 @@ MIHOMO_BIN=/absolute/path/to/mihomo \
 5. 在“代理”“规则”“连接”和“日志”中查看实时状态。
 6. 在“设置”中管理 TUN、DNS、IPv6、SOCKS/PAC/bypass、开机启动、快捷键、更新和诊断。
 
-Verge 会记住这台 Mac 上的系统代理开关。退出时恢复原来的系统设置，下次启动待内核健康检查通过后重新开启；手动关闭后，后续启动也保持关闭。旧版本没有保存这个选择，升级后需要开启一次。Dev 不会恢复系统代理。
+Verge 会记住这台 Mac 上的系统代理开关。退出时恢复原来的系统设置，下次启动待内核健康检查通过后重新开启；手动关闭后，后续启动也保持关闭。Dev 不会恢复系统代理。
 
 安装或卸载特权 helper、开启 TUN 和替换应用都会修改系统状态。Verge 会先请求确认，macOS 也可能要求管理员授权。
 

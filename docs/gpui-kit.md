@@ -1,7 +1,7 @@
 # GPUI Kit integration
 
-Verge uses the stable `gpui-kit 0.6.1` release, published on September 9, 2026.
-`Cargo.lock` resolves its GPUI implementation to the matching `gpui-pre 0.3.4`
+Verge uses the stable `gpui-kit 0.7.1` release.
+`Cargo.lock` resolves its GPUI implementation to the matching `gpui-pre 0.3.8`
 family. Use the [official documentation](https://gpui-kit.com/docs/) together
 with the source of the locked release when checking signatures; website examples
 may include changes newer than the release.
@@ -12,10 +12,10 @@ The application has one UI dependency:
 
 ```toml
 [dependencies]
-gpui-kit = { version = "0.6.1", features = ["tree-sitter-yaml", "tree-sitter-javascript"] }
+gpui-kit = { version = "0.7.1", features = ["tree-sitter-yaml", "tree-sitter-javascript"] }
 
 [dev-dependencies]
-gpui-kit = { version = "0.6.1", features = ["test-support"] }
+gpui-kit = { version = "0.7.1", features = ["test-support"] }
 ```
 
 Use the facade throughout application code:
@@ -28,12 +28,13 @@ Use the facade throughout application code:
 | Default component icon assets | `gpui_kit::assets::Assets` |
 | Platform APIs | `gpui_kit::platform::{...}` |
 | Bootstrap | `gpui_kit::application()` and `gpui_kit::init(cx)` |
+| Window creation | `gpui_kit::open_window(options, cx, build)`; the builder returns the application view |
 | UI tests | `#[gpui_kit::test]` and explicit test type imports |
 
 Do not add a separate Zed Git GPUI dependency or alias an old component package.
 The Kit dependency selects compatible GPUI types. The lockfile still contains
 `gpui-component` and `gpui-component-macros`: these are the styled layer and its
-macros inside GPUI Kit, both at 0.6.1, not leftover application dependencies.
+macros inside GPUI Kit, both at 0.7.1, not leftover application dependencies.
 
 Default features include components and the standard icon assets. Verge's custom
 asset source adds its logo and the selected `RefreshCw` icon, then falls back to `gpui_kit::assets::Assets`; it does
@@ -44,8 +45,10 @@ No JavaScript shell or webview is enabled.
 
 ## Window and state ownership
 
-- Initialize Kit before constructing any component-backed views. Each window
-  keeps one `Root`; the main view renders its sheet, dialog and notification layers.
+- Initialize Kit before constructing any component-backed views. Open windows
+  with `gpui_kit::open_window`; its Base Root owns the component window state and
+  automatically mounts sheet, dialog and notification layers. Do not render
+  these layers manually from `MainView`.
 - Retain inputs, editors, subscriptions, scroll handles and page entities across
   renders. `render` describes the current frame and does not perform backend IO.
 - Continue sending typed requests to the daemon. Keep the existing feature modules
@@ -58,8 +61,8 @@ No JavaScript shell or webview is enabled.
 
 ## Validation and platform scope
 
-Run `./scripts/check-rust-workspaces.sh` for the application, UI interaction tests,
-helper and vendored dependency tests, followed by strict Clippy. Test modules
+Run `./scripts/check-rust-workspaces.sh` for the application, UI interaction tests
+and helper, followed by strict Clippy. Test modules
 should import Kit types explicitly: a glob import also brings in its `test` macro
 and can shadow Rust's ordinary `#[test]`.
 
@@ -69,10 +72,10 @@ an ordinary Rust test harness uses worker threads. Use production views and asse
 and keep screenshot checks separate from event/state assertions.
 
 The current [installation guide](https://gpui-kit.com/docs/installation) specifies
-macOS 15+ for development. This migration was built and tested on macOS 15.7.9
-Apple Silicon. The existing bundle minimum remains 13.0; macOS 13/14 runtime
-compatibility has not been revalidated and must not be inferred from successful
-compilation on macOS 15.
+macOS 15+ for development. The application bundle also requires macOS 15.0;
+both build scripts set `MACOSX_DEPLOYMENT_TARGET=15.0`. This migration was built
+and tested on macOS 15.7.9 Apple Silicon. The prebuilt Mihomo executable may
+carry an older Mach-O minimum; the application bundle requires macOS 15.0.
 
 References: [setup](https://gpui-kit.com/docs/getting-started),
 [assets](https://gpui-kit.com/docs/assets),

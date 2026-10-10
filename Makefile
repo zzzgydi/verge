@@ -21,7 +21,7 @@ release:
 
 # Quit any existing Verge daemon first; VERGE_DATA_DIR can isolate test data.
 release-run: release
-	@./dist/Verge.app/Contents/MacOS/verge-gpui
+	@bundle="$${VERGE_DIST_DIR:-./dist}/Verge.app"; "$$bundle/Contents/MacOS/verge-gpui"
 
 release-size:
 	@./scripts/release-size.sh

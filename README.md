@@ -4,7 +4,7 @@
 
 Verge is a native macOS proxy client built with Rust, GPUI Kit, and Mihomo. It uses a native UI, a persistent background daemon, typed application commands, and a narrowly scoped privileged helper.
 
-> Development status: active rewrite. The GPUI branch is usable for development and testing, but release packaging is currently limited to macOS 13+ on Apple Silicon.
+> Development status: active rewrite. The GPUI branch is usable for development and testing, but release packaging is currently limited to macOS 15+ on Apple Silicon.
 
 ## Features
 
@@ -89,8 +89,7 @@ TUN starts off after an application restart.
 
 ## Requirements
 
-- macOS 15 or newer for development, following GPUI Kit’s current requirements.
-  The bundle minimum is still 13.0; macOS 13/14 have not been revalidated after this upgrade.
+- macOS 15 or newer for development and for the application bundle, following GPUI Kit's current requirements.
 - Apple Silicon for the current `.app` packaging flow.
 - Xcode Command Line Tools.
 - Rust `1.97.1` with `rustfmt` and `clippy`.
@@ -196,6 +195,8 @@ Outputs:
 Open the DMG, drag Verge onto Applications, and launch it from Applications for
 daily use. `make release` only builds artifacts; it does not install, launch, or
 stop an app. Keep the installed app outside `dist`, which is replaced on rebuild.
+For an isolated build that leaves `dist/Verge.app` untouched, set
+`VERGE_DIST_DIR` to an absolute output directory when running `make release`.
 
 DMG packaging automatically downloads and verifies pinned `create-dmg` v1.3.0
 into `.cache/`. Its Finder layout requires a macOS graphical session and permission
@@ -272,8 +273,7 @@ The binary must match the pinned executable checksum in `assets/mihomo/manifest.
 
 Verge remembers the system proxy switch on this Mac. Quitting restores the previous
 system settings; the next launch reapplies the proxy after the core passes its health
-check. Turning the switch off keeps it off on later launches. Older versions did not
-save this choice, so enable it once after upgrading. Dev never restores system proxy.
+check. Turning the switch off keeps it off on later launches. Dev never restores system proxy.
 
 Installing or removing the privileged helper, enabling TUN, and replacing the application can change system state. Verge asks for confirmation and macOS may request administrator authorization.
 

@@ -2,10 +2,15 @@
 set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
-bundle="$repo_dir/dist/Verge.app"
+dist_dir=${VERGE_DIST_DIR:-"$repo_dir/dist"}
+case "$dist_dir" in
+    /*) ;;
+    *) echo "VERGE_DIST_DIR must be an absolute path" >&2; exit 1 ;;
+esac
+bundle="$dist_dir/Verge.app"
 [ -d "$bundle" ] || { echo 'Build Verge.app first.' >&2; exit 1; }
 create_dmg=$("$script_dir/ensure-create-dmg.sh")
-staging=$(mktemp -d "$repo_dir/dist/.verge-dmg.XXXXXX")
+staging=$(mktemp -d "$dist_dir/.verge-dmg.XXXXXX")
 cleanup() {
     # Detach only disk images created in this invocation's private directory.
     hdiutil info -plist | plutil -convert json -o - - | \
@@ -24,6 +29,6 @@ ditto "$bundle" "$staging/source/Verge.app"
     --app-drop-link 470 185 --no-internet-enable \
     "$staging/Verge-macos-arm64.dmg" "$staging/source"
 hdiutil verify "$staging/Verge-macos-arm64.dmg"
-mv "$staging/Verge-macos-arm64.dmg" "$repo_dir/dist/Verge-macos-arm64.dmg"
-(cd "$repo_dir/dist" && shasum -a 256 Verge-macos-arm64.dmg > Verge-macos-arm64.dmg.sha256)
-echo "$repo_dir/dist/Verge-macos-arm64.dmg"
+mv "$staging/Verge-macos-arm64.dmg" "$dist_dir/Verge-macos-arm64.dmg"
+(cd "$dist_dir" && shasum -a 256 Verge-macos-arm64.dmg > Verge-macos-arm64.dmg.sha256)
+echo "$dist_dir/Verge-macos-arm64.dmg"
