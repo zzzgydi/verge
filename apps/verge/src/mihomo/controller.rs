@@ -3,7 +3,7 @@ use std::{
     fmt,
     io::{Read, Write},
     net::SocketAddr,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::domain::{
@@ -18,7 +18,7 @@ pub struct ControllerRequest {
     pub method: &'static str,
     pub path: String,
     pub body: Option<String>,
-    /// Long-running operations supply their own response budget. Connect/write stay bounded.
+    /// Long-running operations supply a total response budget. Connect/write stay bounded.
     pub response_timeout: Option<Duration>,
 }
 
@@ -105,16 +105,27 @@ impl ControllerTransport for TcpControllerTransport {
             body
         )
         .map_err(controller_io_error)?;
-        if let Some(timeout) = request.response_timeout {
-            stream.set_timeout(timeout).map_err(controller_io_error)?;
-        }
         let mut response = Vec::new();
-        stream
-            .take(16 * 1024 * 1024 + 1)
-            .read_to_end(&mut response)
-            .map_err(controller_io_error)?;
-        if response.len() > 16 * 1024 * 1024 {
-            return Err(controller_error("Mihomo response exceeds 16 MiB"));
+        // Socket timeouts apply to each read, so enforce a total response budget too.
+        let deadline = Instant::now() + request.response_timeout.unwrap_or(self.timeout);
+        let mut buffer = [0; 8192];
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(controller_io_error(std::io::ErrorKind::TimedOut.into()));
+            }
+            stream.set_timeout(remaining).map_err(controller_io_error)?;
+            match stream.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => {
+                    response.extend_from_slice(&buffer[..count]);
+                    if response.len() > 16 * 1024 * 1024 {
+                        return Err(controller_error("Mihomo response exceeds 16 MiB"));
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(controller_io_error(error)),
+            }
         }
         parse_http_response(&response)
     }
@@ -182,11 +193,14 @@ impl<T: ControllerTransport> MihomoClient<T> {
         if !["A", "AAAA", "CNAME"].contains(&kind) {
             return Err(controller_error("Unsupported DNS query type"));
         }
-        self.json(
-            "GET",
-            &format!("/dns/query?name={}&type={kind}", encode_path_segment(host)),
-            None,
-        )
+        let response = self.transport.send(ControllerRequest {
+            method: "GET",
+            path: format!("/dns/query?name={}&type={kind}", encode_path_segment(host)),
+            body: None,
+            // Mihomo v1.19.26 allows five seconds for DNS; leave time for its response.
+            response_timeout: Some(Duration::from_secs(7)),
+        })?;
+        serde_json::from_str(ensure_success(&response)?).map_err(controller_data_error)
     }
 
     pub fn mode(&mut self) -> Result<RunMode, AppError> {
@@ -800,6 +814,34 @@ mod tests {
     }
 
     #[test]
+    fn dns_queries_have_a_separate_response_budget() {
+        let mut client = MihomoClient::new(FakeTransport::new([
+            response(200, r#"{"Status":0,"Answer":[{"data":"203.0.113.42"}]}"#),
+            response(200, r#"{"Status":3}"#),
+            response(504, "DNS timed out"),
+            response(200, r#"{"version":"test"}"#),
+        ]));
+        let answer = client.query_dns("example.test", "A").unwrap();
+        assert_eq!(answer["Answer"][0]["data"], "203.0.113.42");
+        assert_eq!(
+            client.query_dns("missing.test", "AAAA").unwrap()["Status"],
+            3
+        );
+        assert!(client.query_dns("slow.test", "CNAME").is_err());
+        assert!(client.query_dns("example.test", "TXT").is_err());
+        assert_eq!(client.version().unwrap(), "test");
+        let requests = &client.transport.requests;
+        assert_eq!(requests.len(), 4);
+        assert_eq!(requests[0].path, "/dns/query?name=example%2Etest&type=A");
+        assert!(requests[..3].iter().all(|request| {
+            request.method == "GET"
+                && request.body.is_none()
+                && request.response_timeout == Some(Duration::from_secs(7))
+        }));
+        assert_eq!(requests[3].response_timeout, None);
+    }
+
+    #[test]
     fn selection_and_delay_encode_untrusted_url_parts() {
         let transport = FakeTransport::new([
             response(204, ""),
@@ -927,6 +969,48 @@ mod tests {
         let result = MihomoClient::new(transport).version();
         server.join().unwrap();
         assert_eq!(result.unwrap_err().code, ErrorCode::RequestTimeout);
+    }
+
+    #[test]
+    fn response_budget_expires_even_when_server_keeps_sending() {
+        use std::{net::TcpListener, thread};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut byte = [0];
+                while !request.ends_with(b"\r\n\r\n") {
+                    stream.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                }
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+                    .unwrap();
+                for byte in b"{\"version\":\"test\"}" {
+                    thread::sleep(Duration::from_millis(35));
+                    if stream.write_all(&[*byte]).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        let mut transport =
+            TcpControllerTransport::new(address, "", Duration::from_millis(150)).unwrap();
+        for response_timeout in [None, Some(Duration::from_millis(150))] {
+            let result = transport.send(ControllerRequest {
+                method: "GET",
+                path: "/version".into(),
+                body: None,
+                response_timeout,
+            });
+            assert_eq!(result.unwrap_err().code, ErrorCode::RequestTimeout);
+        }
+        server.join().unwrap();
     }
 
     #[test]

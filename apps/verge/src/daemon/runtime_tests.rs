@@ -294,6 +294,8 @@ fn ai_proposals_preview_confirm_verify_and_reject_stale_changes() {
         answer[10] = 0;
         answer[11] = 0;
         answer.extend_from_slice(&[0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 203, 0, 113, 42]);
+        // Valid DNS responses can outlast the ordinary two-second controller budget.
+        std::thread::sleep(Duration::from_secs(3));
         dns_socket.send_to(&answer, peer).unwrap();
     });
     let mut diagnostics = session(&backend);
