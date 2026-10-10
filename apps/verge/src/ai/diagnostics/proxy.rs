@@ -165,10 +165,15 @@ fn apply_patch(
         });
     }
     for entry in patch.add_bypass {
+        // Empty-list fallback applies to the final result, not an intermediate deletion.
         if !next
-            .effective_bypass()
+            .bypass
             .iter()
             .any(|current| current.eq_ignore_ascii_case(&entry))
+            && !(next.use_default_bypass
+                && DEFAULT_PROXY_BYPASS
+                    .iter()
+                    .any(|default| default.eq_ignore_ascii_case(&entry)))
         {
             next.bypass.push(entry);
         }
@@ -291,6 +296,45 @@ mod tests {
         assert!(reset.pac_mode);
         assert!(reset.guard_enabled);
         assert_eq!(reset.guard_interval_secs, 15);
+    }
+    #[test]
+    fn replacing_last_custom_bypass_does_not_restore_defaults() {
+        let previous = SystemProxySettings {
+            use_default_bypass: false,
+            bypass: vec!["old.example".into()],
+            ..Default::default()
+        };
+        for additions in [
+            vec!["localhost"],
+            vec!["localhost", "new.example", "LOCALHOST"],
+            vec!["new.example", "localhost", "LOCALHOST"],
+        ] {
+            let request = json!({"remove_bypass":["old.example"],"add_bypass":additions});
+            let next = patch(&previous, &request.to_string()).unwrap();
+            let mut expected = if additions.len() == 1 {
+                vec!["localhost".to_owned()]
+            } else {
+                vec!["localhost".into(), "new.example".into()]
+            };
+            expected.sort();
+            let mut actual = next.effective_bypass();
+            actual.sort();
+            assert_eq!(actual, expected);
+            assert!(!next.use_default_bypass);
+        }
+        // An actually empty final list still uses the application fallback.
+        let empty = patch(&previous, r#"{"remove_bypass":["old.example"]}"#).unwrap();
+        assert_eq!(empty.effective_bypass(), DEFAULT_PROXY_BYPASS);
+        let defaults = SystemProxySettings::default();
+        let unchanged = patch(&defaults, r#"{"add_bypass":["localhost"]}"#).unwrap();
+        assert_eq!(unchanged, defaults);
+        let disabled = SystemProxySettings {
+            use_default_bypass: false,
+            ..Default::default()
+        };
+        let added = patch(&disabled, r#"{"add_bypass":["localhost"]}"#).unwrap();
+        assert_eq!(added.bypass, ["localhost"]);
+        assert_eq!(added.effective_bypass(), ["localhost"]);
     }
     #[test]
     fn malformed_and_ambiguous_patches_are_rejected_even_if_validation_is_disabled() {
