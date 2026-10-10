@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: dev dev-build dev-stop mihomo release release-run release-size
+.PHONY: dev dev-build dev-stop mihomo mihomo-check mihomo-upgrade release release-run release-size
 
 dev:
 	@./scripts/dev.sh
@@ -12,6 +12,14 @@ dev-stop:
 	@./scripts/dev.sh --stop
 
 mihomo:
+	@./scripts/ensure-mihomo.sh
+
+mihomo-check:
+	@python3 ./scripts/mihomo-release.py check
+
+# Explicitly advance the verified pin and refresh the repository's local cache.
+mihomo-upgrade:
+	@python3 ./scripts/mihomo-release.py update
 	@./scripts/ensure-mihomo.sh
 
 # Local optimized .app, updater ZIP and drag-to-install DMG.

@@ -93,7 +93,7 @@ TUN starts off after an application restart.
 - Apple Silicon for the current `.app` packaging flow.
 - Xcode Command Line Tools.
 - Rust `1.97.1` with `rustfmt` and `clippy`.
-- A Mihomo `v1.19.26` arm64 binary for release packaging and real contract tests.
+- The pinned Mihomo arm64 binary (prepared by `make mihomo`) for real contract tests.
 
 ```bash
 xcode-select --install
@@ -116,6 +116,9 @@ make dev
 locks, and Keychain services are separate from the installed Verge app.
 The script prepares the pinned Mihomo binary in `.cache/mihomo/`, verifies its
 SHA-256, and copies it into the Dev bundle. Apple Silicon macOS is supported.
+Dev and Release builds also check Mihomo's latest stable GitHub release and warn
+when it is newer than the pin; a failed network check does not block a build.
+Builds never silently change the pinned version or the installed/running core.
 
 After a successful build and signature check, the script gracefully quits only
 the previous Dev daemon and opens the new build. A failed build leaves the old
@@ -143,6 +146,20 @@ To prepare Mihomo without starting the application:
 ```bash
 make mihomo
 ```
+
+To check for a newer stable release or explicitly advance the pin:
+
+```bash
+make mihomo-check
+make mihomo-upgrade
+```
+
+`mihomo-upgrade` reads the digest published for the Apple Silicon asset on
+GitHub, verifies the downloaded archive, records both archive and extracted
+executable SHA-256 in `assets/mihomo/manifest.json`, and refreshes the local
+`.cache/mihomo/` copy. Review the manifest diff and build Dev/Release again to
+bundle the new version. This does not replace a running or installed core;
+the Settings button updates an app-managed core only to its bundled pin.
 
 The first GUI process starts the same executable with `--daemon` and connects to it over the local socket. Closing the window leaves the daemon and menu bar item running; use **Quit** from the menu bar to stop the complete application.
 

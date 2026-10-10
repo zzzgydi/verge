@@ -72,7 +72,7 @@ IPv6 路由前需先关闭 TUN。关闭 IPv6 时，IPv6 流量不由 TUN 接管�
 - 当前 `.app` 打包流程要求 Apple Silicon。
 - Xcode Command Line Tools。
 - Rust `1.97.1`，并安装 `rustfmt` 和 `clippy`。
-- 打包和真实契约测试需要 Mihomo `v1.19.26` arm64 二进制。
+- 真实契约测试需要与 manifest 匹配的 Mihomo arm64 二进制，可用 `make mihomo` 准备。
 
 ```bash
 xcode-select --install
@@ -94,6 +94,8 @@ make dev
 `~/Library/Application Support/Verge Dev`，配置、日志、socket、锁和 Keychain
 服务都与正式版分开。脚本自动准备固定版本的 Mihomo，校验 SHA-256 后放进 Dev
 应用包；下载缓存位于 `.cache/mihomo/`。目前支持 Apple Silicon macOS。
+Dev 和 Release 构建会检查 Mihomo 上游最新稳定版，有新版本时提示；网络检查失败不阻止打包。
+构建不会悄悄改变固定版本，也不会替换正在运行或已安装的内核。
 
 编译和签名校验成功后，脚本只退出旧 Dev daemon，再启动新版本；编译失败时保留
 旧 Dev。`make dev-stop` 会停止开发版的后台、内核和窗口；`make dev-build` 替换
@@ -116,6 +118,18 @@ Dev 会拒绝正式版默认数据目录及其父子路径，也会检查符号�
 ```bash
 make mihomo
 ```
+
+检查上游稳定版，或显式更新固定版本与本地缓存：
+
+```bash
+make mihomo-check
+make mihomo-upgrade
+```
+
+`mihomo-upgrade` 读取 GitHub 发布页上 Apple Silicon 资产的 SHA-256，校验下载的压缩包，
+将压缩包与解压后的可执行文件摘要写入 `assets/mihomo/manifest.json`，并刷新
+`.cache/mihomo/`。检查 manifest 差异后重新构建 Dev/Release，才会将新版本装入应用包。
+此操作不替换运行中或已安装的内核；设置页的内核更新按钮也只更新到应用包固定的版本。
 
 第一个 GUI 进程会用 `--daemon` 参数拉起同一个可执行文件，再通过本机 socket 连接守护进程。关闭窗口后，守护进程和菜单栏图标仍会运行；需要完全退出时，请从菜单栏选择“退出”。
 

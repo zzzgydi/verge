@@ -18,6 +18,7 @@ if [ "$target_arch" != "arm64" ]; then
     exit 1
 fi
 
+python3 "$repo_dir/scripts/mihomo-release.py" check
 mihomo_bin=$("$repo_dir/scripts/ensure-mihomo.sh")
 
 manifest="$repo_dir/assets/mihomo/manifest.json"

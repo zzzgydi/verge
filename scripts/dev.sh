@@ -23,6 +23,7 @@ case "$profile" in
 esac
 export VERGE_BUILD_CHANNEL=dev
 export MACOSX_DEPLOYMENT_TARGET=15.0
+python3 "$script_dir/mihomo-release.py" check
 mihomo_bin=$("$script_dir/ensure-mihomo.sh")
 cd "$repo_dir"
 cargo +1.97.1 build --manifest-path "$repo_dir/Cargo.toml" -p verge --bin verge-gpui --profile "$profile" --locked
