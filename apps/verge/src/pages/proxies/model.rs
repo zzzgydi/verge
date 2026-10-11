@@ -16,7 +16,7 @@ impl Row {
     pub fn height(&self) -> f32 {
         match self {
             Self::Group(_) => GROUP_HEIGHT,
-            Self::Toolbar(_) => 44.,
+            Self::Toolbar(_) => metrics::PROXY_TOOLBAR,
             Self::Nodes { .. } => NODES_HEIGHT,
         }
     }

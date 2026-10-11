@@ -34,6 +34,8 @@ pub struct ProxyPage {
     mode: Option<RunMode>,
     profile: Option<ProfileId>,
     revision: u64,
+    core_status: crate::ui::CoreStatus,
+    loading: bool,
     lang: Lang,
     expanded: HashSet<String>,
     pub search: Entity<InputState>,
@@ -54,6 +56,7 @@ pub struct ProxyPage {
     search_lang: Lang,
     animation: HashMap<String, f32>,
     animation_task: Option<Task<()>>,
+    prepare_task: Option<Task<()>>,
     test_queue: VecDeque<String>,
     test_reserved: HashSet<String>,
     _subscriptions: Vec<Subscription>,
@@ -86,6 +89,8 @@ impl ProxyPage {
             mode: None,
             profile: None,
             revision: 0,
+            core_status: crate::ui::CoreStatus::Unknown,
+            loading: false,
             lang: Lang::En,
             expanded: HashSet::new(),
             search,
@@ -106,6 +111,7 @@ impl ProxyPage {
             search_lang: Lang::En,
             animation: HashMap::new(),
             animation_task: None,
+            prepare_task: None,
             test_queue: VecDeque::new(),
             test_reserved: HashSet::new(),
             _subscriptions: vec![subscription, bounds],
@@ -213,7 +219,10 @@ impl ProxyPage {
         let layout_changed = !Arc::ptr_eq(&self.snapshot, &state.proxies)
             || self.mode != state.mode
             || self.profile != state.selected_profile;
-        let changed = layout_changed
+        let loading = state.pending.contains("proxy_groups");
+        let changed = self.core_status != state.core_status
+            || self.loading != loading
+            || layout_changed
             || self.revision != state.proxy_revision
             || self.lang != lang
             || self.pending != state.delay_pending;
@@ -239,7 +248,17 @@ impl ProxyPage {
             self.animation_task = None;
             self.test_queue.clear();
         }
+        self.core_status = state.core_status;
+        self.loading = loading;
         self.snapshot = state.proxies.clone();
+        if layout_changed || self.lang != lang {
+            self.prepare_task = Some(cx.spawn(async move |page, cx| {
+                let _ = page.update_in(cx, |page, window, cx| {
+                    page.ensure_group_searches(window, cx);
+                    cx.notify();
+                });
+            }));
+        }
         self.group_searches
             .retain(|name, _| self.snapshot.groups.iter().any(|g| &g.name == name));
         self.group_subscriptions
@@ -386,14 +405,19 @@ impl ProxyPage {
     fn dispatch(&self, action: UiAction, cx: &mut Context<Self>) {
         let actions = self.actions.clone();
         cx.defer(move |cx| {
-            let _ = actions.update(cx, |view, cx| view.dispatch(action, cx));
+            let _ = actions.update(cx, |view, cx| {
+                if let UiAction::Navigate(page) = action {
+                    view.navigate(page, cx);
+                } else {
+                    view.dispatch(action, cx);
+                }
+            });
         });
     }
 }
 
 impl Render for ProxyPage {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.ensure_group_searches(window, cx);
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity().downgrade();
         let current_columns = self.columns;
         let measure_width = canvas(
@@ -443,7 +467,7 @@ impl Render for ProxyPage {
                         .label(tr(self.lang, "proxies.collapse_all"))
                         .h(px(crate::appearance::metrics::CONTROL))
                         .ghost()
-                        .on_click(cx.listener(|this, _, window, cx| {
+                        .on_click(cx.listener(|this, _, _, cx| {
                             let opened: Vec<_> = this
                                 .snapshot
                                 .groups
@@ -458,9 +482,8 @@ impl Render for ProxyPage {
                                 this.animate(cx);
                             }
                             this.expanded.clear();
-                            this.query.clear();
-                            this.search
-                                .update(cx, |input, cx| input.set_value("", window, cx));
+                            this.filter_collapsed
+                                .extend(this.snapshot.groups.iter().map(|g| g.name.clone()));
                             this.rebuild();
                             this.scroll.set_offset(point(px(0.), px(0.)));
                             cx.notify();
@@ -479,6 +502,33 @@ impl Render for ProxyPage {
                 tr(self.lang, "proxies.direct.desc"),
             )
             .into_any_element()
+        } else if self.snapshot.groups.is_empty() {
+            let (title, description) = if self.profile.is_none() {
+                ("proxies.empty.title", "proxies.empty.desc")
+            } else if self.core_status == crate::ui::CoreStatus::Offline {
+                ("proxies.offline", "proxies.offline.desc")
+            } else if self.loading || self.core_status == crate::ui::CoreStatus::Unknown {
+                ("proxies.loading", "proxies.loading.desc")
+            } else {
+                ("proxies.empty.title", "proxies.empty.active_desc")
+            };
+            v_flex()
+                .gap_3()
+                .child(super::EmptyState::new(
+                    IconName::Globe,
+                    tr(self.lang, title),
+                    tr(self.lang, description),
+                ))
+                .when(self.profile.is_none(), |body| {
+                    body.child(
+                        Button::new("proxy-open-profiles")
+                            .label(tr(self.lang, "proxies.empty.action"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.dispatch(UiAction::Navigate(crate::ui::Page::Profiles), cx)
+                            })),
+                    )
+                })
+                .into_any_element()
         } else if self.rows.is_empty() {
             super::EmptyState::new(
                 IconName::Search,
@@ -541,8 +591,8 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                         .small()
                         .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                         .icon(gpui_kit::assets::IconName::RefreshCw)
-                        .tooltip(tr(lang, "common.refresh"))
                         .accessibility_label(tr(lang, "common.refresh"))
+                        .tooltip(tr(lang, "common.refresh"))
                         .ghost()
                         .loading(view.is_pending(&["proxy_groups"]))
                         .on_click(cx.listener(|this, _, _, cx| {

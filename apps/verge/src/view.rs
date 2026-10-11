@@ -55,8 +55,22 @@ pub struct SheetState {
     pub merge_preview_dialog: bool,
 }
 
+pub struct ConnectionCount {
+    count: Option<usize>,
+    lang: Lang,
+}
+impl Render for ConnectionCount {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().child(self.count.map_or_else(
+            || tr(self.lang, "status.connections_waiting").to_owned(),
+            |count| i18n::fmt_statusbar_connections(self.lang, count),
+        ))
+    }
+}
+
 pub struct MainView {
     pub state: UiState,
+    pub connection_count: Entity<ConnectionCount>,
     pub ai_form: pages::ai::AiForm,
     pub telemetry: Entity<pages::home::telemetry::Telemetry>,
     pub requests: mpsc::SyncSender<UiRequestEnvelope>,
@@ -93,6 +107,7 @@ pub struct MainView {
     pub log_layout: pages::logs::LogLayout,
     pub proxy_page: Entity<pages::proxies::ProxyPage>,
     pub rule_scroll: VirtualListScrollHandle,
+    pub rule_layout: pages::rules::RuleLayout,
     /// 各数据页的本地筛选条件和输入框。
     pub filters: pages::filters::PageFilters,
     /// 点击“预览导入”后等待预览结果再打开确认弹窗的设置文件路径。
@@ -202,6 +217,7 @@ impl MainView {
         let lang = Lang::En;
         Self {
             state: UiState::default(),
+            connection_count: cx.new(|_| ConnectionCount { count: None, lang }),
             ai_form: pages::ai::AiForm::new(window, cx),
             telemetry: cx.new(|_| pages::home::telemetry::Telemetry::new()),
             requests,
@@ -245,6 +261,7 @@ impl MainView {
             log_layout: pages::logs::LogLayout::default(),
             proxy_page,
             rule_scroll: VirtualListScrollHandle::new(),
+            rule_layout: Default::default(),
             filters: pages::filters::PageFilters::new(window, cx),
             pending_settings_import: None,
             sheet_state: cx.new(|_| SheetState::default()),
@@ -653,6 +670,15 @@ impl MainView {
 
     /// Update retained table state on data arrival, never from render.
     pub fn sync_connections(&self, cx: &mut Context<Self>) {
+        let count = self.state.connections.as_ref().map(|s| s.connection_count);
+        let lang = self.lang();
+        self.connection_count.update(cx, |view, cx| {
+            if view.count != count || view.lang != lang {
+                view.count = count;
+                view.lang = lang;
+                cx.notify();
+            }
+        });
         let snapshot = self.state.connections.clone();
         let lang = self.lang();
         self.connections_table.update(cx, |table, cx| {
@@ -815,15 +841,11 @@ impl MainView {
             .mode
             .map(|mode| pages::home::mode_label(lang, mode))
             .unwrap_or_else(|| tr(lang, "status.mode_unknown"));
-        let connections = self.state.connections.as_ref().map_or_else(
-            || tr(lang, "status.connections_waiting").to_owned(),
-            |snapshot| i18n::fmt_statusbar_connections(lang, snapshot.connection_count),
-        );
         // 流量与内存留给首页统计卡（避免状态栏与首页信息重复）。
         StatusBar::new()
             .left(core_status)
             .left(mode)
-            .right(connections)
+            .right(self.connection_count.clone())
     }
 }
 

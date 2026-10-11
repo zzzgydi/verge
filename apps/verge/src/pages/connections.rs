@@ -317,6 +317,8 @@ impl TableDelegate for ConnectionsDelegate {
                     .text_sm()
                     .overflow_x_hidden()
                     .truncate()
+                    .text_color(cx.theme().link)
+                    .hover(|style| style.underline())
                     .child(target.clone())
                     .tooltip(move |window, cx| Tooltip::new(target.clone()).build(window, cx))
                     .on_mouse_down(MouseButton::Left, {
@@ -470,29 +472,29 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 )),
         )
         .child(toolbar(view, cx))
-        .child(
-            if view.connections_table.read(cx).delegate().rows.is_empty()
-                && view.filters.active(Page::Connections)
-            {
-                super::EmptyState::new(
-                    gpui_kit::component::IconName::Search,
-                    tr(lang, "filters.empty"),
-                    tr(lang, "filters.empty.desc"),
+        .child(if view.state.connections.is_none() {
+            super::skeleton_rows(6).into_any_element()
+        } else if view.connections_table.read(cx).delegate().rows.is_empty()
+            && view.filters.active(Page::Connections)
+        {
+            super::EmptyState::new(
+                gpui_kit::component::IconName::Search,
+                tr(lang, "filters.empty"),
+                tr(lang, "filters.empty.desc"),
+            )
+            .into_any_element()
+        } else {
+            div()
+                .flex_1()
+                .min_h_0()
+                .child(
+                    DataTable::new(&view.connections_table)
+                        .small()
+                        .bordered(false)
+                        .stripe(true),
                 )
                 .into_any_element()
-            } else {
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .child(
-                        DataTable::new(&view.connections_table)
-                            .small()
-                            .bordered(false)
-                            .stripe(true),
-                    )
-                    .into_any_element()
-            },
-        )
+        })
         .into_any_element()
 }
 
@@ -620,11 +622,14 @@ impl MainView {
                                         .text_color(cx.theme().muted_foreground)
                                         .child(*label),
                                 )
-                                .child(div().text_sm().child(if value.trim().is_empty() {
-                                    "—".into()
-                                } else {
-                                    value.clone()
-                                }))
+                                .child(super::selectable_text(
+                                    SharedString::from(format!("connection-detail-{label}")),
+                                    if value.trim().is_empty() {
+                                        "—".into()
+                                    } else {
+                                        value.clone()
+                                    },
+                                ))
                         })),
                 )
         });

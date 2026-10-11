@@ -46,6 +46,40 @@ fn snapshot() -> ProxySnapshot {
 }
 
 #[gpui_kit::test]
+fn new_group_toolbar_renders_before_search_input_preparation(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let (tx, _rx) = mpsc::sync_channel(32);
+    let (view, cx) = cx.add_window_view(|window, cx| MainView::new(tx, window, cx));
+    let page = cx.update(|_, cx| view.read(cx).proxy_page.clone());
+    cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.state.page = Page::Proxies;
+            view.state.mode = Some(RunMode::Rule);
+            view.state.proxies = Arc::new(snapshot());
+            page.update(cx, |page, _| page.query = "Node 005".into());
+            view.sync_proxies(cx);
+        });
+        page.update(cx, |page, cx| {
+            assert!(page.rows.contains(&Row::Toolbar(0)));
+            assert!(!page.group_searches.contains_key("Route"));
+            // Construct the real toolbar before yielding to the spawned task.
+            // The former hard index panicked at this exact point.
+            let _ = super::tools::render(0, page, cx);
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let search = page.read(cx).group_searches["Route"].clone();
+        search.read(cx).focus_handle(cx).focus(window, cx);
+    });
+    cx.simulate_input("Node 005");
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert_eq!(page.read(cx).group_filters["Route"].query, "Node 005");
+    });
+}
+
+#[gpui_kit::test]
 fn group_filter_locate_selection_and_global_layout(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
@@ -390,19 +424,22 @@ fn keyboard_selects_virtualized_nodes_and_copy_does_not_switch(cx: &mut TestAppC
         for _ in 0..64 {
             window.focus_next(cx);
             window.render_frame(cx);
-            if window.find("proxy-card-1-0").focused() == Some(true) {
+            if window.find("proxy-card-6-GLOBALNode 000").focused() == Some(true) {
                 reached = true;
                 break;
             }
         }
         assert!(reached, "Tab reaches the proxy selection control");
         assert_eq!(
-            window.find("proxy-card-1-0").role(),
+            window.find("proxy-card-6-GLOBALNode 000").role(),
             Some(Role::RadioButton)
         );
-        assert_eq!(window.find("proxy-card-1-2").selected(), Some(true));
         assert_eq!(
-            window.find("proxy-card-1-0").label(),
+            window.find("proxy-card-6-GLOBALNode 002").selected(),
+            Some(true)
+        );
+        assert_eq!(
+            window.find("proxy-card-6-GLOBALNode 000").label(),
             Some("GLOBAL: Node 000")
         );
         let page = view.read(cx).proxy_page.clone();
@@ -416,7 +453,10 @@ fn keyboard_selects_virtualized_nodes_and_copy_does_not_switch(cx: &mut TestAppC
     }
     cx.update(|window, cx| {
         assert_eq!(page.read(cx).cursor, Some((1, 14)));
-        assert_eq!(window.find("proxy-card-1-14").focused(), Some(true));
+        assert_eq!(
+            window.find("proxy-card-6-GLOBALNode 014").focused(),
+            Some(true)
+        );
     });
     assert!(cx.debug_bounds("proxy-card-1-14").is_some());
     assert!(

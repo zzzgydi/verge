@@ -168,9 +168,11 @@ pub(super) fn render(group: usize, page: &ProxyPage, cx: &mut Context<ProxyPage>
     let entity = cx.entity().downgrade();
     let sort_name = name.clone();
     h_flex()
-        .h(px(44.))
+        .h(px(crate::appearance::metrics::PROXY_TOOLBAR))
         .pb_2()
-        .when(!global, |row| row.pl(px(28.)))
+        .when(!global, |row| {
+            row.pl(px(crate::appearance::metrics::PROXY_GROUP_INSET))
+        })
         .gap_2()
         .debug_selector(move || format!("proxy-tools-{group}"))
         .child(
@@ -190,14 +192,15 @@ pub(super) fn render(group: usize, page: &ProxyPage, cx: &mut Context<ProxyPage>
                 .on_click(cx.listener(move |this, _, window, cx| this.locate(group, window, cx))),
         )
         .child(
-            div().flex_1().min_w(px(90.)).child(
-                Input::new(if global {
-                    &page.search
+            // A new snapshot can render before the input preparation task runs.
+            // Keep the slot's width; preparation will notify when the input exists.
+            div().flex_1().min_w(px(90.)).when_some(
+                if global {
+                    Some(&page.search)
                 } else {
-                    &page.group_searches[&name]
-                })
-                .small()
-                .cleanable(true),
+                    page.group_searches.get(&name)
+                },
+                |slot, search| slot.child(Input::new(search).small().cleanable(true)),
             ),
         )
         .child(

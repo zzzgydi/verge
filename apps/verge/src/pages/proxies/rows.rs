@@ -133,7 +133,7 @@ pub fn render(row: &Row, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyEl
             let mut row = h_flex()
                 .w_full()
                 .when(page.mode != Some(crate::domain::RunMode::Global), |row| {
-                    row.pl(px(28.))
+                    row.pl(px(metrics::PROXY_GROUP_INSET))
                 })
                 .h(px(NODES_HEIGHT))
                 .pb(px(metrics::ITEM_GAP))
@@ -168,7 +168,11 @@ fn card(group: usize, member: usize, page: &ProxyPage, cx: &mut Context<ProxyPag
     let select_group = entry.name.clone();
     let select_proxy = proxy.clone();
     let test_proxy = proxy.clone();
-    let id = format!("proxy-card-{group}-{member}");
+    let id = format!(
+        "proxy-card-{}-{}",
+        entry.name.len(),
+        entry.name.clone() + proxy
+    );
     let mut metadata = h_flex().gap_1p5().min_w_0().overflow_hidden().child(badge(
         detail.map_or("Unknown", |p| p.kind.as_str()).to_owned(),
         cx,
@@ -230,7 +234,7 @@ fn card(group: usize, member: usize, page: &ProxyPage, cx: &mut Context<ProxyPag
                 cx.stop_propagation();
             }
         }))
-        .debug_selector(move || id.clone())
+        .debug_selector(move || format!("proxy-card-{group}-{member}"))
         .flex_1()
         .min_w_0()
         .h_full()
@@ -370,11 +374,7 @@ impl DelayPresentation {
         lang: crate::i18n::Lang,
         cx: &App,
     ) -> Self {
-        let neutral = if cx.theme().is_dark() {
-            rgb(0xbabac3).into()
-        } else {
-            rgb(0x50505a).into()
-        };
+        let neutral = crate::appearance::delay_neutral(cx);
         let (label, color) = if pending {
             (tr(lang, "proxies.testing").into(), neutral)
         } else if let Some(error) = error {
@@ -393,14 +393,7 @@ impl DelayPresentation {
         } else {
             match delay {
                 Some(0) => (tr(lang, "proxies.timeout").into(), cx.theme().danger),
-                Some(ms) => (
-                    format!("{ms} ms"),
-                    match ms {
-                        1..200 => cx.theme().success,
-                        200..800 => cx.theme().warning,
-                        _ => neutral,
-                    },
-                ),
+                Some(ms) => (format!("{ms} ms"), crate::appearance::delay_color(ms, cx)),
                 None => (tr(lang, "proxies.test_delay").into(), neutral),
             }
         };

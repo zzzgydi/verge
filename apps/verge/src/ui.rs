@@ -613,6 +613,7 @@ pub struct UiState {
     pub memory: Option<MemoryEvent>,
     pub system_proxy: Option<SystemProxyState>,
     pub proxies: Arc<ProxySnapshot>,
+    pub rules_revision: u64,
     pub proxy_revision: u64,
     pub rules: Vec<RuleEntry>,
     pub providers: Vec<ProviderSummary>,
@@ -641,6 +642,8 @@ pub struct UiState {
     pub logs: VecDeque<LogEvent>,
     /// Monotonic sequence for incremental log layout, including buffer eviction.
     pub log_revision: u64,
+    /// Invalidates dimensions when filtering removes entries from the middle.
+    pub log_layout_epoch: u64,
     log_bytes: usize,
     pub delays: HashMap<String, u32>,
     pub delay_errors: HashMap<String, AppError>,
@@ -794,12 +797,25 @@ impl UiState {
             }
             RuntimeCommandOutput::Mode(mode) => self.mode = Some(mode),
             RuntimeCommandOutput::ProxyGroups(snapshot) => {
+                self.delays
+                    .retain(|name, _| snapshot.proxies.contains_key(name));
+                self.delay_errors
+                    .retain(|name, _| snapshot.proxies.contains_key(name));
+                for (name, proxy) in &snapshot.proxies {
+                    if let Some(delay) = proxy.delay {
+                        self.delays.entry(name.clone()).or_insert(delay);
+                    }
+                }
                 self.proxies = Arc::new(snapshot);
-                self.delays.clear();
-                self.delay_errors.clear();
             }
-            RuntimeCommandOutput::Rules(rules) => self.rules = rules,
-            RuntimeCommandOutput::Providers(providers) => self.providers = providers,
+            RuntimeCommandOutput::Rules(rules) => {
+                self.rules = rules;
+                self.rules_revision = self.rules_revision.wrapping_add(1);
+            }
+            RuntimeCommandOutput::Providers(providers) => {
+                self.providers = providers;
+                self.rules_revision = self.rules_revision.wrapping_add(1);
+            }
             RuntimeCommandOutput::NetworkSettings(settings) => {
                 self.network_settings = Some(settings);
             }
@@ -827,6 +843,7 @@ impl UiState {
                 self.logs
                     .retain(|log| log_meets_level(&log.level, &settings.log_level));
                 if before != self.logs.len() {
+                    self.log_layout_epoch = self.log_layout_epoch.wrapping_add(1);
                     self.log_bytes = self
                         .logs
                         .iter()
@@ -1337,6 +1354,33 @@ mod tests {
         }));
         assert_eq!(state.logs.len(), 100);
         assert_eq!(state.logs.back().unwrap().payload, "latest");
+    }
+
+    #[test]
+    fn proxy_refresh_preserves_local_results_and_seeds_new_nodes() {
+        let mut state = UiState::default();
+        state.delays.insert("A".into(), 21);
+        state.delays.insert("removed".into(), 9);
+        let mut snapshot = ProxySnapshot::default();
+        for (name, delay) in [("A", Some(99)), ("B", Some(42))] {
+            snapshot.proxies.insert(
+                name.into(),
+                crate::domain::ProxyDetails {
+                    delay,
+                    ..Default::default()
+                },
+            );
+        }
+        state.apply_runtime(
+            &RuntimeCommand::ListProxyGroups,
+            RuntimeCommandResult {
+                output: RuntimeCommandOutput::ProxyGroups(snapshot),
+                summary: String::new(),
+            },
+        );
+        assert_eq!(state.delays.get("A"), Some(&21));
+        assert_eq!(state.delays.get("B"), Some(&42));
+        assert!(!state.delays.contains_key("removed"));
     }
 
     #[test]

@@ -89,6 +89,13 @@ fn connection_rates_sort_and_widths_survive_live_updates(cx: &mut TestAppContext
             assert_eq!(data.rates["a"], (0, 0));
         });
     });
+    cx.update(|_, cx| {
+        let snapshot = table.read(cx).delegate().snapshot.clone();
+        view.update(cx, |view, cx| {
+            view.state.connections = snapshot;
+            cx.notify();
+        });
+    });
     cx.run_until_parked();
     let head = cx.debug_bounds("connection-header-1").unwrap();
     // Drag the actual header divider, then pass another realtime snapshot through MainView.

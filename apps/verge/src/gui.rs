@@ -299,23 +299,20 @@ pub fn run() {
                                 view.telemetry
                                     .update(cx, |telemetry, cx| telemetry.apply(&events, cx));
                                 let mut redraw = false;
-                                let old_count =
-                                    view.state.connections.as_ref().map(|s| s.connection_count);
                                 for event in events {
                                     redraw |= match &event {
                                         crate::domain::RealtimeEvent::Log(_) => {
                                             view.state.page == crate::ui::Page::Logs
                                         }
-                                        crate::domain::RealtimeEvent::Connections(_) => view.state.page == crate::ui::Page::Home,
+                                        crate::domain::RealtimeEvent::Connections(_) => view.state.page == crate::ui::Page::Connections,
                                         crate::domain::RealtimeEvent::Reconnecting { .. } => true,
                                         _ => false,
                                     };
                                     view.state.apply_realtime(event);
                                 }
                                 view.sync_connections(cx);
-                                let new_count =
-                                    view.state.connections.as_ref().map(|s| s.connection_count);
-                                if redraw || old_count != new_count {
+                                view.sync_proxies(cx);
+                                if redraw {
                                     cx.notify();
                                 }
                             });

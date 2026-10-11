@@ -134,3 +134,62 @@ fn multiline_logs_fit_and_longest_log_scrolls_both_axes(cx: &mut TestAppContext)
     assert!(scroll.content_size().width < viewport.size.width);
     assert_eq!(cx.debug_bounds("log-row-0").unwrap().size.height, px(24.));
 }
+
+#[gpui_kit::test]
+fn log_level_pruning_invalidates_cached_dimensions(cx: &mut TestAppContext) {
+    use crate::domain::{AppCommand, AppCommandOutput, AppCommandResult, CoreNetworkSettings};
+    cx.update(gpui_kit::init);
+    let (tx, _rx) = mpsc::sync_channel(32);
+    let holder = Rc::new(RefCell::new(None));
+    let slot = holder.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| MainView::new(tx, window, cx));
+        *slot.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = holder.borrow().clone().unwrap();
+    cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.state.page = Page::Logs;
+            for (level, text) in [
+                ("error", "first"),
+                ("debug", "discard"),
+                ("warning", "a\nb\nc"),
+                ("error", "last"),
+            ] {
+                view.state.apply_realtime(RealtimeEvent::Log(LogEvent {
+                    level: level.into(),
+                    payload: text.into(),
+                }));
+            }
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("log-row-2").unwrap().size.height, px(72.));
+    cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            let settings = CoreNetworkSettings {
+                log_level: "warning".into(),
+                ..Default::default()
+            };
+            view.state.apply_profile(
+                &AppCommand::UpdateCoreNetworkSettings {
+                    settings: settings.clone(),
+                },
+                AppCommandResult {
+                    output: AppCommandOutput::CoreNetworkSettings(settings),
+                    summary: String::new(),
+                },
+            );
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    let multiline = cx.debug_bounds("log-row-1").unwrap();
+    assert_eq!(multiline.size.height, px(72.));
+    assert_eq!(
+        multiline.bottom(),
+        cx.debug_bounds("log-row-2").unwrap().top()
+    );
+}

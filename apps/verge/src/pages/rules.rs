@@ -32,39 +32,65 @@ impl RuleRow {
     }
 }
 
-pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
+#[derive(Default)]
+pub struct RuleLayout {
+    key: Option<(u64, usize, usize, filters::RuleFilter)>,
+    rows: Rc<Vec<RuleRow>>,
+    sizes: Rc<Vec<Size<Pixels>>>,
+    rule_count: usize,
+    provider_count: usize,
+}
+impl RuleLayout {
+    fn sync(&mut self, state: &crate::ui::UiState, filter: &filters::RuleFilter) {
+        let key = (
+            state.rules_revision,
+            state.rules.len(),
+            state.providers.len(),
+            filter.clone(),
+        );
+        if self.key.as_ref() == Some(&key) {
+            return;
+        }
+        let rules: Vec<_> = state
+            .rules
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| filter.matches(r))
+            .map(|(i, _)| i)
+            .collect();
+        let providers: Vec<_> = state
+            .providers
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| filter.matches_provider(p))
+            .map(|(i, _)| i)
+            .collect();
+        self.rule_count = rules.len();
+        self.provider_count = providers.len();
+        let mut rows = Vec::new();
+        if !providers.is_empty() {
+            rows.push(RuleRow::Providers);
+            rows.extend(providers.into_iter().map(RuleRow::Provider));
+        }
+        if !rules.is_empty() {
+            rows.extend([RuleRow::Rules, RuleRow::Columns]);
+            rows.extend(rules.into_iter().map(RuleRow::Rule));
+        }
+        self.sizes = Rc::new(rows.iter().map(|row| size(px(0.), row.height())).collect());
+        self.rows = Rc::new(rows);
+        self.key = Some(key);
+    }
+}
+
+pub fn render(view: &mut MainView, cx: &mut Context<MainView>) -> AnyElement {
     let lang = view.lang();
     let refreshing = view.is_pending(&["rules", "providers"]);
-    let rule_indices: Vec<_> = view
-        .state
-        .rules
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| view.filters.rules.matches(r))
-        .map(|(i, _)| i)
-        .collect();
-    let provider_indices: Vec<_> = view
-        .state
-        .providers
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| view.filters.rules.matches_provider(p))
-        .map(|(i, _)| i)
-        .collect();
-    let rule_count = rule_indices.len();
-    let provider_count = provider_indices.len();
-    let mut rows = Vec::new();
-    if provider_count > 0 {
-        rows.push(RuleRow::Providers);
-        rows.extend(provider_indices.into_iter().map(RuleRow::Provider));
-    }
-    if rule_count > 0 {
-        rows.push(RuleRow::Rules);
-        rows.push(RuleRow::Columns);
-        rows.extend(rule_indices.into_iter().map(RuleRow::Rule));
-    }
+    view.rule_layout.sync(&view.state, &view.filters.rules);
+    let rule_count = view.rule_layout.rule_count;
+    let provider_count = view.rule_layout.provider_count;
+    let rows = view.rule_layout.rows.clone();
     let empty = rows.is_empty();
-    let sizes = Rc::new(rows.iter().map(|row| size(px(0.), row.height())).collect());
+    let sizes = view.rule_layout.sizes.clone();
     let list = v_virtual_list(
         cx.entity(),
         "rule-list",
@@ -268,8 +294,8 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 .child(
                     Button::new("refresh-rules")
                         .debug_selector(|| "refresh-rules".into())
-                        .tooltip(tr(lang, "common.refresh"))
                         .accessibility_label(tr(lang, "common.refresh"))
+                        .tooltip(tr(lang, "common.refresh"))
                         .icon(gpui_kit::assets::IconName::RefreshCw)
                         .small()
                         .h(px(crate::appearance::metrics::COMPACT_CONTROL))

@@ -78,14 +78,7 @@ pub fn render(view: &mut MainView, window: &mut Window, cx: &mut Context<MainVie
     let view_entity = cx.entity();
     let mut content = v_flex().flex_1().min_h_0().gap_4();
     // Retain only indices; clone/format payloads only for the visible range.
-    let rows: Vec<usize> = view
-        .state
-        .logs
-        .iter()
-        .enumerate()
-        .filter(|(_, log)| view.filters.logs.matches(log))
-        .map(|(ix, _)| ix)
-        .collect();
+    let rows = view.log_layout.filtered(&view.state, &view.filters.logs);
     content = content
         .child(
             PageHeader::new(tr(lang, "logs.title")).child(filters::count(
