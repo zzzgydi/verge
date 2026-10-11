@@ -99,7 +99,7 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
         .h_7()
         .justify_between()
         .gap_2()
-        .child(div().text_sm().font_medium().child("API Key"));
+        .child(div().text_sm().font_medium().child(tr(lang, "ai.api_key")));
     if ai.has_key {
         key_label = key_label.child(
             Button::new("ai-clear-key")
@@ -278,6 +278,7 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
             Button::new("ai-test")
                 .debug_selector(|| "ai-test".into())
                 .label(tr(lang, "ai.test_connection"))
+                .accessibility_label(tr(lang, "ai.test_hint"))
                 .tooltip(tr(lang, "ai.test_hint"))
                 .disabled(busy || offline)
                 .on_click(cx.listener(|this, _, _, cx| this.save_ai_settings(true, cx))),

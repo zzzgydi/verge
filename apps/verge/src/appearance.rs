@@ -1,10 +1,31 @@
 //! Application palette. Component behavior continues to come from GPUI Kit.
 pub mod metrics;
-use gpui_kit::component::theme::{Theme, ThemeMode};
+use gpui_kit::component::{
+    ActiveTheme as _,
+    theme::{Theme, ThemeMode},
+};
 use gpui_kit::{App, Hsla, px, rgb};
 
 // Sampled from the upper purple face of assets/icons/icon.icns.
 const BRAND_PURPLE: u32 = 0x761e8d;
+
+pub fn delay_neutral(cx: &App) -> Hsla {
+    rgb(if cx.theme().is_dark() {
+        0xbabac3
+    } else {
+        0x50505a
+    })
+    .into()
+}
+
+pub fn delay_color(delay: u32, cx: &App) -> Hsla {
+    match delay {
+        0 => cx.theme().danger,
+        1..200 => cx.theme().success,
+        200..800 => cx.theme().warning,
+        _ => delay_neutral(cx),
+    }
+}
 
 pub fn apply(mode: ThemeMode, cx: &mut App) {
     let dark = mode == ThemeMode::Dark;
@@ -94,7 +115,6 @@ pub fn apply(mode: ThemeMode, cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui_kit::component::ActiveTheme as _;
     use gpui_kit::{Rgba, TestAppContext};
 
     fn contrast(a: Hsla, b: Hsla) -> f32 {
@@ -122,11 +142,7 @@ mod tests {
                 Theme::change(mode, None, cx);
                 apply(mode, cx);
                 let t = cx.theme();
-                let neutral = if mode == ThemeMode::Dark {
-                    rgb(0xbabac3).into()
-                } else {
-                    rgb(0x50505a).into()
-                };
+                let neutral = delay_neutral(cx);
                 let opacities = if mode == ThemeMode::Dark {
                     [0., 0.09, 0.13, 0.16]
                 } else {

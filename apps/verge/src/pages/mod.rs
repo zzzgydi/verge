@@ -29,7 +29,28 @@ pub fn muted(text: impl Into<SharedString>, cx: &Context<MainView>) -> Div {
 
 /// 可选中复制的展示文字；ElementId 用域 ID（节点名、配置 id 等），不用列表索引。
 pub fn selectable_text(id: impl Into<ElementId>, text: impl Into<SharedString>) -> TextView {
-    TextView::markdown(id, text).selectable(true)
+    let text = text.into();
+    TextView::markdown(id, literal_markdown(&text))
+        .selectable(true)
+        .selection_format(gpui_kit::component::text::SelectionFormat::Plain)
+}
+
+// The locked TextView has no plain-text constructor. Character references keep
+// punctuation and indentation literal without creating links, images or blocks.
+// Copy uses the rendered text, never this escaped source.
+fn literal_markdown(text: &str) -> String {
+    use std::fmt::Write as _;
+    let mut source = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch == '\n' {
+            source.push_str("\\\n");
+        } else if ch.is_ascii_punctuation() || ch.is_ascii_whitespace() {
+            write!(source, "&#{};", ch as u32).unwrap();
+        } else {
+            source.push(ch);
+        }
+    }
+    source
 }
 
 /// 数据加载中的占位骨架行。
@@ -92,5 +113,39 @@ impl RenderOnce for EmptyState {
             .when_some(self.action, |this, action| {
                 this.child(div().pt_2().child(action))
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::literal_markdown;
+    use gpui_kit::component::text::{SelectionFormat, TextViewState};
+    use gpui_kit::{AppContext as _, TestAppContext};
+
+    #[gpui_kit::test]
+    fn selectable_values_preserve_literal_text_and_plain_copy(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        for value in [
+            "**process**_name_ [host](https://example.test) `payload`",
+            r"C:\Users\[name]\a_b &amp; <tag> ![image](https://example.test/x)",
+            "www.example.test user@example.test https://example.test/a?q=1&b=2",
+            "  中文路径 /应用程序/测试.app  ",
+            "# heading\n    indented\n- item\n| a | b |",
+        ] {
+            let source = literal_markdown(value);
+            // Validate the actual locked TextView parser and clipboard format,
+            // not merely the escape function's output.
+            let state = cx.new(|cx| {
+                TextViewState::markdown(&source, cx).selection_format(SelectionFormat::Plain)
+            });
+            cx.run_until_parked();
+            state.update(cx, |state, cx| {
+                // TextView includes one paragraph terminator in plain select-all.
+                let expected = format!("{value}\n");
+                assert_eq!(state.rendered_text().as_str(), expected);
+                state.select_all(cx);
+                assert_eq!(state.selected_text(), expected);
+            });
+        }
     }
 }

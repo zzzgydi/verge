@@ -189,8 +189,8 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                     .small()
                     .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                     .icon(gpui_kit::assets::IconName::RefreshCw)
-                    .tooltip(tr(lang, "common.refresh"))
                     .accessibility_label(tr(lang, "common.refresh"))
+                    .tooltip(tr(lang, "common.refresh"))
                     .loading(view.is_pending(&["runtime_settings", "mode", "system_proxy"]))
                     .on_click(
                         cx.listener(|this, _, _, cx| this.dispatch(UiAction::RefreshHome, cx)),
@@ -266,7 +266,7 @@ fn overview_details(view: &MainView, cx: &mut Context<MainView>) -> impl IntoEle
     let panel = panel(cx)
         .debug_selector(|| "home-routes-panel".into())
         .min_w_0()
-        .min_h(px(440.))
+        .min_h(px(crate::appearance::metrics::OVERVIEW_MIN_HEIGHT))
         .p_5()
         .gap_4()
         .child(
@@ -389,13 +389,7 @@ fn overview_details(view: &MainView, cx: &mut Context<MainView>) -> impl IntoEle
                             row.child(
                                 div()
                                     .text_xs()
-                                    .text_color(if delay == 0 {
-                                        cx.theme().danger
-                                    } else if delay < 200 {
-                                        cx.theme().success
-                                    } else {
-                                        cx.theme().warning
-                                    })
+                                    .text_color(crate::appearance::delay_color(delay, cx))
                                     .child(if delay == 0 {
                                         tr(lang, "proxies.timeout").into()
                                     } else {

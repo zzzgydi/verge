@@ -286,17 +286,13 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         .title(tr(lang, "settings.group.app_update"))
         .child(
             v_form()
-                .child(
-                    field()
-                        .label(tr(lang, "settings.core.version"))
-                        .child(muted(
-                            app_version.map_or_else(
-                                || tr(lang, "settings.app.version_dev").into(),
-                                |version| format!("v{version}"),
-                            ),
-                            cx,
-                        )),
-                )
+                .child(field().label(tr(lang, "settings.app.version")).child(muted(
+                    app_version.map_or_else(
+                        || tr(lang, "settings.app.version_dev").into(),
+                        |version| format!("v{version}"),
+                    ),
+                    cx,
+                )))
                 .child(
                     field()
                         .label(tr(lang, "settings.app.check"))
@@ -578,7 +574,11 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                     "settings-body-{:?}",
                     view.settings_category
                 )))
-                .child(content.w_full().max_w(px(920.))),
+                .child(
+                    content
+                        .w_full()
+                        .max_w(px(crate::appearance::metrics::SETTINGS_WIDTH)),
+                ),
         )
         .into_any_element()
 }

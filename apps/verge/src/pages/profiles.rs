@@ -140,6 +140,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                     .small()
                     .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                     .ghost()
+                    .accessibility_label(tr(lang, "common.more"))
                     .tooltip(tr(lang, "common.more"))
                     .dropdown_menu({
                         let entity = cx.entity().downgrade();
@@ -354,8 +355,8 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                     .child(
                         Button::new("refresh-profiles")
                             .icon(gpui_kit::assets::IconName::RefreshCw)
-                            .tooltip(tr(lang, "common.refresh"))
                             .accessibility_label(tr(lang, "common.refresh"))
+                            .tooltip(tr(lang, "common.refresh"))
                             .small()
                             .h(px(crate::appearance::metrics::COMPACT_CONTROL))
                             .ghost()
