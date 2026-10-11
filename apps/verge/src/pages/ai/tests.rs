@@ -798,3 +798,35 @@ fn provider_fields_and_advanced_action_fit_the_small_window(cx: &mut TestAppCont
         }
     }
 }
+
+#[gpui_kit::test]
+fn proposal_expiry_timer_refreshes_the_visible_actions(cx: &mut TestAppContext) {
+    let (view, _rx, cx) = setup(cx);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state.ai.proposals = vec![crate::ai::proposals::Proposal {
+                id: "expires".into(),
+                run_id: 1,
+                digest: "digest".into(),
+                kind: "mode".into(),
+                target: "rule".into(),
+                expires_at: crate::ai::proposals::now() + 1,
+                status: "pending".into(),
+                changes: vec![],
+                evidence_id: "R1-E1".into(),
+                result: None,
+            }];
+            view.ai_form.sync(&view.state.ai, window, cx);
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("ai-proposal-apply-0").is_some());
+    // The test executor's clock is independent of SystemTime. Change the wall-clock
+    // deadline without notifying; only the scheduled timer may invalidate the UI.
+    cx.update(|_, cx| view.update(cx, |view, _| view.state.ai.proposals[0].expires_at = 0));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("ai-proposal-apply-0").is_none());
+}

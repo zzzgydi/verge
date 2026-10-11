@@ -156,6 +156,15 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> Div {
                     .primary()
                     .disabled(disabled)
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.state.ai.proposals.iter().any(|p| {
+                            p.id == id
+                                && p.status == "pending"
+                                && p.expires_at > crate::ai::proposals::now()
+                        }) {
+                            this.ai_form.confirm_proposal = None;
+                            cx.notify();
+                            return;
+                        }
                         if this.ai_form.confirm_proposal.as_ref() == Some(&id) {
                             if this.try_dispatch_ai(
                                 AiCommand::Approve {
@@ -229,6 +238,7 @@ fn result_text(lang: Lang, result: &str) -> String {
     };
     let mut text = tr(lang, key).to_owned();
     if result.contains("audit result could not be saved") {
+        text.push(' ');
         text.push_str(tr(lang, "ai.audit_failed"));
     }
     text

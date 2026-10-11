@@ -4,7 +4,7 @@ use markdown::{ParseOptions, mdast::Node};
 
 /// Keep Markdown layout without allowing model output to fetch images or embed HTML.
 /// Parse source ranges so code examples and escaped punctuation remain untouched.
-pub(super) fn safe_markdown(source: &str) -> String {
+pub(super) fn safe_markdown(source: &str, lang: Lang) -> String {
     fn visit(node: &Node, ranges: &mut Vec<std::ops::Range<usize>>) {
         if matches!(
             node,
@@ -26,7 +26,7 @@ pub(super) fn safe_markdown(source: &str) -> String {
     visit(&tree, &mut ranges);
     let mut result = source.to_owned();
     for range in ranges.into_iter().rev() {
-        result.replace_range(range, "[embedded content omitted]");
+        result.replace_range(range, tr(lang, "ai.embedded_omitted"));
     }
     result
 }
@@ -356,7 +356,7 @@ mod tests {
     #[test]
     fn model_markdown_keeps_formatting_but_never_loads_embedded_content() {
         let text = "## Diagnosis\n\n**Check** `![code](url)`\n\n![inline](https://tracking.test/a)\n\n![ref][i]\n\n[i]: https://tracking.test/b\n\n<img src='file:///tmp/secret'>\n\n[help](https://example.com)";
-        let safe = safe_markdown(text);
+        let safe = safe_markdown(text, Lang::En);
         assert!(safe.contains("**Check** `![code](url)`"));
         assert!(safe.contains("[help](https://example.com)"));
         let tree = markdown::to_mdast(&safe, &ParseOptions::gfm()).unwrap();

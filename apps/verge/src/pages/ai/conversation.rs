@@ -10,6 +10,21 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
     let busy = ai.busy || view.is_pending(&["ai_write"]);
     let offline = view.state.connection_notice.is_some();
     let ready = !ai.config.base_url.is_empty();
+    if ai.revision == 0
+        && view.ai_form.settings_error.is_none()
+        && !offline
+        && view
+            .state
+            .daemon_capabilities
+            .iter()
+            .any(|c| c == crate::ai::CAPABILITY)
+    {
+        return v_flex()
+            .gap_4()
+            .child(PageHeader::new(tr(lang, "ai.title")))
+            .child(super::super::skeleton_rows(4))
+            .into_any_element();
+    }
     let chat_operation = matches!(
         ai.operation,
         Some(AiOperation::Start | AiOperation::Retry | AiOperation::Approve | AiOperation::Dismiss)
@@ -30,6 +45,7 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
             Button::new("ai-data-scope")
                 .debug_selector(|| "ai-data-scope".into())
                 .icon(IconName::Info)
+                .accessibility_label(tr(lang, "ai.data_scope"))
                 .tooltip(tr(lang, "ai.data_scope"))
                 .ghost()
                 .small()
@@ -42,6 +58,7 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
             Button::new("ai-settings")
                 .debug_selector(|| "ai-settings".into())
                 .icon(IconName::Settings2)
+                .accessibility_label(tr(lang, "ai.settings"))
                 .tooltip(tr(lang, "ai.settings"))
                 .ghost()
                 .small()
@@ -162,6 +179,7 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
                         .h(px(62.))
                         .icon(icon)
                         .label(tr(lang, title))
+                        .accessibility_label(tr(lang, prompt))
                         .tooltip(tr(lang, prompt))
                         .disabled(busy || offline)
                         .on_click(cx.listener(move |this, _, window, cx| {
@@ -230,10 +248,20 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
                 );
             } else {
                 block = block.child(
-                    TextView::markdown(
-                        ("ai-answer", index),
-                        presentation::safe_markdown(&message.text),
-                    )
+                    TextView::markdown(("ai-answer", index), {
+                        let mut cache = form.markdown.borrow_mut();
+                        if cache.len() <= index {
+                            cache.resize_with(index + 1, || (String::new(), lang, String::new()));
+                        }
+                        if cache[index].0 != message.text || cache[index].1 != lang {
+                            cache[index] = (
+                                message.text.clone(),
+                                lang,
+                                presentation::safe_markdown(&message.text, lang),
+                            );
+                        }
+                        cache[index].2.clone()
+                    })
                     .selectable(true)
                     .scrollable(false)
                     .on_link_click(|url, _, _, cx| {
@@ -249,6 +277,7 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
             let text = message.text.clone();
             actions = actions.child(
                 Button::new(("ai-copy", index))
+                    .accessibility_label(tr(lang, "common.copy"))
                     .debug_selector(move || format!("ai-copy-{index}"))
                     .icon(if form.copied == Some(index) {
                         IconName::Check
@@ -428,7 +457,20 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
                 .overflow_y_scroll()
                 .track_scroll(&form.scroll)
                 .vertical_scrollbar(&form.scroll)
-                .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
+                .on_scroll_wheel(cx.listener(|_, _, window, cx| {
+                    let view = cx.entity().downgrade();
+                    // Read the offset after scrolling has applied. Only the jump-to-latest
+                    // action needs a new frame when crossing the bottom threshold.
+                    window.on_next_frame(move |_, cx| {
+                        let _ = view.update(cx, |view, cx| {
+                            let at_bottom = view.ai_form.at_bottom();
+                            if view.ai_form.scroll_at_bottom != at_bottom {
+                                view.ai_form.scroll_at_bottom = at_bottom;
+                                cx.notify();
+                            }
+                        });
+                    });
+                }))
                 .child(
                     h_flex()
                         .w_full()
@@ -449,6 +491,7 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
             actions = actions.child(
                 Button::new("ai-latest")
                     .icon(IconName::ArrowDown)
+                    .accessibility_label(tr(lang, "ai.latest"))
                     .tooltip(tr(lang, "ai.latest"))
                     .small()
                     .ghost()
@@ -477,6 +520,7 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
             Button::new("ai-send")
                 .debug_selector(|| "ai-send".into())
                 .icon(IconName::ArrowUp)
+                .accessibility_label(tr(lang, "ai.send"))
                 .tooltip(tr(lang, "ai.send"))
                 .primary()
                 .small()
@@ -530,6 +574,7 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
                         .child(
                             Button::new("ai-scope-close")
                                 .icon(IconName::Close)
+                                .accessibility_label(tr(lang, "ai.close_details"))
                                 .tooltip(tr(lang, "ai.close_details"))
                                 .ghost()
                                 .small()

@@ -42,10 +42,13 @@ pub struct AiForm {
     pub error_details: bool,
     pub data_scope_open: bool,
     pub scroll: ScrollHandle,
+    scroll_at_bottom: bool,
     pending_prompt: Option<String>,
     pub(super) save_requested: bool,
     pending_save: Option<u64>,
     applied: Option<ProviderConfig>,
+    expiry_task: Option<Task<()>>,
+    pub(super) markdown: std::cell::RefCell<Vec<(String, Lang, String)>>,
 }
 
 impl AiForm {
@@ -95,10 +98,13 @@ impl AiForm {
             error_details: false,
             data_scope_open: false,
             scroll: ScrollHandle::new(),
+            scroll_at_bottom: true,
             pending_prompt: None,
             save_requested: false,
             pending_save: None,
             applied: None,
+            expiry_task: None,
+            markdown: Default::default(),
         };
         for field in [
             &form.base,
@@ -134,6 +140,26 @@ impl AiForm {
         self.stop_requested = false;
     }
     pub fn sync(&mut self, state: &AiSnapshot, window: &mut Window, cx: &mut Context<MainView>) {
+        self.expiry_task = None;
+        let now = crate::ai::proposals::now();
+        if let Some(expiry) = state
+            .proposals
+            .iter()
+            .filter(|p| p.status == "pending" && p.expires_at > now)
+            .map(|p| p.expires_at)
+            .min()
+        {
+            self.expiry_task = Some(cx.spawn(async move |view, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(expiry - now))
+                    .await;
+                let _ = view.update_in(cx, |view, window, cx| {
+                    view.ai_form.sync(&view.state.ai, window, cx);
+                    cx.notify();
+                });
+            }));
+        }
+        self.markdown.borrow_mut().truncate(state.messages.len());
         if self.has_provider_draft(cx)
             || state.busy
             || state.revision == 0
