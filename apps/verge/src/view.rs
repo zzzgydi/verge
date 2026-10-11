@@ -1,4 +1,4 @@
-mod navigation;
+pub(crate) mod navigation;
 use std::sync::mpsc;
 
 use crate::domain::{
@@ -33,6 +33,7 @@ actions!(
         GoToConnections,
         GoToRules,
         GoToLogs,
+        GoToAi,
         GoToSettings,
         RefreshPage
     ]
@@ -90,7 +91,7 @@ pub struct MainView {
     pub settings_import_path: Entity<InputState>,
     /// 设置页的日志缓冲条数输入框。
     pub log_limit: Entity<InputState>,
-    pub pending_proxy_settings: Option<crate::domain::SystemProxySettings>,
+    pub pending_proxy_settings: Option<(u64, FocusHandle)>,
     /// 设置页的全局快捷键输入框。
     pub global_hotkey: Entity<InputState>,
     /// 导入对话框的 YAML 表单。
@@ -192,18 +193,35 @@ impl MainView {
                 .max(5000.)
                 .step(50.)
         });
-        // 日志缓冲输入合法且与当前设置不同时即保存。
+        // Commit only on blur/Enter; partial input must never shrink the buffer.
         let log_limit_subscription = cx.subscribe_in(
             &log_limit,
             window,
-            |this, state, event: &InputEvent, _, cx| {
-                if !matches!(event, InputEvent::Change) {
+            |this, state, event: &InputEvent, window, cx| {
+                if !matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
                     return;
                 }
-                let Ok(limit) = state.read(cx).value().parse::<u16>() else {
+                let Some(snapshot) = this.state.application_settings.clone() else {
                     return;
                 };
-                let Some(snapshot) = this.state.application_settings.clone() else {
+                let limit = state
+                    .read(cx)
+                    .value()
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|v| (100..=5000).contains(v));
+                let Some(limit) = limit else {
+                    state.update(cx, |input, cx| {
+                        input.set_value(snapshot.settings.log_limit.to_string(), window, cx)
+                    });
+                    gpui_kit::component::WindowExt::push_notification(
+                        window,
+                        gpui_kit::component::notification::Notification::error(tr(
+                            this.lang(),
+                            "settings.log_limit.invalid",
+                        )),
+                        cx,
+                    );
                     return;
                 };
                 if snapshot.settings.log_limit != limit {
@@ -322,7 +340,35 @@ impl MainView {
         }
     }
 
-    /// 设置变化后把日志缓冲、全局快捷键同步进输入框；输入框聚焦（用户正在编辑）时跳过，失焦后补同步。
+    /// Only the matching save response may close the originating, still-focused dialog.
+    pub(crate) fn settings_dialog_response(
+        &mut self,
+        envelope: &crate::ui::UiResponseEnvelope,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::{domain::AppCommand, ui::UiResponse};
+        let UiResponse::Profile { request, result } = &envelope.response else {
+            return;
+        };
+        let pending = match request {
+            AppCommand::UpdateCoreNetworkSettings { .. } => &mut self.network_form.pending_dialog,
+            AppCommand::UpdateSystemProxySettings { .. } => &mut self.pending_proxy_settings,
+            _ => return,
+        };
+        if pending
+            .as_ref()
+            .is_some_and(|(id, _)| Some(*id) == envelope.request_id)
+        {
+            let (_, focus) = pending.take().unwrap();
+            // A different modal may have taken focus while this request was in flight.
+            if result.is_ok() && focus.contains_focused(window, cx) {
+                gpui_kit::component::WindowExt::close_dialog(window, cx);
+            }
+        }
+    }
+
+    /// Keep focused drafts intact when new settings arrive.
     pub fn sync_form_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let lang = self.lang();
         self.telemetry
@@ -338,10 +384,6 @@ impl MainView {
         let Some(snapshot) = self.state.application_settings.clone() else {
             return;
         };
-        if self.pending_proxy_settings.as_ref() == Some(snapshot.settings.system_proxy.as_ref()) {
-            self.pending_proxy_settings = None;
-            gpui_kit::component::WindowExt::close_dialog(window, cx);
-        }
         let current = snapshot.settings.log_limit;
         if self.log_limit_applied != Some(current)
             && !self.log_limit.read(cx).focus_handle(cx).is_focused(window)
@@ -436,6 +478,10 @@ impl MainView {
             return false;
         }
         if self.state.connection_notice.is_some() {
+            self.state.set_error(crate::domain::AppError::new(
+                crate::domain::ErrorCode::CoreUnavailable,
+                tr(self.lang(), "connection.action_unavailable"),
+            ));
             cx.notify();
             return false;
         }
@@ -733,21 +779,7 @@ impl MainView {
     /// 切换页面，并触发该页需要的首批数据加载。
     pub fn navigate(&mut self, page: Page, cx: &mut Context<Self>) {
         self.dispatch(UiAction::Navigate(page), cx);
-        match page {
-            Page::Home => self.dispatch(UiAction::RefreshHome, cx),
-            Page::Profiles => self.dispatch(UiAction::RefreshProfiles, cx),
-            Page::Rules => self.dispatch(UiAction::RefreshRules, cx),
-            Page::Proxies => self.dispatch(UiAction::RefreshProxies, cx),
-            Page::Settings => {
-                self.dispatch(UiAction::RefreshSettings, cx);
-                if self.settings_category == pages::settings::SettingsCategory::Ai {
-                    self.dispatch(UiAction::Ai(crate::ai::AiCommand::GetState), cx);
-                }
-            }
-            Page::Ai => self.dispatch(UiAction::Ai(crate::ai::AiCommand::GetState), cx),
-            Page::Logs => self.dispatch(UiAction::RefreshLogSettings, cx),
-            Page::Connections => {}
-        }
+        self.refresh_current_page(cx);
     }
 
     /// 刷新当前页；连接与日志内容走实时推送，日志页另刷新最低日志等级。
@@ -823,6 +855,7 @@ impl MainView {
                         .ghost()
                         .small()
                         .icon(Icon::new(icon).size_4())
+                        .accessibility_label(tooltip)
                         .tooltip(tooltip)
                         .on_click(cx.listener(|this, _, _, cx| this.cycle_theme(cx))),
                 ),
@@ -893,6 +926,7 @@ impl Render for MainView {
             )
             .on_action(cx.listener(|this, _: &GoToRules, _, cx| this.navigate(Page::Rules, cx)))
             .on_action(cx.listener(|this, _: &GoToLogs, _, cx| this.navigate(Page::Logs, cx)))
+            .on_action(cx.listener(|this, _: &GoToAi, _, cx| this.navigate(Page::Ai, cx)))
             .on_action(
                 cx.listener(|this, _: &GoToSettings, _, cx| this.navigate(Page::Settings, cx)),
             )
@@ -918,7 +952,7 @@ impl Render for MainView {
                             .bg(cx.theme().group_box)
                             .border_1()
                             .border_color(cx.theme().border)
-                            .rounded(px(16.))
+                            .rounded(px(crate::appearance::metrics::PANEL_RADIUS))
                             .overflow_hidden()
                             .when_some(self.state.connection_notice.clone(), |this, message| {
                                 this.child(

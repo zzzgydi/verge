@@ -81,6 +81,7 @@ impl MainView {
                                 "copy-controller-address",
                                 &state.address,
                                 !state.settings.external_controller.enabled,
+                                lang,
                             ),
                         ))
                         .child(field().label(tr(lang, "network.controller.secret")).child(
@@ -88,12 +89,18 @@ impl MainView {
                                 "copy-controller-secret",
                                 &state.secret,
                                 !state.settings.external_controller.enabled,
+                                lang,
                             ),
                         ))
                 };
             let save = draft.clone();
             let owner = owner.clone();
+            let cancel_owner = owner.clone();
+            let close_owner = owner.clone();
             dialog
+                .on_close(move |_, _, cx| {
+                    close_owner.update(cx, |this, _| this.network_form.pending_dialog = None);
+                })
                 .title(tr(
                     lang,
                     if dns {
@@ -111,7 +118,12 @@ impl MainView {
                         .child(
                             Button::new("network-dialog-cancel")
                                 .label(tr(lang, "common.cancel"))
-                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                                .on_click(move |_, window, cx| {
+                                    cancel_owner.update(cx, |this, _| {
+                                        this.network_form.pending_dialog = None
+                                    });
+                                    window.close_dialog(cx);
+                                }),
                         )
                         .child(
                             Button::new("network-dialog-save")
@@ -160,12 +172,13 @@ impl MainView {
                                             );
                                             return;
                                         }
-                                        this.network_form.pending_dialog =
-                                            Some(this.state.core_network_revision);
-                                        this.dispatch(
-                                            UiAction::UpdateCoreNetworkSettings(latest),
-                                            cx,
-                                        );
+                                        let focus = window.focused(cx);
+                                        this.network_form.pending_dialog = this
+                                            .dispatch_sheet_request(
+                                                UiAction::UpdateCoreNetworkSettings(latest),
+                                                cx,
+                                            )
+                                            .zip(focus);
                                     });
                                 }),
                         ),
@@ -173,13 +186,20 @@ impl MainView {
         });
     }
 }
-fn copy_input(id: &'static str, input: &Entity<InputState>, disabled: bool) -> impl IntoElement {
+fn copy_input(
+    id: &'static str,
+    input: &Entity<InputState>,
+    disabled: bool,
+    lang: crate::i18n::Lang,
+) -> impl IntoElement {
     let copy = input.clone();
     h_flex()
         .gap_2()
         .child(Input::new(input).disabled(disabled))
         .child(
             Button::new(id)
+                .accessibility_label(tr(lang, "common.copy"))
+                .tooltip(tr(lang, "common.copy"))
                 .icon(IconName::Copy)
                 .ghost()
                 .disabled(disabled)

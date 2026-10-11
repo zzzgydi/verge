@@ -15,7 +15,7 @@ use gpui_kit::*;
 pub(crate) struct NetworkForm {
     port: Entity<InputState>,
     applied_port: Option<u16>,
-    pub(super) pending_dialog: Option<u64>,
+    pub(crate) pending_dialog: Option<(u64, FocusHandle)>,
 }
 impl NetworkForm {
     pub fn new(window: &mut Window, cx: &mut App) -> Self {
@@ -32,29 +32,22 @@ impl NetworkForm {
     pub fn sync(
         &mut self,
         settings: Option<&CoreNetworkSettings>,
-        revision: u64,
+        _revision: u64,
         window: &mut Window,
         cx: &mut App,
     ) {
-        if let Some(settings) = settings {
-            if self.applied_port != Some(settings.mixed_port) {
-                let clean = self
-                    .applied_port
-                    .is_none_or(|port| self.port.read(cx).value().as_str() == port.to_string());
-                if clean {
-                    self.port.update(cx, |input, cx| {
-                        input.set_value(settings.mixed_port.to_string(), window, cx)
-                    });
-                }
-                self.applied_port = Some(settings.mixed_port);
+        if let Some(settings) = settings
+            && self.applied_port != Some(settings.mixed_port)
+        {
+            let clean = self
+                .applied_port
+                .is_none_or(|port| self.port.read(cx).value().as_str() == port.to_string());
+            if clean {
+                self.port.update(cx, |input, cx| {
+                    input.set_value(settings.mixed_port.to_string(), window, cx)
+                });
             }
-            if self
-                .pending_dialog
-                .is_some_and(|previous| revision != previous)
-            {
-                self.pending_dialog = None;
-                window.close_dialog(cx);
-            }
+            self.applied_port = Some(settings.mixed_port);
         }
     }
 }
@@ -127,6 +120,8 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
                     .gap_3()
                     .child(
                         Button::new("dns-options")
+                            .accessibility_label(tr(lang, "network.dns.title"))
+                            .tooltip(tr(lang, "network.dns.title"))
                             .icon(IconName::Settings)
                             .ghost()
                             .small()

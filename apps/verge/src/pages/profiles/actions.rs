@@ -16,6 +16,64 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 impl MainView {
+    pub(crate) fn finish_profile_import(
+        &mut self,
+        response: &crate::ui::UiResponse,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::domain::AppCommand;
+        let crate::ui::UiResponse::Profile {
+            request,
+            result: Ok(_),
+        } = response
+        else {
+            return;
+        };
+        let matches = match request {
+            AppCommand::ImportProfile { id, name, yaml, .. } => {
+                self.profile_id.read(cx).value().as_str() == id.as_str()
+                    && self.profile_name.read(cx).value().as_str() == name
+                    && self.profile_yaml.read(cx).value().as_str() == yaml
+            }
+            AppCommand::ImportRemoteProfile {
+                id,
+                name,
+                url,
+                update_policy,
+                user_agent,
+            } => {
+                self.profile_id.read(cx).value().as_str() == id.as_str()
+                    && self.profile_name.read(cx).value().as_str() == name
+                    && self.profile_url.read(cx).value().as_str() == url
+                    && matches!(update_policy, UpdatePolicy::Interval { seconds } if self.profile_interval.read(cx).value().parse::<u64>().ok() == Some(*seconds))
+                    && self.profile_user_agent.read(cx).value().trim()
+                        == user_agent.as_deref().unwrap_or("")
+            }
+            _ => false,
+        };
+        if matches {
+            for input in [&self.profile_id, &self.profile_name] {
+                input.update(cx, |input, cx| input.set_value("", window, cx));
+            }
+            if matches!(request, AppCommand::ImportRemoteProfile { .. }) {
+                for input in [&self.profile_url, &self.profile_user_agent] {
+                    input.update(cx, |input, cx| input.set_value("", window, cx));
+                }
+                self.profile_interval
+                    .update(cx, |input, cx| input.set_value("3600", window, cx));
+            } else {
+                self.profile_yaml.update(cx, |input, cx| {
+                    input.set_value(
+                        "mode: rule\nmixed-port: 7890\nproxies: []\nproxy-groups: []\nrules: []\n",
+                        window,
+                        cx,
+                    )
+                });
+            }
+        }
+    }
+
     pub fn import_profile(&mut self, cx: &mut Context<Self>) -> Result<(), AppError> {
         let id = self.profile_id.read(cx).value().to_string();
         let name = self.profile_name.read(cx).value().to_string();
@@ -71,7 +129,7 @@ impl MainView {
             _ => {
                 let error = AppError::new(
                     ErrorCode::InvalidInput,
-                    "update interval must be a positive integer",
+                    tr(self.lang(), "profiles.interval.invalid"),
                 );
                 self.state.set_error(error.clone());
                 cx.notify();
@@ -100,7 +158,7 @@ impl MainView {
             _ => {
                 let error = AppError::new(
                     ErrorCode::InvalidInput,
-                    "update interval must be a positive integer",
+                    tr(self.lang(), "profiles.interval.invalid"),
                 );
                 self.state.set_error(error.clone());
                 cx.notify();

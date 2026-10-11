@@ -37,6 +37,8 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
                         .gap_3()
                         .child(
                             Button::new("system-proxy-options")
+                                .accessibility_label(tr(lang, "proxy.title"))
+                                .tooltip(tr(lang, "proxy.title"))
                                 .icon(IconName::Settings)
                                 .ghost()
                                 .small()
@@ -250,7 +252,12 @@ impl MainView {
             }
             let save = draft.clone();
             let owner = owner.clone();
+            let cancel_owner = owner.clone();
+            let close_owner = owner.clone();
             dialog
+                .on_close(move |_, _, cx| {
+                    close_owner.update(cx, |this, _| this.pending_proxy_settings = None);
+                })
                 .title(tr(lang, "proxy.title"))
                 .width(px(640.))
                 .child(
@@ -269,7 +276,11 @@ impl MainView {
                         .child(
                             Button::new("proxy-dialog-cancel")
                                 .label(tr(lang, "common.cancel"))
-                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                                .on_click(move |_, window, cx| {
+                                    cancel_owner
+                                        .update(cx, |this, _| this.pending_proxy_settings = None);
+                                    window.close_dialog(cx);
+                                }),
                         )
                         .child(
                             Button::new("proxy-dialog-save")
@@ -333,11 +344,15 @@ impl MainView {
                                             window.close_dialog(cx);
                                             return;
                                         }
-                                        this.pending_proxy_settings = Some(settings.clone());
-                                        this.dispatch(
-                                            UiAction::UpdateSystemProxySettings(Box::new(settings)),
-                                            cx,
-                                        );
+                                        let focus = window.focused(cx);
+                                        this.pending_proxy_settings = this
+                                            .dispatch_sheet_request(
+                                                UiAction::UpdateSystemProxySettings(Box::new(
+                                                    settings,
+                                                )),
+                                                cx,
+                                            )
+                                            .zip(focus);
                                     });
                                 }),
                         ),

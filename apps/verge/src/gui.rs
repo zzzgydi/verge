@@ -20,10 +20,7 @@ use crate::platform::{
     MacNotifier, ProcessRunner, daemon_socket_path, redirect_stderr_to_log, spawn_daemon,
 };
 use crate::ui::{UiAction, UiResponse};
-use crate::view::{
-    GoToConnections, GoToHome, GoToLogs, GoToProfiles, GoToProxies, GoToRules, GoToSettings,
-    MainView, RefreshPage,
-};
+use crate::view::{MainView, RefreshPage};
 
 #[cfg(test)]
 #[path = "dialog_mechanism_tests.rs"]
@@ -179,22 +176,14 @@ pub fn run() {
                 cx.quit();
             }
         });
-        // 窗口级快捷键：cmd+1…7 切页面、cmd+r 刷新当前页（“Verge” key context）。
+        // 窗口级快捷键：cmd+1…8 切页面、cmd+r 刷新当前页（“Verge” key context）。
         let modifier = if cfg!(target_os = "macos") {
             "cmd"
         } else {
             "ctrl"
         };
-        cx.bind_keys([
-            KeyBinding::new(&format!("{modifier}-1"), GoToHome, Some("Verge")),
-            KeyBinding::new(&format!("{modifier}-2"), GoToProxies, Some("Verge")),
-            KeyBinding::new(&format!("{modifier}-3"), GoToRules, Some("Verge")),
-            KeyBinding::new(&format!("{modifier}-4"), GoToConnections, Some("Verge")),
-            KeyBinding::new(&format!("{modifier}-5"), GoToProfiles, Some("Verge")),
-            KeyBinding::new(&format!("{modifier}-6"), GoToLogs, Some("Verge")),
-            KeyBinding::new(&format!("{modifier}-7"), GoToSettings, Some("Verge")),
-            KeyBinding::new(&format!("{modifier}-r"), RefreshPage, Some("Verge")),
-        ]);
+        cx.bind_keys(crate::view::navigation::key_bindings(modifier));
+        cx.bind_keys([KeyBinding::new(&format!("{modifier}-r"), RefreshPage, Some("Verge"))]);
         let mut notifier = MacNotifier::new(ProcessRunner);
         let window_options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(1100.), px(720.)), cx)),
@@ -260,18 +249,23 @@ pub fn run() {
                                 let os_notification_slot = &mut os_notification;
                                 let _ = weak_view.update_in(cx, move |view, window, cx| {
                                     let lang = view.lang();
-                                    *os_notification_slot =
-                                        notification_for(lang, &envelope.response);
+                                    *os_notification_slot = if window.is_window_active() {
+                                        None
+                                    } else {
+                                        notification_for(lang, &envelope.response)
+                                    };
                                     let toast = toast_for(lang, &envelope.response);
                                     let refresh_settings = matches!(&envelope.response, UiResponse::Profile { request: AppCommand::ImportApplicationSettings { .. } | AppCommand::ResetApplicationSettingsScope { .. }, result: Ok(_) });
+                                    view.finish_profile_import(&envelope.response, window, cx);
                                     view.ai_response(&envelope.response, window, cx);
                                     view.script_response(&envelope, window, cx);
                                     view.details_response(&envelope, window, cx);
+                                    view.settings_dialog_response(&envelope, window, cx);
                                     view.profile_sheet_response(&envelope, window, cx);
                                     view.state.apply_response_envelope(envelope);
                                     view.finish_ai_save(window, cx);
                                     if refresh_settings { view.dispatch(UiAction::RefreshSettings, cx); }
-                                    set_app_menus(view.lang(), cx);
+                                    if view.lang() != lang { set_app_menus(view.lang(), cx); }
                                     if import_preview_failed {
                                         view.fail_import_preview();
                                     }

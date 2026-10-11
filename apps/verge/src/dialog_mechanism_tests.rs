@@ -682,8 +682,9 @@ fn network_dialogs_render_and_save_only_after_backend_success(cx: &mut TestAppCo
         cx.simulate_mouse_move(bounds.center(), None, gpui_kit::Modifiers::default());
         cx.simulate_click(bounds.center(), gpui_kit::Modifiers::default());
         cx.run_until_parked();
-        let request = rx.try_recv().expect("save sends a request").request;
-        let UiRequest::Profile(command @ AppCommand::UpdateCoreNetworkSettings { .. }) = request
+        let envelope = rx.try_recv().expect("save sends a request");
+        let UiRequest::Profile(command @ AppCommand::UpdateCoreNetworkSettings { .. }) =
+            envelope.request.clone()
         else {
             panic!("wrong save command");
         };
@@ -699,15 +700,20 @@ fn network_dialogs_render_and_save_only_after_backend_success(cx: &mut TestAppCo
         );
         cx.update(|window, cx| {
             view.update(cx, |view, cx| {
-                view.state.apply_profile(
-                    &command,
-                    AppCommandResult {
-                        output: AppCommandOutput::CoreNetworkSettings(
-                            CoreNetworkSettings::default(),
-                        ),
-                        summary: "saved".into(),
+                let response = crate::ui::UiResponseEnvelope::for_request(
+                    &envelope,
+                    crate::ui::UiResponse::Profile {
+                        request: command.clone(),
+                        result: Ok(AppCommandResult {
+                            output: AppCommandOutput::CoreNetworkSettings(
+                                CoreNetworkSettings::default(),
+                            ),
+                            summary: "saved".into(),
+                        }),
                     },
                 );
+                view.settings_dialog_response(&response, window, cx);
+                view.state.apply_response_envelope(response);
                 view.sync_form_inputs(window, cx);
             })
         });
@@ -839,8 +845,9 @@ fn system_proxy_dialog_keeps_draft_until_success_and_fits_small_window(cx: &mut 
     assert!(save.bottom() <= gpui_kit::px(640.));
     cx.simulate_click(save.center(), gpui_kit::Modifiers::default());
     cx.run_until_parked();
+    let envelope = rx.try_recv().unwrap();
     let UiRequest::Profile(AppCommand::UpdateSystemProxySettings { settings }) =
-        rx.try_recv().unwrap().request
+        envelope.request.clone()
     else {
         panic!("wrong request")
     };
@@ -864,6 +871,20 @@ fn system_proxy_dialog_keeps_draft_until_success_and_fits_small_window(cx: &mut 
                 .unwrap()
                 .settings
                 .system_proxy = settings;
+            let response = crate::ui::UiResponseEnvelope::for_request(
+                &envelope,
+                crate::ui::UiResponse::Profile {
+                    request: match envelope.request.clone() {
+                        UiRequest::Profile(command) => command,
+                        _ => unreachable!(),
+                    },
+                    result: Ok(AppCommandResult {
+                        output: AppCommandOutput::None,
+                        summary: "saved".into(),
+                    }),
+                },
+            );
+            view.settings_dialog_response(&response, window, cx);
             view.sync_form_inputs(window, cx);
         })
     });
@@ -1011,8 +1032,14 @@ fn welcome_and_repeated_navigation_share_pending_home_queries(cx: &mut TestAppCo
 
             // A new daemon session must receive fresh reads and subscriptions.
             view.state.disconnect("reconnecting".into());
-            view.state.connection_notice = None;
+            view.dispatch(UiAction::SetMode(crate::domain::RunMode::Rule), cx);
+            assert!(view.state.last_error.is_some());
+            assert!(rx.try_recv().is_err(), "offline actions must stay local");
+            // Welcome clears the notice, then runs this refresh chain. Starting
+            // the accepted reads already clears the offline-action Alert.
+            view.state.connection_notice.take();
             view.refresh_after_connect(cx);
+            assert!(view.state.last_error.is_none());
             assert_eq!(rx.try_iter().count(), initial.len());
         })
     });
@@ -1198,4 +1225,169 @@ fn page_headers_stay_visible_and_scroll_offsets_are_isolated(cx: &mut TestAppCon
     });
     cx.run_until_parked();
     assert!(cx.debug_bounds("home-profile-name").unwrap().top() >= header.bottom());
+}
+
+#[gpui_kit::test]
+fn log_limit_draft_does_not_write_until_committed(cx: &mut TestAppContext) {
+    use crate::{
+        domain::{ApplicationSettings, ApplicationSettingsSnapshot},
+        ui::UiRequest,
+    };
+    use gpui_kit::component::input::InputEvent;
+    cx.update(gpui_kit::init);
+    let (tx, rx) = mpsc::sync_channel(32);
+    let holder: ViewHolder = Default::default();
+    let slot = holder.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| MainView::new(tx, window, cx));
+        *slot.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = holder.borrow().clone().unwrap();
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state.application_settings = Some(ApplicationSettingsSnapshot {
+                settings: ApplicationSettings::default(),
+                data_directory: String::new(),
+                app_version: None,
+            });
+            view.log_limit.update(cx, |input, cx| {
+                input.set_value("1", window, cx);
+                cx.emit(InputEvent::Change);
+            });
+        })
+    });
+    cx.run_until_parked();
+    assert!(rx.try_recv().is_err());
+    cx.update(|_, cx| {
+        view.read(cx)
+            .log_limit
+            .clone()
+            .update(cx, |_, cx| cx.emit(InputEvent::Blur))
+    });
+    cx.run_until_parked();
+    assert!(
+        rx.try_recv().is_err(),
+        "invalid limit must not reach the daemon"
+    );
+    cx.update(|window, cx| {
+        view.read(cx).log_limit.clone().update(cx, |input, cx| {
+            input.set_value("1500", window, cx);
+            cx.emit(InputEvent::Blur);
+        })
+    });
+    cx.run_until_parked();
+    assert!(
+        matches!(rx.try_recv().unwrap().request, UiRequest::Profile(crate::domain::AppCommand::UpdateApplicationSettings { settings }) if settings.log_limit == 1500)
+    );
+}
+
+#[gpui_kit::test]
+fn late_settings_response_cannot_close_another_dialog(cx: &mut TestAppContext) {
+    use crate::{
+        domain::{AppCommand, AppCommandOutput, AppCommandResult, CoreNetworkSettings},
+        ui::{UiAction, UiResponse, UiResponseEnvelope},
+    };
+    cx.update(gpui_kit::init);
+    let (tx, rx) = mpsc::sync_channel(32);
+    let holder: ViewHolder = Default::default();
+    let slot = holder.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| MainView::new(tx, window, cx));
+        *slot.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = holder.borrow().clone().unwrap();
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            let focus = window.focused(cx).unwrap();
+            let id = view
+                .dispatch_sheet_request(
+                    UiAction::UpdateCoreNetworkSettings(CoreNetworkSettings::default()),
+                    cx,
+                )
+                .unwrap();
+            view.network_form.pending_dialog = Some((id, focus));
+        })
+    });
+    let request = rx.try_recv().unwrap();
+    cx.update(|window, cx| {
+        window.open_dialog(cx, |dialog, _, _| dialog.title("Unrelated confirmation"))
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            let response = UiResponseEnvelope::for_request(
+                &request,
+                UiResponse::Profile {
+                    request: AppCommand::UpdateCoreNetworkSettings {
+                        settings: CoreNetworkSettings::default(),
+                    },
+                    result: Ok(AppCommandResult {
+                        output: AppCommandOutput::None,
+                        summary: String::new(),
+                    }),
+                },
+            );
+            view.settings_dialog_response(&response, window, cx);
+        })
+    });
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+}
+
+#[gpui_kit::test]
+fn navigation_shortcuts_follow_sidebar_including_ai(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.bind_keys(crate::view::navigation::key_bindings("cmd"));
+    });
+    let (tx, _rx) = mpsc::sync_channel(64);
+    let holder: ViewHolder = Default::default();
+    let slot = holder.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| MainView::new(tx, window, cx));
+        *slot.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = holder.borrow().clone().unwrap();
+    for (index, (page, _, _)) in crate::view::navigation::ENTRIES.iter().enumerate() {
+        cx.simulate_keystrokes(&format!("cmd-{}", index + 1));
+        cx.run_until_parked();
+        assert_eq!(cx.update(|_, cx| view.read(cx).state.page), *page);
+    }
+}
+
+#[gpui_kit::test]
+fn cancelling_network_save_clears_its_request_marker(cx: &mut TestAppContext) {
+    use crate::domain::CoreNetworkSettings;
+    cx.update(gpui_kit::init);
+    let (tx, _rx) = mpsc::sync_channel(32);
+    let holder: ViewHolder = Default::default();
+    let slot = holder.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| MainView::new(tx, window, cx));
+        *slot.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = holder.borrow().clone().unwrap();
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state.core_network_settings = Some(CoreNetworkSettings::default());
+            view.open_core_network_dialog(true, window, cx);
+        })
+    });
+    cx.run_until_parked();
+    for _ in 0..25 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(16));
+        cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    }
+    let save = cx.debug_bounds("network-dialog-save").unwrap();
+    cx.simulate_click(save.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(cx.update(|_, cx| view.read(cx).network_form.pending_dialog.is_some()));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(cx.update(|_, cx| view.read(cx).network_form.pending_dialog.is_none()));
 }

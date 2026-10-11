@@ -1,5 +1,36 @@
 use super::*;
 
+pub(crate) const ENTRIES: [(Page, &str, IconName); 8] = [
+    (Page::Home, "home.title", IconName::LayoutDashboard),
+    (Page::Proxies, "proxies.title", IconName::Globe),
+    (Page::Profiles, "profiles.title", IconName::File),
+    (Page::Rules, "rules.title", IconName::BookOpen),
+    (Page::Connections, "connections.title", IconName::Network),
+    (Page::Logs, "logs.title", IconName::SquareTerminal),
+    (Page::Ai, "ai.title", IconName::Bot),
+    (Page::Settings, "settings.title", IconName::Settings),
+];
+
+pub(crate) fn key_bindings(modifier: &str) -> Vec<KeyBinding> {
+    ENTRIES
+        .iter()
+        .enumerate()
+        .map(|(index, (page, _, _))| {
+            let key = format!("{modifier}-{}", index + 1);
+            match page {
+                Page::Home => KeyBinding::new(&key, GoToHome, Some("Verge")),
+                Page::Proxies => KeyBinding::new(&key, GoToProxies, Some("Verge")),
+                Page::Profiles => KeyBinding::new(&key, GoToProfiles, Some("Verge")),
+                Page::Rules => KeyBinding::new(&key, GoToRules, Some("Verge")),
+                Page::Connections => KeyBinding::new(&key, GoToConnections, Some("Verge")),
+                Page::Logs => KeyBinding::new(&key, GoToLogs, Some("Verge")),
+                Page::Ai => KeyBinding::new(&key, GoToAi, Some("Verge")),
+                Page::Settings => KeyBinding::new(&key, GoToSettings, Some("Verge")),
+            }
+        })
+        .collect()
+}
+
 // Critically damped: responsive without overshoot. Stable IDs preserve position
 // and velocity when a second click reverses an unfinished transition.
 fn sidebar_motion(target: f32) -> SpringAnimation<f32> {
@@ -22,25 +53,15 @@ impl MainView {
         let collapsed = self.sidebar_collapsed;
         let expanded = if collapsed { 0. } else { 1. };
         let lang = self.lang();
-        let entries = [
-            (Page::Home, "home.title", IconName::LayoutDashboard),
-            (Page::Proxies, "proxies.title", IconName::Globe),
-            (Page::Profiles, "profiles.title", IconName::File),
-            (Page::Rules, "rules.title", IconName::BookOpen),
-            (Page::Connections, "connections.title", IconName::Network),
-            (Page::Logs, "logs.title", IconName::SquareTerminal),
-            (Page::Ai, "ai.title", IconName::Bot),
-            (Page::Settings, "settings.title", IconName::Settings),
-        ];
         let navigation =
             v_flex()
                 .gap_1()
-                .children(entries.into_iter().map(|(page, label, icon)| {
+                .children(ENTRIES.into_iter().map(|(page, label, icon)| {
                     Button::new(format!("nav-{page:?}"))
                         .debug_selector(move || format!("nav-{page:?}"))
                         .ghost()
                         .w_full()
-                        .h(px(40.))
+                        .h(px(crate::appearance::metrics::NAV_ROW))
                         // 48px collapsed width leaves 18px for the icon after padding and borders.
                         .px(px(14.))
                         .rounded_lg()
@@ -77,6 +98,7 @@ impl MainView {
                                 .text_color(cx.theme().accent_foreground)
                                 .border_color(cx.theme().list_active_border)
                         })
+                        .accessibility_label(tr(lang, label))
                         .tooltip(tr(lang, label))
                         .on_click(cx.listener(move |this, _, _, cx| this.navigate(page, cx)))
                 }));
