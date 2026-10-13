@@ -73,6 +73,7 @@ pub struct MainView {
     pub state: UiState,
     pub connection_count: Entity<ConnectionCount>,
     pub ai_form: pages::ai::AiForm,
+    pub optimization_panel: Entity<pages::home::optimization::Panel>,
     pub telemetry: Entity<pages::home::telemetry::Telemetry>,
     pub requests: mpsc::SyncSender<UiRequestEnvelope>,
     pub sheet_state: Entity<SheetState>,
@@ -237,6 +238,7 @@ impl MainView {
             state: UiState::default(),
             connection_count: cx.new(|_| ConnectionCount { count: None, lang }),
             ai_form: pages::ai::AiForm::new(window, cx),
+            optimization_panel: cx.new(|_| pages::home::optimization::Panel::default()),
             telemetry: cx.new(|_| pages::home::telemetry::Telemetry::new()),
             requests,
             network_form: pages::settings::network::NetworkForm::new(window, cx),
@@ -375,6 +377,16 @@ impl MainView {
             .update(cx, |telemetry, cx| telemetry.set_language(lang, cx));
         self.sync_placeholders(window, cx);
         self.ai_form.sync(&self.state.ai, window, cx);
+        let optimization_pending = self.is_pending(&["optimization_write"]);
+        self.optimization_panel.update(cx, |panel, cx| {
+            panel.sync(
+                self.state.optimization.clone(),
+                lang,
+                self.state.connection_notice.is_some(),
+                optimization_pending,
+                cx,
+            );
+        });
         self.network_form.sync(
             self.state.core_network_settings.as_ref(),
             self.state.core_network_revision,
@@ -474,6 +486,20 @@ impl MainView {
     ) -> bool {
         if let UiAction::Navigate(page) = action {
             self.state.navigate(page);
+            cx.notify();
+            return false;
+        }
+        if matches!(action, UiAction::Optimization(_))
+            && !self
+                .state
+                .daemon_capabilities
+                .iter()
+                .any(|c| c == crate::optimization::CAPABILITY)
+        {
+            self.state.set_error(crate::domain::AppError::new(
+                crate::domain::ErrorCode::Conflict,
+                tr(self.lang(), "optimization.restart"),
+            ));
             cx.notify();
             return false;
         }
@@ -711,6 +737,10 @@ impl MainView {
         self.pending_proxy_settings = None;
         self.network_form.cancel_pending();
         self.sync_proxies(cx);
+        let lang = self.lang();
+        self.optimization_panel.update(cx, |panel, cx| {
+            panel.sync(self.state.optimization.clone(), lang, true, false, cx);
+        });
         cx.notify();
     }
 
@@ -758,6 +788,18 @@ impl MainView {
     /// Welcome already carries profiles; overlapping page reads share pending requests.
     pub(crate) fn refresh_after_connect(&mut self, cx: &mut Context<Self>) {
         self.dispatch(UiAction::RefreshHome, cx);
+        if self
+            .state
+            .daemon_capabilities
+            .iter()
+            .any(|c| c == crate::optimization::CAPABILITY)
+        {
+            self.state.optimization = Default::default();
+            self.dispatch(
+                UiAction::Optimization(crate::optimization::Command::GetState),
+                cx,
+            );
+        }
         self.dispatch(UiAction::RefreshSettings, cx);
         if !matches!(
             self.state.page,

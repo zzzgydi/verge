@@ -24,6 +24,271 @@ fn sheet_content_is_visible(window: &gpui_kit::Window) -> bool {
 }
 
 #[gpui_kit::test]
+fn optimization_overview_buttons_and_sheet_work_in_both_themes(cx: &mut TestAppContext) {
+    use crate::{
+        optimization::{Command, Phase, Report, Snapshot},
+        ui::{Page, UiRequest, UiResponse},
+    };
+    use gpui_kit::component::theme::{Theme, ThemeMode};
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let (tx, rx) = mpsc::sync_channel(32);
+    let holder: ViewHolder = Default::default();
+    let slot = holder.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| MainView::new(tx, window, cx));
+        view.update(cx, |view, _| {
+            view.state.page = Page::Home;
+            view.state
+                .daemon_capabilities
+                .push(crate::optimization::CAPABILITY.into());
+        });
+        *slot.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = holder.borrow().clone().unwrap();
+    for mode in [ThemeMode::Light, ThemeMode::Dark] {
+        for (width, height) in [(960., 640.), (1280., 800.)] {
+            cx.simulate_resize(gpui_kit::size(gpui_kit::px(width), gpui_kit::px(height)));
+            cx.update(|window, cx| {
+                Theme::change(mode, Some(window), cx);
+                view.update(cx, |view, cx| {
+                    view.state.pending.clear();
+                    view.state.optimization = Snapshot::default();
+                    view.sync_form_inputs(window, cx);
+                    cx.notify();
+                });
+                window.close_sheet(cx);
+            });
+            cx.run_until_parked();
+            let check = cx.debug_bounds("home-health-check").unwrap();
+            let optimize = cx.debug_bounds("home-health-optimize").unwrap();
+            assert!(check.bottom() < gpui_kit::px(height));
+            assert!(optimize.right() < gpui_kit::px(width));
+            cx.simulate_click(check.center(), gpui_kit::Modifiers::default());
+            cx.run_until_parked();
+            let check_request = rx.try_recv().unwrap();
+            assert!(matches!(
+                check_request.request,
+                UiRequest::Optimization(Command::Check)
+            ));
+            assert!(cx.update(|window, _| sheet_content_is_visible(window)));
+            cx.update(|window, cx| {
+                view.update(cx, |view, cx| {
+                    view.state
+                        .apply_response_envelope(crate::ui::UiResponseEnvelope::for_request(
+                            &check_request,
+                            UiResponse::Optimization {
+                                command: Command::Check,
+                                result: Ok(Snapshot {
+                                    revision: 2,
+                                    phase: Phase::Checking,
+                                    report: Some(Report {
+                                        id: 1,
+                                        partial: true,
+                                        ..Default::default()
+                                    }),
+                                    ..Default::default()
+                                }),
+                            },
+                        ));
+                    view.sync_form_inputs(window, cx);
+                    cx.notify();
+                })
+            });
+            cx.run_until_parked();
+            let cancel = cx.debug_bounds("health-cancel").unwrap();
+            assert!(cancel.bottom() < gpui_kit::px(height));
+            cx.simulate_click(cancel.center(), gpui_kit::Modifiers::default());
+            cx.run_until_parked();
+            let cancel_request = rx.try_recv().unwrap();
+            assert!(matches!(
+                cancel_request.request,
+                UiRequest::Optimization(Command::Cancel)
+            ));
+            assert!(rx.try_recv().is_err());
+            cx.update(|_, cx| {
+                view.update(cx, |view, _| {
+                    view.state
+                        .apply_response_envelope(crate::ui::UiResponseEnvelope::for_request(
+                            &cancel_request,
+                            UiResponse::Optimization {
+                                command: Command::Cancel,
+                                result: Ok(Snapshot {
+                                    revision: 3,
+                                    ..Default::default()
+                                }),
+                            },
+                        ));
+                })
+            });
+        }
+    }
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state.pending.clear();
+            view.state.optimization = Snapshot {
+                revision: 20,
+                report: Some(Report {
+                    id: 20,
+                    findings: vec![crate::optimization::Finding {
+                        code: "probes_disabled".into(),
+                        severity: crate::optimization::Severity::Unknown,
+                        detail: String::new(),
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            view.sync_form_inputs(window, cx);
+            view.open_optimization(false, window, cx);
+        });
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("health-active-probes").is_none(),
+        "consent is not a permanent wall"
+    );
+    let primary = cx.debug_bounds("health-primary").unwrap();
+    cx.simulate_click(primary.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+        rx.try_recv().is_err(),
+        "opening consent cannot grant permission"
+    );
+    let probes = cx.debug_bounds("health-active-probes").unwrap();
+    cx.simulate_click(probes.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(matches!(
+        rx.try_recv().unwrap().request,
+        UiRequest::Optimization(Command::AllowProbesAndCheck)
+    ));
+    assert!(
+        rx.try_recv().is_err(),
+        "one click dispatches one atomic request"
+    );
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1280.), gpui_kit::px(960.)));
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state.pending.clear();
+            view.state.optimization = Snapshot {
+                revision: 30,
+                active_probes: true,
+                report: Some(Report {
+                    id: 30,
+                    captured_at: crate::optimization::now(),
+                    plan: Some(crate::optimization::Plan {
+                        id: "bound-confirmation".into(),
+                        group: "Manual".into(),
+                        previous: "Old node".into(),
+                        proposed: "New node".into(),
+                        expires_at: crate::optimization::now() + 120,
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            view.sync_form_inputs(window, cx);
+            view.open_optimization(true, window, cx);
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    assert!(rx.try_recv().is_err(), "showing a proposal cannot apply it");
+    let apply = cx.debug_bounds("health-apply").unwrap();
+    assert!(apply.bottom() < gpui_kit::px(960.));
+    cx.simulate_click(apply.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+        matches!(rx.try_recv().unwrap().request, UiRequest::Optimization(Command::Apply { id }) if id == "bound-confirmation")
+    );
+    assert!(rx.try_recv().is_err());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(960.), gpui_kit::px(640.)));
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state.pending.clear();
+            view.state.optimization = Snapshot {
+                revision: 35,
+                active_probes: true,
+                report: Some(Report {
+                    id: 35,
+                    groups: vec!["Manual".into()],
+                    measurements: (0..20)
+                        .map(|index| crate::optimization::Measurement {
+                            node: format!("Long node name {index}"),
+                            target: 0,
+                            delay_ms: None,
+                            captured_at: crate::optimization::now(),
+                        })
+                        .collect(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            view.sync_form_inputs(window, cx);
+            view.open_optimization(false, window, cx);
+        });
+    });
+    cx.run_until_parked();
+    let primary = cx.debug_bounds("health-primary").unwrap();
+    cx.simulate_click(primary.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(rx.try_recv().is_err(), "comparing starts only on request");
+    let compare = cx.debug_bounds("health-optimize").unwrap();
+    assert!(compare.top() > primary.bottom());
+    assert!(
+        compare.bottom() < gpui_kit::px(640.),
+        "next action must appear above the node list"
+    );
+    cx.simulate_click(compare.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+        rx.try_recv().is_err(),
+        "comparison requires an explicit group choice"
+    );
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state.pending.clear();
+            view.state.optimization = Snapshot {
+                revision: 40,
+                report: Some(Report {
+                    id: 40,
+                    findings: vec![crate::optimization::Finding {
+                        code: "profile".into(),
+                        severity: crate::optimization::Severity::Unknown,
+                        detail: String::new(),
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            view.sync_form_inputs(window, cx);
+            view.open_optimization(false, window, cx);
+        });
+    });
+    cx.run_until_parked();
+    let settings = cx.debug_bounds("health-tab-2").unwrap();
+    cx.simulate_click(settings.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("health-primary").is_none(),
+        "preferences are not mixed into results"
+    );
+    let results = cx.debug_bounds("health-tab-0").unwrap();
+    cx.simulate_click(results.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    let primary = cx.debug_bounds("health-primary").unwrap();
+    cx.simulate_click(primary.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(!sheet_content_is_visible(window));
+        view.read_with(cx, |view, _| assert_eq!(view.state.page, Page::Profiles));
+    });
+}
+
+#[gpui_kit::test]
 fn ai_requests_are_gated_and_reconnect_does_not_restart_a_turn(cx: &mut TestAppContext) {
     use crate::{
         ai::{AiCommand, AiOperation, AiSnapshot, ChatMessage},

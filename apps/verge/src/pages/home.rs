@@ -1,3 +1,4 @@
+pub mod optimization;
 pub mod telemetry;
 
 use super::components::{Metric, PageHeader, panel};
@@ -176,26 +177,86 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 )
                 .child(super::components::mode_selector(view, cx)),
         )
-        .child(network_status(view, cx));
+        .child(network_status(view, cx))
+        .child(
+            h_flex()
+                .gap_2()
+                .flex_wrap()
+                .pt_2()
+                .child(div().flex_1().text_sm().child(format!(
+                    "{} · {}",
+                    tr(lang, "optimization.title"),
+                    tr(lang, optimization::status(&view.state.optimization))
+                )))
+                .child(
+                    Button::new("home-health-report")
+                        .small()
+                        .ghost()
+                        .label(tr(lang, "optimization.details"))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_optimization(false, window, cx)
+                        })),
+                ),
+        );
 
     v_flex()
         .flex_1()
         .min_h_0()
         .gap_4()
         .child(
-            PageHeader::new(tr(lang, "home.title")).child(
-                Button::new("refresh-home")
-                    .ghost()
-                    .small()
-                    .h(px(crate::appearance::metrics::COMPACT_CONTROL))
-                    .icon(gpui_kit::assets::IconName::RefreshCw)
-                    .accessibility_label(tr(lang, "common.refresh"))
-                    .tooltip(tr(lang, "common.refresh"))
-                    .loading(view.is_pending(&["runtime_settings", "mode", "system_proxy"]))
-                    .on_click(
-                        cx.listener(|this, _, _, cx| this.dispatch(UiAction::RefreshHome, cx)),
-                    ),
-            ),
+            PageHeader::new(tr(lang, "home.title"))
+                .child(
+                    Button::new("home-health-check")
+                        .debug_selector(|| "home-health-check".into())
+                        .small()
+                        .primary()
+                        .label(tr(lang, "optimization.check"))
+                        .disabled(
+                            view.state.connection_notice.is_some()
+                                || view.state.optimization.busy()
+                                || view.is_pending(&["optimization_write"]),
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_optimization(false, window, cx);
+                            this.dispatch(
+                                UiAction::Optimization(crate::optimization::Command::Check),
+                                cx,
+                            );
+                            this.sync_form_inputs(window, cx);
+                        })),
+                )
+                .child(
+                    Button::new("home-health-optimize")
+                        .debug_selector(|| "home-health-optimize".into())
+                        .small()
+                        .label(tr(lang, "optimization.optimize"))
+                        .disabled(view.state.connection_notice.is_some())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_optimization(true, window, cx);
+                            if !this.state.optimization.busy()
+                                && this.state.optimization.report.is_none()
+                            {
+                                this.dispatch(
+                                    UiAction::Optimization(crate::optimization::Command::Check),
+                                    cx,
+                                );
+                                this.sync_form_inputs(window, cx);
+                            }
+                        })),
+                )
+                .child(
+                    Button::new("refresh-home")
+                        .ghost()
+                        .small()
+                        .h(px(crate::appearance::metrics::COMPACT_CONTROL))
+                        .icon(gpui_kit::assets::IconName::RefreshCw)
+                        .accessibility_label(tr(lang, "common.refresh"))
+                        .tooltip(tr(lang, "common.refresh"))
+                        .loading(view.is_pending(&["runtime_settings", "mode", "system_proxy"]))
+                        .on_click(
+                            cx.listener(|this, _, _, cx| this.dispatch(UiAction::RefreshHome, cx)),
+                        ),
+                ),
         )
         .child(
             v_flex()
