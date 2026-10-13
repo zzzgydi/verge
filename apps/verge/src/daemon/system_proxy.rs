@@ -145,6 +145,9 @@ impl Backend {
     pub(super) fn guard_system_proxy(
         &mut self,
     ) -> Option<Result<SystemProxyCommandResult, AppError>> {
+        if self.optimization.verifying() {
+            return None;
+        }
         let settings = &self.settings.get().system_proxy;
         if !guard_due(
             settings,
@@ -163,6 +166,7 @@ impl Backend {
         if target.matches(&state) {
             return None;
         }
+        self.optimization.invalidate();
         Some(
             self.system_proxy
                 .configure(&target)

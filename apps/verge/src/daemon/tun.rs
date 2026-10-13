@@ -210,6 +210,7 @@ impl Backend {
     }
 
     pub(super) fn stop_tun_after_failure(&mut self) -> Result<(), AppError> {
+        self.optimization.invalidate();
         let result = self.disable_tun();
         self.log_app(
             "error",

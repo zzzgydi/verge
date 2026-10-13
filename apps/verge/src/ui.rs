@@ -170,6 +170,7 @@ pub enum CoreStatus {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum UiRequest {
+    Optimization(crate::optimization::Command),
     Ai(crate::ai::AiCommand),
     Profile(AppCommand),
     Runtime(RuntimeCommand),
@@ -179,6 +180,8 @@ pub enum UiRequest {
 impl UiRequest {
     pub fn risk(&self) -> CommandRisk {
         match self {
+            Self::Optimization(crate::optimization::Command::GetState) => CommandRisk::ReadOnly,
+            Self::Optimization(_) => CommandRisk::LowRiskWrite,
             Self::Ai(crate::ai::AiCommand::GetState) => CommandRisk::ReadOnly,
             Self::Ai(_) => CommandRisk::LowRiskWrite,
             Self::Profile(command) => command.risk(),
@@ -200,6 +203,10 @@ pub struct UiRequestEnvelope {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum UiResponse {
+    Optimization {
+        command: crate::optimization::Command,
+        result: Result<crate::optimization::Snapshot, AppError>,
+    },
     Ai {
         operation: crate::ai::AiOperation,
         result: Result<crate::ai::AiSnapshot, AppError>,
@@ -246,6 +253,7 @@ impl UiResponseEnvelope {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum UiAction {
+    Optimization(crate::optimization::Command),
     Ai(crate::ai::AiCommand),
     Navigate(Page),
     RefreshHome,
@@ -354,6 +362,7 @@ pub enum UiAction {
 impl UiAction {
     pub fn requests(self) -> Vec<UiRequest> {
         match self {
+            Self::Optimization(command) => vec![UiRequest::Optimization(command)],
             Self::Ai(command) => vec![UiRequest::Ai(command)],
             Self::Navigate(_) => Vec::new(),
             Self::RefreshLogSettings => {
@@ -601,6 +610,7 @@ impl UiAction {
 
 #[derive(Clone, Debug, Default)]
 pub struct UiState {
+    pub optimization: crate::optimization::Snapshot,
     pub ai: crate::ai::AiSnapshot,
     pub daemon_capabilities: Vec<String>,
     /// Present while the daemon connection is unavailable; independent of command errors.
@@ -967,6 +977,13 @@ impl UiState {
 
     pub fn apply_response(&mut self, response: UiResponse) {
         match response {
+            UiResponse::Optimization { result, .. } => match result {
+                Ok(snapshot) if snapshot.revision >= self.optimization.revision => {
+                    self.optimization = snapshot
+                }
+                Err(error) => self.optimization.error = Some(error.message),
+                _ => {}
+            },
             UiResponse::Ai { result, .. } => {
                 // AI errors belong to the conversation or provider form, where
                 // MainView::ai_response supplies the appropriate recovery action.
@@ -1041,6 +1058,7 @@ impl UiState {
 
 fn response_request(response: &UiResponse) -> Option<UiRequest> {
     match response {
+        UiResponse::Optimization { command, .. } => Some(UiRequest::Optimization(command.clone())),
         UiResponse::Ai { operation, .. } => Some(UiRequest::Ai(match operation {
             crate::ai::AiOperation::State => crate::ai::AiCommand::GetState,
             crate::ai::AiOperation::Save => crate::ai::AiCommand::SaveConfig {
@@ -1080,6 +1098,8 @@ fn is_write_request(request: &UiRequest) -> bool {
 
 fn request_key(request: &UiRequest) -> &'static str {
     match request {
+        UiRequest::Optimization(crate::optimization::Command::GetState) => "optimization_state",
+        UiRequest::Optimization(_) => "optimization_write",
         UiRequest::Ai(crate::ai::AiCommand::GetState) => "ai_state",
         UiRequest::Ai(_) => "ai_write",
         UiRequest::Profile(AppCommand::GetRuntimeSettings) => "runtime_settings",

@@ -11,6 +11,7 @@ mod i18n;
 pub mod identity;
 pub mod ipc;
 pub mod mihomo;
+pub mod optimization;
 mod pages;
 pub mod platform;
 pub mod script;

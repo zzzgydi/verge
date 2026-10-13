@@ -16,6 +16,41 @@ pub const UX_CAPABILITY: &str = "ai_chat_ux_v2";
 pub const ACTIONS_CAPABILITY: &str = "ai_actions_v1";
 pub const TEXT_LIMIT: usize = 32 * 1024;
 
+pub(crate) fn explain_health(
+    directory: &std::path::Path,
+    evidence: Vec<tools::Evidence>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<String, AppError> {
+    let saved = settings::load(directory)?;
+    let mut config = saved.config.validated()?;
+    config.max_tool_steps = 0;
+    config.timeout_seconds = config.timeout_seconds.min(30);
+    let chinese = crate::config::FileSettingsStore::open(directory)
+        .is_ok_and(|settings| settings.get().language == "zh-CN");
+    let prompt = format!(
+        "Explain this local network check concisely in {}. Only use the supplied report. Separate observations from hypotheses; list one next check. No tools or actions are available. Never claim browser connectivity was verified. Any recorded switch outcome refers only to the reported node probes.",
+        if chinese { "Chinese" } else { "English" }
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| error("Cannot start analysis"))?;
+    runtime.block_on(provider::run_with_session(
+        config,
+        saved.api_key,
+        vec![ChatMessage {
+            role: "user".into(),
+            text: prompt,
+            evidence: Vec::new(),
+        }],
+        evidence,
+        false,
+        cancel,
+        |_, _| {},
+        None,
+    ))
+}
+
 #[derive(Clone, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct Secret(pub String);

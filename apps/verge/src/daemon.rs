@@ -173,6 +173,7 @@ fn current_app_version() -> Option<String> {
 
 mod ai;
 mod dev;
+mod optimization;
 mod scripts;
 mod system_proxy;
 pub use dev::stop_dev_daemon;
@@ -185,6 +186,8 @@ struct Engine {
 }
 
 struct Backend {
+    optimization: crate::optimization::Service,
+    optimization_connections: std::collections::HashMap<u64, u64>,
     geo_job_running: bool,
     tun_lease: Option<crate::platform::TunLease>,
     ai: crate::ai::AiService,
@@ -252,6 +255,8 @@ impl Backend {
             system_proxy.recover_pending()?;
         }
         let mut backend = Self {
+            optimization: crate::optimization::Service::new(config.data_dir.clone()),
+            optimization_connections: Default::default(),
             geo_job_running: false,
             tun_lease: None,
             ai: crate::ai::AiService::new(config.data_dir.clone()),
@@ -369,6 +374,7 @@ impl Backend {
     }
 
     fn shutdown(&mut self) {
+        self.optimization.shutdown();
         self.ai.cancel();
         self.proxy_session.target = None;
         if let Some(mut engine) = self.engine.take() {
@@ -391,6 +397,9 @@ impl Backend {
     }
 
     fn poll(&mut self) -> Result<(), AppError> {
+        if self.optimization.verifying() {
+            return Ok(());
+        }
         if self
             .tun_lease
             .as_ref()
@@ -399,7 +408,11 @@ impl Backend {
             self.stop_tun_after_failure()?;
         }
         if let Some(engine) = &mut self.engine {
+            let previous = engine.supervisor.state().clone();
             engine.supervisor.poll(Instant::now())?;
+            if *engine.supervisor.state() != previous {
+                self.optimization.invalidate();
+            }
         }
         if self.tun_lease.is_some()
             && self.engine.as_ref().is_none_or(|e| {
@@ -431,6 +444,7 @@ impl Backend {
     }
 
     fn update_due_profiles(&mut self) -> Result<(), AppError> {
+        let previous = self.profiles.preview_digest().ok();
         let Some(engine) = &mut self.engine else {
             return Ok(());
         };
@@ -452,6 +466,9 @@ impl Backend {
             Some(credentials),
         )
         .update_due(unix_timestamp()?, trigger)?;
+        if self.profiles.preview_digest().ok() != previous {
+            self.optimization.invalidate();
+        }
         if let Err(error) = self.synchronize_owned_proxy() {
             self.log_app(
                 "error",
@@ -465,9 +482,65 @@ impl Backend {
         if let Err(error) = self.check_dev_request(&request) {
             return failed_response(request, error);
         }
+        if self.optimization.verifying()
+            && request.risk() != crate::domain::CommandRisk::ReadOnly
+            && !matches!(
+                request,
+                UiRequest::Optimization(_) | UiRequest::Profile(AppCommand::QuitApplication)
+            )
+        {
+            return failed_response(
+                request,
+                crate::optimization::error("optimization.verifying"),
+            );
+        }
+        if request.risk() != crate::domain::CommandRisk::ReadOnly
+            && !matches!(request, UiRequest::Optimization(_) | UiRequest::Ai(_))
+        {
+            self.optimization.invalidate();
+        }
         match request {
+            UiRequest::Optimization(command) => {
+                if self.ai.snapshot().busy
+                    && matches!(
+                        command,
+                        crate::optimization::Command::Analyze { .. }
+                            | crate::optimization::Command::Apply { .. }
+                    )
+                {
+                    return failed_response(
+                        UiRequest::Optimization(command),
+                        crate::optimization::error("optimization.busy"),
+                    );
+                }
+                if self.geo_job_running
+                    && matches!(command, crate::optimization::Command::Apply { .. })
+                {
+                    return failed_response(
+                        UiRequest::Optimization(command),
+                        crate::optimization::error("optimization.busy"),
+                    );
+                }
+                let context = self.optimization_context();
+                let result = self.optimization.handle(command.clone(), context);
+                UiResponse::Optimization { command, result }
+            }
             UiRequest::Ai(command) => {
+                if self.optimization.snapshot().busy()
+                    && !matches!(
+                        command,
+                        crate::ai::AiCommand::GetState
+                            | crate::ai::AiCommand::Cancel
+                            | crate::ai::AiCommand::Dismiss { .. }
+                    )
+                {
+                    return failed_response(
+                        UiRequest::Ai(command),
+                        crate::optimization::error("optimization.busy"),
+                    );
+                }
                 if let crate::ai::AiCommand::Approve { id, digest } = command {
+                    self.optimization.invalidate();
                     return self.approve_ai(id, digest);
                 }
                 let operation = command.operation();
@@ -1572,6 +1645,7 @@ impl Backend {
                 crate::ipc::protocol::PROFILE_ORDER.into(),
                 crate::ipc::protocol::MERGE_PREVIEW.into(),
                 crate::script::CAPABILITY.into(),
+                crate::optimization::CAPABILITY.into(),
                 crate::ai::CAPABILITY.into(),
                 crate::ai::UX_CAPABILITY.into(),
                 crate::ai::ACTIONS_CAPABILITY.into(),
@@ -1830,6 +1904,7 @@ fn run_daemon_backend(
             DaemonEvent::Ipc(IpcServerEvent::Disconnected { conn_id }) => {
                 server.close(conn_id);
                 command_buses.remove(&conn_id);
+                backend.optimization_connections.remove(&conn_id);
                 if backend.ai_connections.remove(&conn_id).is_some() {
                     backend.ai.cancel();
                 }
@@ -1849,6 +1924,7 @@ fn run_daemon_backend(
                     continue;
                 };
                 let result = result.and_then(|(candidate, digest)| {
+                    backend.optimization.invalidate();
                     let result = backend.apply_geo_candidate(kind, &asset, &candidate, &digest);
                     let _ = fs::remove_file(candidate);
                     result.map(|()| AppCommandResult {
@@ -1907,6 +1983,24 @@ fn run_daemon_backend(
                 tray_state.accept(*result, &server);
             }
             DaemonEvent::RealtimeTick => {
+                let revision = backend.optimization.revision();
+                for (&conn, seen) in &mut backend.optimization_connections {
+                    if *seen != revision {
+                        let response = UiResponse::Optimization {
+                            command: crate::optimization::Command::GetState,
+                            result: Ok(backend.optimization.snapshot()),
+                        };
+                        if server
+                            .send(
+                                conn,
+                                ClientMessage::Response(UiResponseEnvelope::realtime(response)),
+                            )
+                            .is_ok()
+                        {
+                            *seen = revision;
+                        }
+                    }
+                }
                 let ai_revision = backend.ai.revision();
                 for (&conn, revision) in &mut backend.ai_connections {
                     if *revision != ai_revision {
@@ -1929,6 +2023,7 @@ fn run_daemon_backend(
                 }
                 let events = backend.drain_realtime_events();
                 for event in &events {
+                    backend.optimization.observe(event);
                     match event {
                         RealtimeEvent::Connections(sample) => {
                             let mut sample = sample.clone();
@@ -1957,6 +2052,10 @@ fn run_daemon_backend(
                 }
             }
             DaemonEvent::PollTick => {
+                if !backend.ai.snapshot().busy {
+                    let context = backend.optimization_context();
+                    backend.optimization.tick(context);
+                }
                 if let Some(error) = backend.poll().err() {
                     backend.log_app("error", format!("内核轮询失败: {}", error.message));
                     backend.fail_runtime(error);
@@ -1984,6 +2083,7 @@ fn run_daemon_backend(
             quit = true;
         }
     }
+    backend.optimization.cancel();
     backend.shutdown();
     server.shutdown();
     if backend.restart_requested {
@@ -2097,11 +2197,45 @@ fn handle_daemon_request(
         );
         return;
     }
+    if matches!(request, UiRequest::Optimization(_)) {
+        if envelope.context.actor != crate::domain::CommandActor::UserInterface {
+            let response = failed_response(
+                request,
+                crate::optimization::error("optimization.user_only"),
+            );
+            let _ = server.send(
+                conn_id,
+                ClientMessage::Response(UiResponseEnvelope::for_request(&envelope, response)),
+            );
+            return;
+        }
+        backend
+            .optimization_connections
+            .entry(conn_id)
+            .or_insert(u64::MAX);
+    }
     if matches!(request, UiRequest::Ai(_)) {
         backend.ai_connections.entry(conn_id).or_insert(u64::MAX);
     }
     let risk = request.risk();
     let last_in_operation = envelope.operation_index + 1 == envelope.operation_len;
+    if backend.optimization.verifying()
+        && risk != crate::domain::CommandRisk::ReadOnly
+        && !matches!(
+            request,
+            UiRequest::Optimization(_) | UiRequest::Profile(AppCommand::QuitApplication)
+        )
+    {
+        let response = failed_response(
+            request,
+            crate::optimization::error("optimization.verifying"),
+        );
+        let _ = server.send(
+            conn_id,
+            ClientMessage::Response(UiResponseEnvelope::for_request(&envelope, response)),
+        );
+        return;
+    }
     if let UiRequest::Profile(AppCommand::UpdateGeoData { kind }) = &request {
         let kind = *kind;
         let prepare = command_bus
@@ -2434,6 +2568,7 @@ fn response_succeeded(response: &UiResponse) -> bool {
         UiResponse::Runtime { result, .. } => result.is_ok(),
         UiResponse::SystemProxy { result, .. } => result.is_ok(),
         UiResponse::Realtime(_) => true,
+        UiResponse::Optimization { result, .. } => result.is_ok(),
         UiResponse::Ai { result, .. } => result.is_ok(),
     }
 }
@@ -2476,6 +2611,10 @@ fn unix_timestamp() -> Result<i64, AppError> {
 
 fn failed_response(request: UiRequest, error: AppError) -> UiResponse {
     match request {
+        UiRequest::Optimization(command) => UiResponse::Optimization {
+            command,
+            result: Err(error),
+        },
         UiRequest::Ai(command) => UiResponse::Ai {
             operation: command.operation(),
             result: Err(error),

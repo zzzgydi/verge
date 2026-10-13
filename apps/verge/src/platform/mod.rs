@@ -1600,7 +1600,17 @@ mod tests {
             endpoint: ProxyEndpoint::new("127.0.0.1", 7897).unwrap(),
             bypass: vec!["localhost".into(), "*.local".into()],
         };
-        assert!(manual.matches(&proxy.configure(&services, &manual).unwrap()));
+        let state = proxy.configure(&services, &manual).unwrap();
+        assert!(manual.matches(&state));
+        assert!(state.recovery_pending);
+        assert_eq!(
+            crate::optimization::proxy_severity(&Ok(state.clone()), Some(&manual)),
+            crate::optimization::Severity::Pass
+        );
+        assert_eq!(
+            crate::optimization::proxy_severity(&Ok(state), None),
+            crate::optimization::Severity::Warning
+        );
         let original = fs::read(&recovery).unwrap();
         let writes: Vec<_> = proxy
             .runner
@@ -1627,7 +1637,17 @@ mod tests {
         let pac = SystemProxyTarget::Pac {
             url: "http://127.0.0.1:1234/proxy.pac".into(),
         };
-        assert!(pac.matches(&proxy.configure(&services, &pac).unwrap()));
+        let state = proxy.configure(&services, &pac).unwrap();
+        assert!(pac.matches(&state));
+        assert!(state.recovery_pending);
+        assert_eq!(
+            crate::optimization::proxy_severity(&Ok(state.clone()), Some(&pac)),
+            crate::optimization::Severity::Pass
+        );
+        assert_eq!(
+            crate::optimization::proxy_severity(&Ok(state), Some(&manual)),
+            crate::optimization::Severity::Warning
+        );
         assert_eq!(fs::read(&recovery).unwrap(), original);
         let writes: Vec<_> = proxy
             .runner

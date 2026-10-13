@@ -255,6 +255,8 @@ pub fn run() {
                                         notification_for(lang, &envelope.response)
                                     };
                                     let toast = toast_for(lang, &envelope.response);
+                                    let optimization_finished = matches!(&envelope.response, UiResponse::Optimization { result: Ok(snapshot), .. }
+                                        if view.state.optimization.phase == crate::optimization::Phase::Verifying && snapshot.phase == crate::optimization::Phase::Idle);
                                     let refresh_settings = matches!(&envelope.response, UiResponse::Profile { request: AppCommand::ImportApplicationSettings { .. } | AppCommand::ResetApplicationSettingsScope { .. }, result: Ok(_) });
                                     view.finish_profile_import(&envelope.response, window, cx);
                                     view.ai_response(&envelope.response, window, cx);
@@ -263,6 +265,7 @@ pub fn run() {
                                     view.settings_dialog_response(&envelope, window, cx);
                                     view.profile_sheet_response(&envelope, window, cx);
                                     view.state.apply_response_envelope(envelope);
+                                    if optimization_finished { view.dispatch(UiAction::RefreshHome, cx); }
                                     view.finish_ai_save(window, cx);
                                     if refresh_settings { view.dispatch(UiAction::RefreshSettings, cx); }
                                     if view.lang() != lang { set_app_menus(view.lang(), cx); }
@@ -621,6 +624,6 @@ fn toast_for(lang: Lang, response: &UiResponse) -> Option<Notification> {
             Err(_) => None,
         },
         UiResponse::Realtime(_) => None,
-        UiResponse::Ai { .. } => None,
+        UiResponse::Ai { .. } | UiResponse::Optimization { .. } => None,
     }
 }
