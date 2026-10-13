@@ -15,6 +15,7 @@ Verge is a native macOS proxy client built with Rust, GPUI Kit, and Mihomo. It u
 - Persistent network overrides: LAN, IPv6, unified delay, logging, mixed port, DNS, and external controller.
 - Rule, Global, and Direct modes; proxy-group selection and delay tests.
 - Live traffic, memory, connections, rules, providers, and logs.
+- [Intelligent optimization](docs/intelligent-optimization.md): local network checks, confirmed node recovery, opt-in background reports, and optional AI explanations.
 - macOS HTTP, HTTPS, SOCKS, PAC, and bypass settings with recovery records.
 - TUN lifecycle through a versioned privileged helper.
 - Launch at login, global shortcut, notifications, diagnostics, and settings import/export.

@@ -14,6 +14,7 @@ Verge 是使用 Rust、GPUI Kit 和 Mihomo 开发的 macOS 原生代理客户端
 - 支持 Merge 配置、合并结果预览、配置校验、原子写入、健康检查和失败回滚。
 - 支持 Rule、Global、Direct 模式，以及代理组切换和延迟测试。
 - 实时查看流量、内存、连接、规则、provider 和日志。
+- [智能优化](docs/intelligent-optimization.md)：概览页一键检查、确认后切换并复测节点、可选后台巡检和 AI 分析；基础检查无需模型。
 - 管理 macOS HTTP、HTTPS、SOCKS、PAC 和 bypass，并保存恢复记录。
 - 通过版本化特权 helper 管理 TUN 生命周期。
 - 支持开机启动、全局快捷键、系统通知、诊断导出、设置导入导出。

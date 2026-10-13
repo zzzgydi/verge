@@ -47,6 +47,25 @@ GPUI spacing utilities match this scale; the application body explicitly uses
   these cards readable. Show up to four current proxy groups with member counts,
   selected node protocols and delay; count all eligible groups for the current
   mode in the footer.
+  Keep Check network and Optimize in the fixed page header. The full-width panel
+  has a compact health summary opening an independently owned results sheet.
+  Show check scope and incomplete evidence explicitly; AI explanation is optional
+  and sending a summary requires consent. A proposed node change shows before,
+  after and exit-IP impact before confirmation. Background observation defaults off.
+  Active probes require their own opt-in explaining that Mihomo updates shared
+  health records and automatic groups may change selection. Without it, local
+  checks remain available and node connectivity is explicitly untested.
+  Network-check results lead with a specific verdict, one next action and compact
+  configuration/core/system-proxy/node results. Group probes by node and show the
+  latest result per target. Never turn untested evidence into a successful network
+  verdict. Put technical evidence behind disclosure, and observation settings and
+  history in separate tabs. Probe consent is contextual and immediately starts the
+  requested check after confirmation; do not put a permanent disclaimer wall above
+  results. Keep cancel/retry and the verdict visible while the body scrolls.
+  Comparison requires an explicit group choice; never preselect an unrelated group
+  from a failed-node report. Show operation errors across all three tabs and keep
+  clearing available for a sole current report. Historical conclusions retain
+  terminal check failures independently of transient operation or model errors.
   A single route or empty state centers in its space. Keep cumulative traffic
   and recent peaks under their corresponding rates, and use two continuous paths
   scaled to the actual plot width with a subtle horizontal grid. Groups, rules,
