@@ -197,6 +197,14 @@ impl<P: SystemProxyPlatform> PlatformSystemProxy<P> {
         self.platform.restore_snapshot(state)
     }
 
+    pub fn configure_with_snapshot(
+        &mut self,
+        target: &crate::domain::SystemProxyTarget,
+    ) -> Result<(SystemProxyState, SystemProxyState), AppError> {
+        self.platform
+            .configure_with_snapshot(&self.services, target)
+    }
+
     pub fn managed_services(&self) -> &[String] {
         &self.services
     }

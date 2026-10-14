@@ -58,6 +58,32 @@ impl Backend {
         &mut self,
         command: SystemProxyCommand,
     ) -> Result<SystemProxyCommandResult, AppError> {
+        let operation = match command {
+            SystemProxyCommand::GetState => None,
+            SystemProxyCommand::SetEnabled { enabled: true } => Some("enable"),
+            SystemProxyCommand::SetEnabled { enabled: false } => Some("disable"),
+            SystemProxyCommand::RecoverPending => Some("recover"),
+        };
+        let started = Instant::now();
+        let result = self.execute_system_proxy_inner(command);
+        if let Some(operation) = operation {
+            self.log_app(
+                "info",
+                format!(
+                    "System proxy {operation}: success={}, services={}, elapsed_ms={}",
+                    result.is_ok(),
+                    self.system_proxy.managed_services().len(),
+                    started.elapsed().as_millis()
+                ),
+            );
+        }
+        result
+    }
+
+    fn execute_system_proxy_inner(
+        &mut self,
+        command: SystemProxyCommand,
+    ) -> Result<SystemProxyCommandResult, AppError> {
         self.check_dev_request(&UiRequest::SystemProxy(command.clone()))?;
         let state = match command {
             SystemProxyCommand::SetEnabled { enabled: true } => {
@@ -386,8 +412,7 @@ fn enable_and_remember<P: crate::platform::SystemProxyPlatform>(
     target: &SystemProxyTarget,
 ) -> Result<crate::domain::SystemProxyState, AppError> {
     let had_recovery = proxy.recovery_pending();
-    let previous = proxy.state()?;
-    let state = proxy.configure(target)?;
+    let (previous, state) = proxy.configure_with_snapshot(target)?;
     if let Err(mut error) = settings.set_system_proxy_enabled(true) {
         // Restore the exact prior state for an existing session, or release the
         // recovery snapshot created by a first enable that could not be saved.
