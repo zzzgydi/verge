@@ -1,7 +1,7 @@
 //! Daemon-side tray projection. Slow OS/controller reads never run on traffic ticks.
 use super::*;
 use crate::domain::{ProfileSource, ProxySnapshot, RunMode, SystemProxyState};
-use crate::platform::{TrayDirectory, TrayIndicator, TrayMenuState};
+use crate::platform::{TrayDirectory, TrayIndicator, TrayMenuState, TraySnapshot};
 
 pub(super) struct RefreshResult {
     generation: u64,
@@ -21,6 +21,7 @@ pub(super) struct TrayState {
     menu: Arc<TrayMenuState>,
     menu_dirty: bool,
     last_sent: Option<TraySnapshot>,
+    completed_system_proxy_request: u64,
 }
 
 impl TrayState {
@@ -36,6 +37,7 @@ impl TrayState {
             menu: Arc::default(),
             menu_dirty: true,
             last_sent: None,
+            completed_system_proxy_request: 0,
         }
     }
 
@@ -45,6 +47,27 @@ impl TrayState {
         self.generation = self.generation.wrapping_add(1);
         self.next_refresh = Instant::now();
         self.next_system_refresh = Instant::now();
+    }
+
+    pub(super) fn accept_system_proxy(&mut self, state: crate::domain::SystemProxyState) {
+        // Reject any older in-flight OS read; this state was already verified.
+        self.generation = self.generation.wrapping_add(1);
+        let enabled = state.unified_enabled();
+        if self.menu.system_proxy_enabled != enabled {
+            Arc::make_mut(&mut self.menu).system_proxy_enabled = enabled;
+        }
+        self.system_proxy = Some(state);
+        self.next_system_refresh = Instant::now() + Duration::from_secs(30);
+    }
+
+    pub(super) fn invalidate_system_proxy(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.next_refresh = Instant::now();
+        self.next_system_refresh = Instant::now();
+    }
+
+    pub(super) fn complete_system_proxy_request(&mut self, request_id: u64) {
+        self.completed_system_proxy_request = request_id;
     }
 
     pub(super) fn refresh(&mut self, backend: &Backend, events: &Sender<DaemonEvent>) {
@@ -144,7 +167,7 @@ impl TrayState {
         self.proxies = result.proxies;
     }
 
-    pub(super) fn publish(&mut self, backend: &Backend, updates: &mpsc::SyncSender<TraySnapshot>) {
+    pub(super) fn publish(&mut self, backend: &Backend, send: impl FnOnce(TraySnapshot)) {
         if self.menu_dirty {
             let selected_profile = backend.profiles.selected().cloned();
             let menu = TrayMenuState {
@@ -196,10 +219,11 @@ impl TrayState {
             ),
             upload_bytes_per_second: backend.last_traffic.as_ref().map_or(0, |t| t.up),
             download_bytes_per_second: backend.last_traffic.as_ref().map_or(0, |t| t.down),
+            completed_system_proxy_request: self.completed_system_proxy_request,
         };
-        if self.last_sent.as_ref() != Some(&snapshot) && updates.try_send(snapshot.clone()).is_ok()
-        {
-            self.last_sent = Some(snapshot);
+        if self.last_sent.as_ref() != Some(&snapshot) {
+            self.last_sent = Some(snapshot.clone());
+            send(snapshot);
         }
     }
 }
@@ -221,11 +245,22 @@ pub(super) fn send_response(server: &IpcServer, response: UiResponse) {
     }
 }
 
-pub(super) fn execute(backend: &mut Backend, server: &IpcServer, command: TrayCommand) {
+pub(super) fn execute(
+    backend: &mut Backend,
+    server: &IpcServer,
+    command: TrayCommand,
+) -> Option<SystemProxyState> {
     let result = execute_inner(backend, server, command);
-    if let Err(error) = result {
-        backend.log_app("error", format!("托盘操作失败: {}", error.message));
-        let _ = crate::platform::MacNotifier::new(ProcessRunner).notify("Verge", &error.message);
+    match result {
+        Ok(state) => state,
+        Err(error) => {
+            backend.log_app("error", format!("托盘操作失败: {}", error.message));
+            std::thread::spawn(move || {
+                let _ = crate::platform::MacNotifier::new(ProcessRunner)
+                    .notify("Verge", &error.message);
+            });
+            None
+        }
     }
 }
 
@@ -233,7 +268,7 @@ pub(super) fn execute_inner(
     backend: &mut Backend,
     server: &IpcServer,
     command: TrayCommand,
-) -> Result<(), AppError> {
+) -> Result<Option<SystemProxyState>, AppError> {
     let request = match command {
         TrayCommand::SetMode(mode) => UiRequest::Runtime(RuntimeCommand::SetMode { mode }),
         TrayCommand::SelectProxy { group, proxy } => {
@@ -257,11 +292,8 @@ pub(super) fn execute_inner(
                 .ok_or_else(|| AppError::new(ErrorCode::NotFound, "no active profile"))?,
         }),
         TrayCommand::RestartApplication => UiRequest::Profile(AppCommand::RestartApplication),
-        TrayCommand::ToggleSystemProxy => {
-            let state = backend.system_proxy.state()?;
-            UiRequest::SystemProxy(SystemProxyCommand::SetEnabled {
-                enabled: !state.unified_enabled(),
-            })
+        TrayCommand::SetSystemProxy { enabled, .. } => {
+            UiRequest::SystemProxy(SystemProxyCommand::SetEnabled { enabled })
         }
 
         TrayCommand::OpenDirectory(directory) => {
@@ -277,7 +309,7 @@ pub(super) fn execute_inner(
                 .status()
                 .map_err(|e| AppError::new(ErrorCode::PlatformFailed, e.to_string()))?;
             return if status.success() {
-                Ok(())
+                Ok(None)
             } else {
                 Err(AppError::new(
                     ErrorCode::PlatformFailed,
@@ -289,6 +321,7 @@ pub(super) fn execute_inner(
     };
     let refresh_profiles = matches!(request, UiRequest::Profile(_));
     let response = backend.execute(request);
+    let proxy_state = response_system_proxy(&response);
     let error = match &response {
         UiResponse::Profile { result: Err(e), .. }
         | UiResponse::Runtime { result: Err(e), .. }
@@ -315,7 +348,16 @@ pub(super) fn execute_inner(
             }
         }
     }
-    Ok(())
+    Ok(proxy_state)
+}
+
+pub(super) fn response_system_proxy(response: &UiResponse) -> Option<SystemProxyState> {
+    match response {
+        UiResponse::SystemProxy {
+            result: Ok(result), ..
+        } => Some(result.state.clone()),
+        _ => None,
+    }
 }
 
 pub(super) fn changes_menu(request: &UiRequest) -> bool {
@@ -338,6 +380,116 @@ pub(super) fn changes_menu(request: &UiRequest) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn completed_proxy_write_updates_tray_without_waiting_for_os_refresh() {
+        let (backend, directory) = super::super::tests::test_backend("tray-proxy-result");
+        let (server, _) = IpcServer::bind(&PathBuf::from(format!(
+            "/tmp/verge-tray-result-{}.sock",
+            std::process::id()
+        )))
+        .unwrap();
+        let mut state = TrayState::new();
+        state.publish(&backend, |_| {});
+        let original_menu = state.menu.clone();
+        let older_generation = state.generation;
+        state.in_flight = true;
+        let protocol = crate::domain::ProxyProtocolState {
+            enabled: true,
+            endpoint: crate::domain::ProxyEndpoint::new("127.0.0.1", 7897).unwrap(),
+        };
+        let actual = SystemProxyState {
+            services: vec![crate::domain::SystemProxyServiceState {
+                service: "Wi-Fi".into(),
+                web: protocol.clone(),
+                secure_web: protocol.clone(),
+                socks: protocol,
+                auto_proxy: crate::domain::AutoProxyState {
+                    enabled: false,
+                    url: None,
+                },
+                bypass: vec![],
+            }],
+            recovery_pending: true,
+        };
+        state.accept_system_proxy(actual.clone());
+        assert!(
+            !state.menu_dirty,
+            "proxy-only completion skips config/menu projection"
+        );
+        assert_eq!(state.menu.groups, original_menu.groups);
+        assert!(state.next_system_refresh > Instant::now());
+        state.accept(
+            RefreshResult {
+                generation: older_generation,
+                mode: None,
+                proxies: Default::default(),
+                system_proxy: Some(SystemProxyState {
+                    services: vec![],
+                    recovery_pending: false,
+                }),
+            },
+            &server,
+        );
+        assert_eq!(state.system_proxy, Some(actual));
+        assert!(!state.in_flight);
+        let (tx, rx) = mpsc::sync_channel(1);
+        state.publish(&backend, |snapshot| tx.send(snapshot).unwrap());
+        let snapshot = rx.recv().unwrap();
+        assert!(snapshot.menu.system_proxy_enabled);
+        assert_eq!(snapshot.indicator, TrayIndicator::SystemProxy);
+        server.shutdown();
+        drop(backend);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn failed_proxy_response_cannot_supply_a_successful_tray_state() {
+        assert!(
+            response_system_proxy(&UiResponse::SystemProxy {
+                request: SystemProxyCommand::SetEnabled { enabled: true },
+                result: Err(AppError::new(ErrorCode::PlatformFailed, "failed")),
+            })
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn failed_tray_proxy_action_publishes_completion_without_rebuilding_menu() {
+        let (mut backend, directory) = super::super::tests::test_backend("tray-proxy-failure");
+        let (server, _) = IpcServer::bind(&PathBuf::from(format!(
+            "/tmp/verge-tray-fail-{}.sock",
+            std::process::id()
+        )))
+        .unwrap();
+        let mut state = TrayState::new();
+        let (tx, rx) = mpsc::channel();
+        state.publish(&backend, |snapshot| tx.send(snapshot).unwrap());
+        let first = rx.recv().unwrap();
+        state.invalidate_system_proxy();
+        // No core is available: enabling must fail before any OS query/write.
+        let error = execute_inner(
+            &mut backend,
+            &server,
+            TrayCommand::SetSystemProxy {
+                enabled: true,
+                request_id: 1,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, backend.runtime_unavailable().code);
+        state.complete_system_proxy_request(1);
+        state.publish(&backend, |snapshot| tx.send(snapshot).unwrap());
+        let failed = rx.recv().unwrap();
+        assert_eq!(failed.completed_system_proxy_request, 1);
+        assert_eq!(failed.indicator, first.indicator);
+        assert!(Arc::ptr_eq(&first.menu, &failed.menu));
+        assert!(!state.menu_dirty);
+        assert!(state.next_system_refresh <= Instant::now());
+        server.shutdown();
+        drop(backend);
+        let _ = fs::remove_dir_all(directory);
+    }
+
     #[test]
     fn stale_refresh_cannot_override_completed_write() {
         let (backend, directory) = super::super::tests::test_backend("tray-stale");
@@ -362,9 +514,9 @@ mod tests {
         assert_eq!(state.mode, Some(RunMode::Global));
         assert!(!state.in_flight);
         let (tx, rx) = mpsc::sync_channel(1);
-        state.publish(&backend, &tx);
+        state.publish(&backend, |snapshot| tx.send(snapshot).unwrap());
         let first = rx.recv().unwrap();
-        state.publish(&backend, &tx);
+        state.publish(&backend, |snapshot| tx.send(snapshot).unwrap());
         assert!(
             rx.try_recv().is_err(),
             "unchanged snapshots do not queue native updates"

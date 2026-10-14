@@ -38,6 +38,7 @@ mod tray;
 #[cfg(target_os = "macos")]
 pub use tray::{
     EarFrame, TrayCommand, TrayDirectory, TrayIndicator, TrayMenuState, TrayService, TraySnapshot,
+    TrayUpdateSender,
 };
 
 #[cfg(target_os = "macos")]

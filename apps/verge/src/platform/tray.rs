@@ -1,10 +1,7 @@
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex},
 };
 
 use crate::domain::{AppError, ErrorCode, ProfileId, ProxyGroup, RunMode};
@@ -57,7 +54,7 @@ impl TrayIndicator {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TrayCommand {
     ShowMainWindow,
-    ToggleSystemProxy,
+    SetSystemProxy { enabled: bool, request_id: u64 },
     SetMode(RunMode),
     SelectProfile(ProfileId),
     SelectProxy { group: String, proxy: String },
@@ -94,6 +91,148 @@ pub struct TraySnapshot {
     pub indicator: TrayIndicator,
     pub upload_bytes_per_second: u64,
     pub download_bytes_per_second: u64,
+    pub completed_system_proxy_request: u64,
+}
+
+impl TrayMenuState {
+    fn same_structure(&self, other: &Self) -> bool {
+        self.language == other.language
+            && self.mode == other.mode
+            && self.profiles == other.profiles
+            && self.selected_profile == other.selected_profile
+            && self.can_update_profile == other.can_update_profile
+            && self.can_restart_application == other.can_restart_application
+            && self.groups == other.groups
+    }
+}
+
+#[derive(Default)]
+struct ProxyInteraction {
+    issued: u64,
+    pending: Option<u64>,
+}
+
+impl ProxyInteraction {
+    fn begin(&mut self) -> Option<u64> {
+        if self.pending.is_some() {
+            return None;
+        }
+        self.issued += 1;
+        self.pending = Some(self.issued);
+        self.pending
+    }
+
+    fn complete(&mut self, completed: u64) {
+        if self.pending.is_some_and(|id| completed >= id) {
+            self.pending = None;
+        }
+    }
+}
+
+#[derive(Default)]
+struct PendingTrayUpdate(Mutex<Option<TraySnapshot>>);
+
+impl PendingTrayUpdate {
+    fn replace(&self, snapshot: TraySnapshot) -> bool {
+        self.0
+            .lock()
+            .expect("tray update poisoned")
+            .replace(snapshot)
+            .is_none()
+    }
+
+    fn take(&self) -> Option<TraySnapshot> {
+        self.0.lock().expect("tray update poisoned").take()
+    }
+}
+
+#[derive(Clone)]
+pub struct TrayUpdateSender {
+    tray: Arc<dispatch2::MainThreadBound<TrayService>>,
+    pending: Arc<PendingTrayUpdate>,
+}
+
+impl TrayUpdateSender {
+    pub fn new(tray: Arc<dispatch2::MainThreadBound<TrayService>>) -> Self {
+        Self {
+            tray,
+            pending: Arc::default(),
+        }
+    }
+
+    pub fn send(&self, snapshot: TraySnapshot) {
+        // Keep only the newest projection, with at most one queued run-loop callback.
+        if !self.pending.replace(snapshot) {
+            return;
+        }
+        let tray = self.tray.clone();
+        let pending = self.pending.clone();
+        on_tray_run_loop(move || {
+            let marker = objc2::MainThreadMarker::new().expect("tray update requires main thread");
+            if let Some(snapshot) = pending.take()
+                && let Err(error) = tray.get(marker).update(&snapshot)
+            {
+                eprintln!("[verge] tray update: {}", error.message);
+            }
+        });
+    }
+}
+
+fn on_tray_run_loop(callback: impl Fn() + Send + 'static) {
+    on_main_run_loop(callback, true);
+}
+
+fn on_main_run_loop(callback: impl Fn() + Send + 'static, during_tracking: bool) {
+    use objc2_app_kit::NSEventTrackingRunLoopMode;
+    use objc2_foundation::{NSArray, NSDefaultRunLoopMode, NSRunLoop};
+
+    let block = block2::RcBlock::new(callback);
+    let run_loop = NSRunLoop::mainRunLoop();
+    // The callback is Send. Status updates run during tracking; structural work
+    // waits for the normal loop so the selected item's action can finish first.
+    unsafe {
+        let modes = if during_tracking {
+            NSArray::from_slice(&[NSDefaultRunLoopMode, NSEventTrackingRunLoopMode])
+        } else {
+            NSArray::from_slice(&[NSDefaultRunLoopMode])
+        };
+        run_loop.performInModes_block(&modes, &block);
+    }
+    run_loop.getCFRunLoop().wake_up();
+}
+
+#[derive(Default)]
+struct MenuTracking {
+    active: bool,
+    generation: u64,
+}
+
+impl MenuTracking {
+    fn begin(&mut self) {
+        self.active = true;
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    fn finish(&mut self, generation: u64) -> bool {
+        if self.generation != generation {
+            return false;
+        }
+        self.active = false;
+        true
+    }
+}
+
+struct TrackingObserver(
+    objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_foundation::NSObjectProtocol>>,
+);
+
+impl Drop for TrackingObserver {
+    fn drop(&mut self) {
+        unsafe {
+            objc2_foundation::NSNotificationCenter::defaultCenter()
+                .removeObserver((*self.0).as_ref())
+        };
+    }
 }
 
 /// Native menu description is independent of AppKit and contains only supported actions.
@@ -224,10 +363,12 @@ fn menu_entries(state: &TrayMenuState) -> Vec<Entry> {
         Entry::Separator,
         Entry::check(
             tr(lang, "tray.system_proxy"),
-            TrayCommand::ToggleSystemProxy,
+            TrayCommand::SetSystemProxy {
+                enabled: !state.system_proxy_enabled,
+                request_id: 0,
+            },
             state.system_proxy_enabled,
-            !crate::identity::AppChannel::current().is_dev()
-                && (state.system_proxy_enabled || state.can_enable_system_proxy),
+            can_change_proxy(state),
         ),
         Entry::Separator,
         Entry::Submenu(
@@ -282,17 +423,23 @@ fn menu_entries(state: &TrayMenuState) -> Vec<Entry> {
     ]
 }
 
+fn can_change_proxy(state: &TrayMenuState) -> bool {
+    !crate::identity::AppChannel::current().is_dev()
+        && (state.system_proxy_enabled || state.can_enable_system_proxy)
+}
+
 fn native_item(
     entry: &Entry,
     commands: &mut HashMap<String, TrayCommand>,
     checks: &mut Vec<(CheckMenuItem, bool)>,
+    proxy_item: &mut Option<CheckMenuItem>,
 ) -> Result<Box<dyn IsMenuItem>, AppError> {
     Ok(match entry {
         Entry::Separator => Box::new(PredefinedMenuItem::separator()),
         Entry::Submenu(label, children) => {
             let menu = Submenu::new(label, !children.is_empty());
             for entry in children {
-                menu.append(native_item(entry, commands, checks)?.as_ref())
+                menu.append(native_item(entry, commands, checks, proxy_item)?.as_ref())
                     .map_err(tray_error)?;
             }
             Box::new(menu)
@@ -307,7 +454,11 @@ fn native_item(
                 .then(|| Accelerator::new(Modifiers::META, Code::KeyQ));
             let item: Box<dyn IsMenuItem> = if let Some(checked) = checked {
                 let item = CheckMenuItem::new(label, *enabled, *checked, accelerator);
-                checks.push((item.clone(), *checked));
+                if matches!(command, Some(TrayCommand::SetSystemProxy { .. })) {
+                    *proxy_item = Some(item.clone());
+                } else {
+                    checks.push((item.clone(), *checked));
+                }
                 Box::new(item)
             } else {
                 Box::new(MenuItem::new(label, *enabled, accelerator))
@@ -322,13 +473,19 @@ fn native_item(
 
 pub struct TrayService {
     tray: TrayIcon,
+    menu: RefCell<Menu>,
     icons: HashMap<(TrayIndicator, EarFrame), Icon>,
     indicator: Cell<TrayIndicator>,
     animation_generation: Cell<u64>,
-    commands: Arc<Mutex<HashMap<String, TrayCommand>>>,
+    commands: RefCell<HashMap<String, TrayCommand>>,
     state: RefCell<Option<Arc<TrayMenuState>>>,
     checks: RefCell<Vec<(CheckMenuItem, bool)>>,
-    clicked: Arc<AtomicBool>,
+    clicked: Cell<bool>,
+    proxy_item: RefCell<Option<CheckMenuItem>>,
+    proxy_interaction: RefCell<ProxyInteraction>,
+    tracking: RefCell<MenuTracking>,
+    deferred_menu: RefCell<Option<Arc<TrayMenuState>>>,
+    tracking_observers: RefCell<Vec<TrackingObserver>>,
 }
 
 impl TrayService {
@@ -336,22 +493,123 @@ impl TrayService {
         self.tray.id()
     }
 
-    pub fn new(on_command: impl Fn(TrayCommand) + Send + Sync + 'static) -> Result<Self, AppError> {
-        let commands = Arc::new(Mutex::new(HashMap::<String, TrayCommand>::new()));
-        let event_commands = commands.clone();
-        let clicked = Arc::new(AtomicBool::new(false));
-        let event_clicked = clicked.clone();
+    pub fn bind(
+        self,
+        on_command: impl Fn(TrayCommand) + Send + Sync + 'static,
+    ) -> Arc<dispatch2::MainThreadBound<Self>> {
+        let marker = objc2::MainThreadMarker::new().expect("tray requires main thread");
+        let bound = Arc::new(dispatch2::MainThreadBound::new(self, marker));
+        let weak = Arc::downgrade(&bound);
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-            let command = event_commands
-                .lock()
-                .expect("tray commands poisoned")
-                .get(event.id().as_ref())
-                .cloned();
-            if let Some(command) = command {
-                event_clicked.store(true, Ordering::Release);
+            if let Some(bound) = weak.upgrade()
+                && let Some(command) =
+                    bound.get_on_main(|tray| tray.menu_command(event.id().as_ref()))
+            {
                 on_command(command);
             }
         }));
+        Self::observe_tracking(&bound, marker);
+        bound
+    }
+
+    fn observe_tracking(
+        bound: &Arc<dispatch2::MainThreadBound<Self>>,
+        marker: objc2::MainThreadMarker,
+    ) {
+        use objc2_app_kit::{NSMenuDidBeginTrackingNotification, NSMenuDidEndTrackingNotification};
+        use objc2_foundation::{NSNotification, NSNotificationCenter};
+        use tray_icon::menu::ContextMenu;
+
+        for (name, begin) in unsafe {
+            [
+                (NSMenuDidBeginTrackingNotification, true),
+                (NSMenuDidEndTrackingNotification, false),
+            ]
+        } {
+            let weak = Arc::downgrade(bound);
+            let block =
+                block2::RcBlock::new(move |notification: std::ptr::NonNull<NSNotification>| {
+                    let Some(marker) = objc2::MainThreadMarker::new() else {
+                        return;
+                    };
+                    let Some(bound) = weak.upgrade() else {
+                        return;
+                    };
+                    let tray = bound.get(marker);
+                    let Some(object) = (unsafe { notification.as_ref() }).object() else {
+                        return;
+                    };
+                    if !std::ptr::eq(
+                        (&*object as *const objc2::runtime::AnyObject).cast(),
+                        tray.menu.borrow().ns_menu(),
+                    ) {
+                        return;
+                    }
+                    if begin {
+                        tray.tracking.borrow_mut().begin();
+                    } else {
+                        let generation = tray.tracking.borrow().generation;
+                        let weak = weak.clone();
+                        // didEndTracking can precede the selected item's action. Keep the old
+                        // objects and command IDs until Cocoa unwinds to the normal run loop.
+                        on_main_run_loop(
+                            move || {
+                                if let Some(bound) = weak.upgrade() {
+                                    let marker = objc2::MainThreadMarker::new()
+                                        .expect("menu close requires main thread");
+                                    let tray = bound.get(marker);
+                                    let finished = tray.tracking.borrow_mut().finish(generation);
+                                    if finished {
+                                        let deferred = tray.deferred_menu.borrow_mut().take();
+                                        if let Some(menu) = deferred
+                                            && let Err(error) = tray.update_menu(&menu)
+                                        {
+                                            eprintln!(
+                                                "[verge] deferred tray menu: {}",
+                                                error.message
+                                            );
+                                        }
+                                    }
+                                }
+                            },
+                            false,
+                        );
+                    }
+                });
+            let observer =
+                unsafe {
+                    NSNotificationCenter::defaultCenter()
+                        .addObserverForName_object_queue_usingBlock(Some(name), None, None, &block)
+                };
+            bound
+                .get(marker)
+                .tracking_observers
+                .borrow_mut()
+                .push(TrackingObserver(observer));
+        }
+    }
+
+    fn menu_command(&self, id: &str) -> Option<TrayCommand> {
+        let mut command = self.commands.borrow().get(id)?.clone();
+        if matches!(command, TrayCommand::SetSystemProxy { .. }) {
+            let state = self.state.borrow();
+            let state = state.as_ref()?;
+            if !can_change_proxy(state) {
+                return None;
+            }
+            let request_id = self.proxy_interaction.borrow_mut().begin()?;
+            command = TrayCommand::SetSystemProxy {
+                enabled: !state.system_proxy_enabled,
+                request_id,
+            };
+            self.update_proxy_item(state);
+        } else {
+            self.clicked.set(true);
+        }
+        Some(command)
+    }
+
+    pub fn new() -> Result<Self, AppError> {
         let tray = TrayIconBuilder::new()
             .with_tooltip(crate::identity::AppChannel::current().name())
             .with_icon_templated(load_icon()?)
@@ -374,13 +632,19 @@ impl TrayService {
         }
         let service = Self {
             tray,
+            menu: RefCell::new(Menu::new()),
             icons,
             indicator: Cell::new(TrayIndicator::None),
             animation_generation: Cell::new(0),
-            commands,
+            commands: RefCell::default(),
             state: RefCell::new(None),
             checks: RefCell::new(Vec::new()),
-            clicked,
+            clicked: Cell::new(false),
+            proxy_item: RefCell::new(None),
+            proxy_interaction: RefCell::new(ProxyInteraction::default()),
+            tracking: RefCell::new(MenuTracking::default()),
+            deferred_menu: RefCell::new(None),
+            tracking_observers: RefCell::new(Vec::new()),
         };
         service.set_icon(TrayIndicator::None, EarFrame::Rest)?;
         if crate::identity::AppChannel::current().is_dev() {
@@ -391,29 +655,23 @@ impl TrayService {
     }
 
     pub fn update(&self, snapshot: &TraySnapshot) -> Result<(), AppError> {
+        let was_pending = self.proxy_interaction.borrow().pending.is_some();
+        self.proxy_interaction
+            .borrow_mut()
+            .complete(snapshot.completed_system_proxy_request);
         if self.indicator.get() != snapshot.indicator {
             self.animation_generation
                 .set(self.animation_generation.get().wrapping_add(1));
             self.set_icon(snapshot.indicator, EarFrame::Rest)?;
             self.indicator.set(snapshot.indicator);
         }
-        // Traffic ticks never recreate the menu or its native objects.
-        if self.state.borrow().as_ref() != Some(&snapshot.menu) {
-            let menu = Menu::new();
-            let mut commands = HashMap::new();
-            let mut checks = Vec::new();
-            for entry in menu_entries(&snapshot.menu) {
-                menu.append(native_item(&entry, &mut commands, &mut checks)?.as_ref())
-                    .map_err(tray_error)?;
-            }
-            *self.checks.borrow_mut() = checks;
-            self.tray.set_menu(Some(Box::new(menu)));
-            *self.commands.lock().expect("tray commands poisoned") = commands;
-            *self.state.borrow_mut() = Some(snapshot.menu.clone());
+        self.update_menu(&snapshot.menu)?;
+        if was_pending {
+            self.update_proxy_item(&snapshot.menu);
         }
         // Native check items toggle before the backend responds; reassert confirmed state,
         // including failed writes whose snapshot remains unchanged.
-        if self.clicked.swap(false, Ordering::AcqRel) {
+        if self.clicked.replace(false) {
             for (item, checked) in self.checks.borrow().iter() {
                 item.set_checked(*checked);
             }
@@ -426,6 +684,65 @@ impl TrayService {
                 format_bytes(snapshot.download_bytes_per_second)
             )))
             .map_err(tray_error)
+    }
+
+    fn update_menu(&self, desired: &Arc<TrayMenuState>) -> Result<(), AppError> {
+        let changed = self.state.borrow().as_ref() != Some(desired);
+        let rebuild = changed
+            && self
+                .state
+                .borrow()
+                .as_ref()
+                .is_none_or(|state| !state.same_structure(desired));
+        if rebuild && self.tracking.borrow().active {
+            *self.deferred_menu.borrow_mut() = Some(desired.clone());
+            self.update_proxy_item(desired);
+            if let Some(state) = self.state.borrow_mut().as_mut() {
+                let state = Arc::make_mut(state);
+                state.system_proxy_enabled = desired.system_proxy_enabled;
+                state.can_enable_system_proxy = desired.can_enable_system_proxy;
+            }
+            return Ok(());
+        }
+        self.deferred_menu.borrow_mut().take();
+        if rebuild {
+            let menu = Menu::new();
+            let mut commands = HashMap::new();
+            let mut checks = Vec::new();
+            let mut proxy_item = None;
+            for entry in menu_entries(desired) {
+                menu.append(
+                    native_item(&entry, &mut commands, &mut checks, &mut proxy_item)?.as_ref(),
+                )
+                .map_err(tray_error)?;
+            }
+            *self.checks.borrow_mut() = checks;
+            *self.proxy_item.borrow_mut() = proxy_item;
+            self.tray.set_menu(Some(Box::new(menu.clone())));
+            *self.menu.borrow_mut() = menu;
+            *self.commands.borrow_mut() = commands;
+        }
+        if changed || rebuild {
+            self.update_proxy_item(desired);
+        }
+        *self.state.borrow_mut() = Some(desired.clone());
+        Ok(())
+    }
+
+    fn update_proxy_item(&self, state: &TrayMenuState) {
+        if let Some(item) = self.proxy_item.borrow().as_ref() {
+            let pending = self.proxy_interaction.borrow().pending.is_some();
+            let lang = Lang::from_code(&state.language);
+            let label = tr(lang, "tray.system_proxy");
+            item.set_text(if pending {
+                format!("{label} · {}", tr(lang, "proxy.switching"))
+            } else {
+                label.into()
+            });
+            item.set_enabled(!pending && can_change_proxy(state));
+            // A pending action is not a successful OS write. Undo muda's automatic toggle.
+            item.set_checked(state.system_proxy_enabled);
+        }
     }
 
     fn set_icon(&self, indicator: TrayIndicator, frame: EarFrame) -> Result<(), AppError> {
@@ -525,6 +842,79 @@ fn tray_error(error: impl std::fmt::Display) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_menu_close_cannot_release_a_reopened_menu() {
+        let mut tracking = MenuTracking::default();
+        tracking.begin();
+        let closing = tracking.generation;
+        assert!(tracking.active);
+        tracking.begin();
+        assert!(!tracking.finish(closing));
+        assert!(tracking.active);
+        assert!(tracking.finish(tracking.generation));
+        assert!(!tracking.active);
+    }
+
+    #[test]
+    fn proxy_pending_rejects_duplicate_clicks_and_stale_completions() {
+        let mut interaction = ProxyInteraction::default();
+        assert_eq!(interaction.begin(), Some(1));
+        assert_eq!(interaction.begin(), None);
+        interaction.complete(0);
+        assert_eq!(interaction.pending, Some(1));
+        interaction.complete(1);
+        assert_eq!(interaction.pending, None);
+        assert_eq!(interaction.begin(), Some(2));
+        interaction.complete(1);
+        assert_eq!(interaction.pending, Some(2));
+        interaction.complete(2);
+        assert_eq!(interaction.pending, None);
+    }
+
+    #[test]
+    fn tray_delivery_coalesces_to_latest_state_without_losing_completion() {
+        let pending = PendingTrayUpdate::default();
+        assert!(pending.replace(TraySnapshot::default()));
+        assert!(!pending.replace(TraySnapshot {
+            indicator: TrayIndicator::SystemProxy,
+            completed_system_proxy_request: 1,
+            ..Default::default()
+        }));
+        let newest = pending.take().unwrap();
+        assert_eq!(newest.indicator, TrayIndicator::SystemProxy);
+        assert_eq!(newest.completed_system_proxy_request, 1);
+        assert!(pending.take().is_none());
+        assert!(pending.replace(TraySnapshot::default()));
+    }
+
+    #[test]
+    fn system_proxy_updates_keep_menu_structure_and_use_explicit_intent() {
+        let mut state = TrayMenuState {
+            can_enable_system_proxy: true,
+            ..Default::default()
+        };
+        let initial = state.clone();
+        assert!(matches!(
+            &menu_entries(&state)[7],
+            Entry::Item {
+                command: Some(TrayCommand::SetSystemProxy { enabled: true, .. }),
+                ..
+            }
+        ));
+        state.system_proxy_enabled = true;
+        state.can_enable_system_proxy = false;
+        assert!(state.same_structure(&initial));
+        assert!(matches!(
+            &menu_entries(&state)[7],
+            Entry::Item {
+                command: Some(TrayCommand::SetSystemProxy { enabled: false, .. }),
+                ..
+            }
+        ));
+        state.language = "zh-CN".into();
+        assert!(!state.same_structure(&initial));
+    }
 
     #[test]
     fn indicator_prefers_active_tun_and_keeps_original_bitmap_resolution() {

@@ -39,7 +39,7 @@ use crate::platform::{
 };
 use crate::platform::{
     LoginItemService, MacHelperClient, MacSystemProxy, ProcessRunner, SingleInstance, TrayCommand,
-    TrayService, TraySnapshot, daemon_socket_path, default_login_item_service,
+    TrayService, TrayUpdateSender, daemon_socket_path, default_login_item_service,
     redirect_stderr_to_log,
 };
 use crate::ui::{UiRequest, UiRequestEnvelope, UiResponse, UiResponseEnvelope};
@@ -1737,16 +1737,17 @@ pub fn run_daemon() {
     server.spawn_accept();
     initialize_daemon_appkit();
     let (tray_tx, tray_rx) = mpsc::channel::<TrayCommand>();
-    let tray = match TrayService::new(move |command| {
-        let _ = tray_tx.send(command);
-    }) {
+    let tray = match TrayService::new() {
         Ok(tray) => tray,
         Err(error) => {
             eprintln!("Verge daemon failed to initialize tray: {}", error.message);
             std::process::exit(1);
         }
     };
-    let (tray_updates_tx, tray_updates_rx) = mpsc::sync_channel::<TraySnapshot>(1);
+    let tray = tray.bind(move |command| {
+        let _ = tray_tx.send(command);
+    });
+    let tray_updates_tx = TrayUpdateSender::new(tray.clone());
     // 全局快捷键：backend 线程发注册同步请求，主线程消费（GlobalHotKeyManager
     // 必须在主线程创建和调用）；backend 收尾完成后经 shutdown channel 请求
     // 主线程终止 AppKit 循环，守护进程真正退出。
@@ -1763,7 +1764,7 @@ pub fn run_daemon() {
             shutdown_tx,
         );
     });
-    run_daemon_appkit(tray, tray_updates_rx, hotkey_sync_rx, shutdown_rx);
+    run_daemon_appkit(tray, hotkey_sync_rx, shutdown_rx);
     // 主线程返回只发生在 AppKit 终止之后；backend 已完成清理。
     let _ = backend_thread.join();
 }
@@ -1792,7 +1793,7 @@ fn run_daemon_backend(
     server: Arc<IpcServer>,
     server_events: Receiver<IpcServerEvent>,
     tray_rx: Receiver<TrayCommand>,
-    tray_updates: mpsc::SyncSender<TraySnapshot>,
+    tray_updates: TrayUpdateSender,
     hotkey_sync: Sender<Option<String>>,
     shutdown: Sender<()>,
 ) {
@@ -1808,7 +1809,7 @@ fn run_daemon_backend(
     backend.queue_hotkey_sync(backend.settings.get().global_hotkey.as_deref());
     let (event_tx, event_rx) = mpsc::channel::<DaemonEvent>();
     let mut tray_state = tray::TrayState::new();
-    tray_state.publish(&backend, &tray_updates);
+    tray_state.publish(&backend, |snapshot| tray_updates.send(snapshot));
 
     // 全局快捷键按下事件转发线程（global-hotkey 全局 channel 的消费端）。
     #[cfg(target_os = "macos")]
@@ -1888,10 +1889,13 @@ fn run_daemon_backend(
                 );
             }
             DaemonEvent::Ipc(IpcServerEvent::Request { conn_id, envelope }) => {
-                if tray::changes_menu(&envelope.request) {
+                if matches!(envelope.request, UiRequest::SystemProxy(ref command) if !matches!(command, SystemProxyCommand::GetState))
+                {
+                    tray_state.invalidate_system_proxy();
+                } else if tray::changes_menu(&envelope.request) {
                     tray_state.invalidate();
                 }
-                handle_daemon_request(
+                let proxy_state = handle_daemon_request(
                     &mut backend,
                     &server,
                     command_buses.entry(conn_id).or_default(),
@@ -1900,6 +1904,9 @@ fn run_daemon_backend(
                     envelope,
                     &mut isolated_jobs,
                 );
+                if let Some(state) = proxy_state {
+                    tray_state.accept_system_proxy(state);
+                }
             }
             DaemonEvent::Ipc(IpcServerEvent::Disconnected { conn_id }) => {
                 server.close(conn_id);
@@ -1975,9 +1982,18 @@ fn run_daemon_backend(
                 show_main_window(&server);
             }
             DaemonEvent::Tray(TrayCommand::Quit) => quit = true,
+            DaemonEvent::Tray(command @ TrayCommand::SetSystemProxy { request_id, .. }) => {
+                tray_state.invalidate_system_proxy();
+                if let Some(state) = tray::execute(&mut backend, &server, command) {
+                    tray_state.accept_system_proxy(state);
+                }
+                tray_state.complete_system_proxy_request(request_id);
+            }
             DaemonEvent::Tray(command) => {
                 tray_state.invalidate();
-                tray::execute(&mut backend, &server, command);
+                if let Some(state) = tray::execute(&mut backend, &server, command) {
+                    tray_state.accept_system_proxy(state);
+                }
             }
             DaemonEvent::TrayRefreshed(result) => {
                 tray_state.accept(*result, &server);
@@ -2065,6 +2081,10 @@ fn run_daemon_backend(
                     if let Err(error) = &result {
                         backend.log_app("error", format!("系统代理守卫: {}", error.message));
                     }
+                    tray_state.invalidate_system_proxy();
+                    if let Ok(result) = &result {
+                        tray_state.accept_system_proxy(result.state.clone());
+                    }
                     tray::send_response(
                         &server,
                         UiResponse::SystemProxy {
@@ -2072,12 +2092,11 @@ fn run_daemon_backend(
                             result,
                         },
                     );
-                    tray_state.invalidate();
                 }
             }
         }
+        tray_state.publish(&backend, |snapshot| tray_updates.send(snapshot));
         tray_state.refresh(&backend, &event_tx);
-        tray_state.publish(&backend, &tray_updates);
         // 重启或退出请求已受理：随本次事件一起收尾退出。
         if backend.restart_requested || backend.quit_requested {
             quit = true;
@@ -2176,10 +2195,10 @@ fn handle_daemon_request(
     conn_id: u64,
     envelope: UiRequestEnvelope,
     isolated_jobs: &mut usize,
-) {
+) -> Option<crate::domain::SystemProxyState> {
     // A rejected Hello may already have pipelined requests in the event queue.
     if !server.is_connected(conn_id) {
-        return;
+        return None;
     }
     let request = envelope.request.clone();
     if matches!(
@@ -2195,7 +2214,7 @@ fn handle_daemon_request(
             conn_id,
             ClientMessage::Response(UiResponseEnvelope::for_request(&envelope, response)),
         );
-        return;
+        return None;
     }
     if matches!(request, UiRequest::Optimization(_)) {
         if envelope.context.actor != crate::domain::CommandActor::UserInterface {
@@ -2207,7 +2226,7 @@ fn handle_daemon_request(
                 conn_id,
                 ClientMessage::Response(UiResponseEnvelope::for_request(&envelope, response)),
             );
-            return;
+            return None;
         }
         backend
             .optimization_connections
@@ -2234,7 +2253,7 @@ fn handle_daemon_request(
             conn_id,
             ClientMessage::Response(UiResponseEnvelope::for_request(&envelope, response)),
         );
-        return;
+        return None;
     }
     if let UiRequest::Profile(AppCommand::UpdateGeoData { kind }) = &request {
         let kind = *kind;
@@ -2298,7 +2317,7 @@ fn handle_daemon_request(
                 });
             }
         }
-        return;
+        return None;
     }
     if is_isolated_runtime_request(&request) {
         if *isolated_jobs >= 8 {
@@ -2314,7 +2333,7 @@ fn handle_daemon_request(
                 conn_id,
                 ClientMessage::Response(UiResponseEnvelope::for_request(&envelope, response)),
             );
-            return;
+            return None;
         }
         let runtime = match command_bus
             .authorize(envelope.operation_id, envelope.context, risk)
@@ -2328,7 +2347,7 @@ fn handle_daemon_request(
                     conn_id,
                     ClientMessage::Response(UiResponseEnvelope::for_request(&envelope, response)),
                 );
-                return;
+                return None;
             }
         };
         *isolated_jobs += 1;
@@ -2341,7 +2360,7 @@ fn handle_daemon_request(
                 response: Box::new(response),
             });
         });
-        return;
+        return None;
     }
     let response = match command_bus.authorize(envelope.operation_id, envelope.context, risk) {
         Ok(()) => {
@@ -2371,23 +2390,25 @@ fn handle_daemon_request(
         response_succeeded(&response),
         last_in_operation,
     );
+    let proxy_state = tray::response_system_proxy(&response);
     let _ = server.send(
         conn_id,
         ClientMessage::Response(UiResponseEnvelope::for_request(&envelope, response)),
     );
+    proxy_state
 }
 
 /// 守护进程主线程：无窗口 AppKit 事件循环 + 托盘状态刷新 + 全局快捷键注册。
 ///
 /// TrayService 与 HotkeyRegistration 都通过 `MainThreadBound` 绑定主线程
 /// （`GlobalHotKeyManager` 同样要求主线程创建和调用）；backend 线程的请求
-/// 经 channel 交给本线程旁的消费线程，再 `get_on_main` 派发回主线程执行。
-/// 消费线程阻塞 `recv`，事件驱动、零轮询。快捷键注册失败没有 toast 能力，
+/// 托盘使用合并更新的 run-loop block，菜单跟踪期间也能更新；快捷键请求
+/// 经 channel 和 `get_on_main` 派发。消费线程阻塞 `recv`，事件驱动、零轮询。
+/// 快捷键注册失败没有 toast 能力，
 /// 用 OS 通知（osascript）告知用户。
 #[cfg(target_os = "macos")]
 fn run_daemon_appkit(
-    tray: TrayService,
-    tray_updates: Receiver<TraySnapshot>,
+    bound: Arc<dispatch2::MainThreadBound<TrayService>>,
     hotkey_sync: Receiver<Option<String>>,
     shutdown: Receiver<()>,
 ) {
@@ -2402,8 +2423,7 @@ fn run_daemon_appkit(
     let app = NSApplication::sharedApplication(marker);
     // spawn 出来的守护进程不走 LaunchServices，激活策略必须在代码里设置。
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
-    let tray_id = tray.tray_id().clone();
-    let bound = Arc::new(MainThreadBound::new(tray, marker));
+    let tray_id = bound.get(marker).tray_id().clone();
     let animated_tray = Arc::downgrade(&bound);
     tray_icon::TrayIconEvent::set_event_handler(Some(move |event| {
         if let tray_icon::TrayIconEvent::Click {
@@ -2443,13 +2463,6 @@ fn run_daemon_appkit(
             }
         }
     }));
-    std::thread::spawn(move || {
-        while let Ok(snapshot) = tray_updates.recv() {
-            bound.get_on_main(|tray| {
-                let _ = tray.update(&snapshot);
-            });
-        }
-    });
     match GlobalHotKeyBackend::new() {
         Ok(backend) => {
             // MainThreadBound 只提供 &T 访问；注册变更多路复用互斥锁保护。
@@ -2496,8 +2509,7 @@ fn run_daemon_appkit(
 /// 非 macOS 无托盘型守护。
 #[cfg(not(target_os = "macos"))]
 fn run_daemon_appkit(
-    _tray: TrayService,
-    _tray_updates: Receiver<TraySnapshot>,
+    _tray: Arc<dispatch2::MainThreadBound<TrayService>>,
     _hotkey_sync: Receiver<Option<String>>,
     _shutdown: Receiver<()>,
 ) {
