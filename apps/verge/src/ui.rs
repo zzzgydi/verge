@@ -32,6 +32,53 @@ mod envelope_tests {
     use super::*;
     use crate::domain::{CommandActor, CommandContext};
 
+    #[test]
+    fn proxy_switching_waits_for_its_response_and_clears_on_failure_or_disconnect() {
+        let mut state = UiState::default();
+        let read = UiRequestEnvelope {
+            request: UiRequest::SystemProxy(SystemProxyCommand::GetState),
+            ..envelope(1)
+        };
+        state.begin_envelope(&read);
+        assert!(!state.system_proxy_switching());
+        let write = UiRequestEnvelope {
+            request: UiRequest::SystemProxy(SystemProxyCommand::SetEnabled { enabled: true }),
+            ..envelope(2)
+        };
+        state.begin_envelope(&write);
+        assert!(state.system_proxy_switching());
+        assert!(
+            !state.system_proxy_enabled(),
+            "do not claim success before verification"
+        );
+        state.apply_response_envelope(UiResponseEnvelope::realtime(UiResponse::SystemProxy {
+            request: SystemProxyCommand::GetState,
+            result: Ok(SystemProxyCommandResult {
+                state: SystemProxyState {
+                    services: vec![],
+                    recovery_pending: false,
+                },
+                summary: "refresh".into(),
+            }),
+        }));
+        assert!(
+            state.system_proxy_switching(),
+            "background refresh must not complete the write"
+        );
+        state.apply_response_envelope(UiResponseEnvelope::for_request(
+            &write,
+            UiResponse::SystemProxy {
+                request: SystemProxyCommand::SetEnabled { enabled: true },
+                result: Err(AppError::new(ErrorCode::PlatformFailed, "failed")),
+            },
+        ));
+        assert!(!state.system_proxy_switching());
+        assert!(state.last_error.is_some());
+        state.begin_envelope(&write);
+        state.disconnect("disconnected".into());
+        assert!(!state.system_proxy_switching());
+    }
+
     fn envelope(request_id: u64) -> UiRequestEnvelope {
         UiRequestEnvelope {
             request_id,
@@ -661,6 +708,7 @@ pub struct UiState {
     pub delay_pending: HashSet<String>,
     pub pending: HashSet<&'static str>,
     pending_requests: HashMap<u64, &'static str>,
+    pending_proxy_writes: HashSet<u64>,
     /// Reads started since the last mutation can serve overlapping page refreshes.
     pending_refreshes: HashMap<u64, UiRequest>,
     latest_requests: HashMap<&'static str, u64>,
@@ -670,6 +718,10 @@ pub struct UiState {
 }
 
 impl UiState {
+    pub fn system_proxy_switching(&self) -> bool {
+        !self.pending_proxy_writes.is_empty()
+    }
+
     pub fn pending_request_count(&self) -> usize {
         self.pending_requests.len()
     }
@@ -687,6 +739,7 @@ impl UiState {
             .max(self.pending_requests.keys().copied().max().unwrap_or(0));
         self.pending.clear();
         self.pending_requests.clear();
+        self.pending_proxy_writes.clear();
         self.pending_refreshes.clear();
         self.latest_requests.clear();
         self.latest_delay_requests.clear();
@@ -695,6 +748,10 @@ impl UiState {
     }
 
     pub fn begin_envelope(&mut self, envelope: &UiRequestEnvelope) {
+        if matches!(&envelope.request, UiRequest::SystemProxy(command) if !matches!(command, SystemProxyCommand::GetState))
+        {
+            self.pending_proxy_writes.insert(envelope.request_id);
+        }
         let refresh_request = matches!(
             &envelope.request,
             UiRequest::Profile(
@@ -1030,6 +1087,7 @@ impl UiState {
             };
         let stale = latest.is_some_and(|latest| *latest != request_id);
         self.pending_requests.remove(&request_id);
+        self.pending_proxy_writes.remove(&request_id);
         self.pending_refreshes.remove(&request_id);
         if !stale || is_write_request(&request) {
             self.apply_response(envelope.response);

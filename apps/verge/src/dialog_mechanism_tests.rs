@@ -24,6 +24,140 @@ fn sheet_content_is_visible(window: &gpui_kit::Window) -> bool {
 }
 
 #[gpui_kit::test]
+fn system_proxy_switch_shows_pending_without_claiming_success(cx: &mut TestAppContext) {
+    use crate::{
+        domain::*,
+        ui::{Page, UiRequest, UiResponse, UiResponseEnvelope},
+    };
+    use gpui_kit::{Modifiers, px, size};
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let (tx, rx) = mpsc::sync_channel(32);
+    let holder: ViewHolder = Default::default();
+    let slot = holder.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| MainView::new(tx, window, cx));
+        view.update(cx, |v, _| {
+            v.state.application_settings = Some(ApplicationSettingsSnapshot {
+                settings: ApplicationSettings::default(),
+                data_directory: "/tmp/test".into(),
+                app_version: None,
+            });
+            v.state.runtime_settings = Some(RuntimeSettings {
+                system_proxy_services: vec!["Wi-Fi".into()],
+                system_proxy_endpoint: ProxyEndpoint::new("127.0.0.1", 7897).unwrap(),
+                system_proxy_socks_endpoint: None,
+            });
+        });
+        *slot.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = holder.borrow().clone().unwrap();
+    cx.simulate_resize(size(px(960.), px(640.)));
+    for page in [Page::Home, Page::Settings] {
+        cx.update(|_, cx| {
+            view.update(cx, |v, cx| {
+                v.state.page = page;
+                v.settings_category = crate::pages::settings::SettingsCategory::Network;
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        let id = if page == Page::Home {
+            "system-proxy"
+        } else {
+            "settings-system-proxy-toggle"
+        };
+        let toggle = cx.update(|window, _| {
+            gpui_kit::base::test_support::snapshots(window)
+                .into_iter()
+                .find(|element| {
+                    element.visible() && element.path().contains(&gpui_kit::ElementId::from(id))
+                })
+                .expect("system proxy switch is visible")
+                .bounds()
+        });
+        cx.simulate_click(toggle.center(), Modifiers::default());
+        cx.run_until_parked();
+        let request = rx.try_recv().unwrap();
+        assert_eq!(
+            request.request,
+            UiRequest::SystemProxy(SystemProxyCommand::SetEnabled { enabled: true })
+        );
+        cx.update(|_, cx| {
+            view.update(cx, |v, _| {
+                assert!(v.state.system_proxy_switching());
+                assert!(!v.state.system_proxy_enabled());
+            })
+        });
+        let initial_bounds = toggle;
+        let toggle = cx.update(|window, _| {
+            gpui_kit::base::test_support::snapshots(window)
+                .into_iter()
+                .find(|element| {
+                    element.visible() && element.path().contains(&gpui_kit::ElementId::from(id))
+                })
+                .expect("system proxy switch is visible")
+                .bounds()
+        });
+        assert_eq!(
+            toggle, initial_bounds,
+            "pending text must not move the switch"
+        );
+        if page == Page::Home {
+            let pending = cx.debug_bounds("home-proxy-switching").unwrap();
+            assert!(
+                pending.left() >= toggle.right(),
+                "pending text belongs to the right of the switch"
+            );
+        }
+        cx.simulate_click(toggle.center(), Modifiers::default());
+        cx.run_until_parked();
+        assert!(
+            rx.try_recv().is_err(),
+            "pending switch cannot enqueue another mutation"
+        );
+        cx.update(|_, cx| {
+            view.update(cx, |v, cx| {
+                v.state
+                    .apply_response_envelope(UiResponseEnvelope::for_request(
+                        &request,
+                        UiResponse::SystemProxy {
+                            request: SystemProxyCommand::SetEnabled { enabled: true },
+                            result: Err(AppError::new(
+                                ErrorCode::PlatformFailed,
+                                "simulated failure",
+                            )),
+                        },
+                    ));
+                assert!(!v.state.system_proxy_switching());
+                assert!(!v.state.system_proxy_enabled());
+                assert!(v.state.last_error.is_some());
+                // Compare the switch layout without the separate page-level error banner.
+                v.state.clear_error();
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        let restored = cx.update(|window, _| {
+            gpui_kit::base::test_support::snapshots(window)
+                .into_iter()
+                .find(|element| {
+                    element.visible() && element.path().contains(&gpui_kit::ElementId::from(id))
+                })
+                .unwrap()
+                .bounds()
+        });
+        assert_eq!(
+            restored, initial_bounds,
+            "removing pending text must not move the switch"
+        );
+    }
+}
+
+#[gpui_kit::test]
 fn optimization_overview_buttons_and_sheet_work_in_both_themes(cx: &mut TestAppContext) {
     use crate::{
         optimization::{Command, Phase, Report, Snapshot},

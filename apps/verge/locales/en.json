@@ -404,6 +404,7 @@
   "proxy.host": "Proxy host",
   "proxy.interval.invalid": "Guard interval must be 1–86400 seconds",
   "proxy.master": "System proxy",
+  "proxy.switching": "Switching...",
   "proxy.pac.help": "Use %proxy_host% and %mixed-port% for the current proxy address.",
   "proxy.pac_mode": "Use PAC mode",
   "proxy.pac_script": "PAC script",

@@ -404,6 +404,7 @@
   "proxy.host": "代理主机",
   "proxy.interval.invalid": "守卫间隔须为 1–86400 秒",
   "proxy.master": "系统代理",
+  "proxy.switching": "正在切换…",
   "proxy.pac.help": "使用 %proxy_host% 和 %mixed-port% 引用当前代理地址。",
   "proxy.pac_mode": "使用 PAC 模式",
   "proxy.pac_script": "PAC 脚本",

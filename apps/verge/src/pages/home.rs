@@ -165,6 +165,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 .disabled(
                                     crate::identity::AppChannel::current().is_dev()
                                         || !proxy_available
+                                        || view.state.system_proxy_switching()
                                         || view.is_pending(&["system_proxy"]),
                                 )
                                 .on_click(cx.listener(move |this, checked: &bool, _, cx| {
@@ -173,7 +174,17 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                                         cx,
                                     );
                                 })),
-                        ),
+                        )
+                        .when(view.state.system_proxy_switching(), |this| {
+                            this.child(
+                                div()
+                                    .id("home-proxy-switching")
+                                    .debug_selector(|| "home-proxy-switching".into())
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(tr(lang, "proxy.switching")),
+                            )
+                        }),
                 )
                 .child(super::components::mode_selector(view, cx)),
         )
