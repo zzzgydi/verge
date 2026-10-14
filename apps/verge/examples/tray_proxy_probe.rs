@@ -368,10 +368,177 @@ mod native {
             "PASS: actual menu tracking retains visible actions and completion; latest deferred structure applies after close without another backend event; unrelated menus and reverted structure are safe"
         );
     }
+
+    pub fn verify_animation() {
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::{
+            NSApplication, NSApplicationActivationPolicy, NSEventTrackingRunLoopMode,
+        };
+        use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSRunLoop, NSTimer};
+        use std::time::{Duration, Instant};
+        use tray_icon::menu::ContextMenu;
+
+        let marker = MainThreadMarker::new().unwrap();
+        let app = NSApplication::sharedApplication(marker);
+        app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+        let started = Instant::now();
+        let bound = TrayService::new().unwrap().bind(|_| {});
+        let precache_ms = started.elapsed().as_millis();
+        let tray = bound.get(marker);
+        let status = tray.tray.ns_status_item().unwrap();
+        let button = status.button(marker).unwrap();
+        let initial_button_size = button.frame().size;
+        let current_image = || {
+            let image = button.image().unwrap();
+            assert!(image.isTemplate());
+            assert_eq!(image.size().width, 18.0);
+            assert_eq!(image.size().height, 18.0);
+            assert_eq!(button.frame().size, initial_button_size);
+            image.TIFFRepresentation().unwrap().to_vec()
+        };
+        let spin = |milliseconds| {
+            let until = Instant::now() + Duration::from_millis(milliseconds);
+            while Instant::now() < until {
+                unsafe {
+                    NSRunLoop::mainRunLoop().runMode_beforeDate(
+                        NSDefaultRunLoopMode,
+                        &NSDate::dateWithTimeIntervalSinceNow(0.005),
+                    );
+                }
+            }
+        };
+        let output = std::env::var_os("VERGE_TRAY_PROBE_OUTPUT").map(std::path::PathBuf::from);
+        if let Some(output) = &output {
+            std::fs::create_dir_all(output).unwrap();
+        }
+        for indicator in [
+            TrayIndicator::None,
+            TrayIndicator::SystemProxy,
+            TrayIndicator::Tun,
+        ] {
+            let snapshot = TraySnapshot {
+                indicator,
+                ..Default::default()
+            };
+            tray.update(&snapshot).unwrap();
+            let original = current_image();
+            for frame in Frame::all() {
+                tray.set_icon(indicator, frame).unwrap();
+                current_image();
+                if let Some(output) = &output {
+                    icon_image(indicator, frame)
+                        .unwrap()
+                        .save(output.join(format!("{indicator:?}-{frame:?}.png")))
+                        .unwrap();
+                }
+            }
+            tray.set_icon(indicator, Frame::REST).unwrap();
+            assert_eq!(current_image(), original);
+
+            TrayService::animate_click(&bound);
+            spin(280);
+            let reduced = objc2_app_kit::NSWorkspace::sharedWorkspace()
+                .accessibilityDisplayShouldReduceMotion();
+            assert_eq!(current_image() == original, reduced);
+            // Same-state traffic updates must not interrupt the current pose.
+            let pose = current_image();
+            tray.update(&snapshot).unwrap();
+            assert_eq!(current_image(), pose);
+            spin(560);
+            assert_eq!(current_image(), original);
+        }
+
+        // Old timers cannot overwrite a newly confirmed state or a newer click.
+        TrayService::animate_click(&bound);
+        spin(200);
+        tray.update(&TraySnapshot {
+            indicator: TrayIndicator::SystemProxy,
+            ..Default::default()
+        })
+        .unwrap();
+        let system = current_image();
+        spin(650);
+        assert_eq!(current_image(), system);
+        let old = tray.start_click_animation().unwrap();
+        let new = tray.start_click_animation().unwrap();
+        assert_ne!(old, new);
+        let peak = Frame::at_elapsed(280);
+        tray.advance_click_animation(new, peak);
+        let pose = current_image();
+        tray.advance_click_animation(old, Frame::REST);
+        assert_eq!(current_image(), pose);
+        TrayService::animate_click(&bound);
+        spin(300);
+        TrayService::animate_click(&bound);
+        spin(500);
+        let reduced =
+            objc2_app_kit::NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion();
+        assert_eq!(current_image() == system, reduced);
+        spin(340);
+        assert_eq!(current_image(), system);
+
+        // Exercise the real performClick nested menu loop, not only a synthetic mode pump.
+        let menu = unsafe {
+            objc2::rc::Retained::retain(
+                tray.menu.borrow().ns_menu().cast::<objc2_app_kit::NSMenu>(),
+            )
+            .unwrap()
+        };
+        let tracking_samples = Arc::new(Mutex::new(Vec::new()));
+        let samples = tracking_samples.clone();
+        let active = Arc::new(dispatch2::MainThreadBound::new(
+            (bound.clone(), menu.clone()),
+            marker,
+        ));
+        let started = Instant::now();
+        let block = block2::RcBlock::new(move |timer: std::ptr::NonNull<NSTimer>| {
+            let marker = MainThreadMarker::new().unwrap();
+            let (bound, menu) = active.get(marker);
+            let image = bound
+                .get(marker)
+                .tray
+                .ns_status_item()
+                .unwrap()
+                .button(marker)
+                .unwrap()
+                .image()
+                .unwrap();
+            assert!(image.isTemplate());
+            assert_eq!(image.size().width, 18.0);
+            samples
+                .lock()
+                .unwrap()
+                .push(image.TIFFRepresentation().unwrap().to_vec());
+            if started.elapsed() >= Duration::from_millis(900) {
+                unsafe { timer.as_ref() }.invalidate();
+                menu.cancelTrackingWithoutAnimation();
+            }
+        });
+        let timer = unsafe { NSTimer::timerWithTimeInterval_repeats_block(0.08, true, &block) };
+        unsafe {
+            NSRunLoop::mainRunLoop().addTimer_forMode(&timer, NSEventTrackingRunLoopMode);
+        }
+        TrayService::animate_click(&bound);
+        status.setMenu(Some(&menu));
+        unsafe {
+            button.performClick(None);
+        }
+        status.setMenu(None);
+        let samples = tracking_samples.lock().unwrap();
+        assert!(samples.len() >= 3);
+        assert_eq!(samples.iter().any(|sample| sample != &system), !reduced);
+        assert_eq!(samples.last().unwrap(), &system);
+        assert_eq!(current_image(), system);
+        println!(
+            "PASS: 54 cached frames retain 32px artwork, 18pt templated NSImage and status-button size; all states restore exactly; traffic, state cancellation, stale frames, repeat click and real menu tracking verified; reduced_motion={reduced}; precache_ms={precache_ms}"
+        );
+    }
 }
 
 fn main() {
-    if std::env::args().any(|arg| arg == "--tracking") {
+    if std::env::args().any(|arg| arg == "--animation") {
+        objc2::rc::autoreleasepool(|_| native::verify_animation());
+    } else if std::env::args().any(|arg| arg == "--tracking") {
         objc2::rc::autoreleasepool(|_| native::verify_tracking_refresh());
     } else {
         objc2::rc::autoreleasepool(|_| native::verify());
@@ -379,6 +546,13 @@ fn main() {
         assert!(
             std::process::Command::new(std::env::current_exe().unwrap())
                 .arg("--tracking")
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--animation")
                 .status()
                 .unwrap()
                 .success()
