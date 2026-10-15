@@ -11,7 +11,6 @@ fn config() -> ProviderConfig {
     ProviderConfig {
         base_url: "https://example.test/v1".into(),
         model: "storage-test".into(),
-        ..Default::default()
     }
 }
 
@@ -49,6 +48,40 @@ fn saves_preserve_general_settings_and_proxy_intent_with_or_without_main_file() 
         assert_eq!(general.get(), &expected);
         assert_eq!(general.system_proxy_enabled(), existing);
     }
+}
+
+#[test]
+fn retired_limits_are_ignored_and_removed_on_save_without_losing_the_key() {
+    let directory = TestDir::new("ai-retired-limits");
+    let mut general = FileSettingsStore::open(&directory.0).unwrap();
+    general.update(application()).unwrap();
+    let path = directory.0.join("settings.json");
+    let mut json: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let mut legacy = serde_json::to_value(config()).unwrap();
+    legacy["timeout_seconds"] = 60.into();
+    legacy["max_tool_steps"] = 10.into();
+    json["ai"] = serde_json::json!({"config": legacy, "api_key": "retained-test-key"});
+    let bytes = serde_json::to_vec(&json).unwrap();
+    fs::write(&path, &bytes).unwrap();
+    let saved = load(&directory.0).unwrap();
+    assert_eq!(saved.config, config());
+    assert!(saved.has_key());
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        bytes,
+        "loading must not rewrite settings"
+    );
+    save(&directory.0, &saved, config(), Secret::default(), false).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        json["ai"]["config"],
+        serde_json::to_value(config()).unwrap()
+    );
+    assert_eq!(json["ai"]["api_key"], "retained-test-key");
+    assert_eq!(
+        FileSettingsStore::open(&directory.0).unwrap().get(),
+        &application()
+    );
 }
 
 #[test]

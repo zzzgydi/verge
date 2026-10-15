@@ -90,8 +90,6 @@ pub(crate) fn error_text(lang: Lang, error: &str) -> String {
         || error.contains("HTTPS")
         || error.contains("endpoint")
         || error.contains("model")
-        || error.contains("timeout")
-        || error.contains("rounds")
     {
         "ai.error_config"
     } else if error.contains("key") || error.contains("credential") {
@@ -378,8 +376,7 @@ mod tests {
             ("AI connection refused", "端口"),
             ("AI DNS lookup failed", "DNS"),
             ("AI TLS handshake failed", "证书"),
-            ("AI request timed out", "超时时间"),
-            ("AI turn timed out", "超时时间"),
+            ("AI request timed out", "重试"),
             ("AI stream disconnected", "断开"),
         ] {
             assert!(error_text(Lang::ZhCn, failure).contains(hint), "{failure}");
@@ -388,9 +385,9 @@ mod tests {
         assert!(
             error_text(
                 Lang::ZhCn,
-                "Set a model, timeout of 5–120 seconds and tool limit of 1–8"
+                "Set a model of at most 200 bytes without control characters"
             )
-            .contains("高级设置")
+            .contains("模型")
         );
         let e = Evidence {
             id: "R1-E7".into(),

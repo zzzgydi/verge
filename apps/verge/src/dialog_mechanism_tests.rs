@@ -525,7 +525,6 @@ fn ai_send_and_stop_remain_visible_and_dispatch_from_buttons(cx: &mut TestAppCon
             view.state.ai.config = ProviderConfig {
                 base_url: "https://example.test/v1".into(),
                 model: "fake".into(),
-                ..Default::default()
             };
             view.state.ai.revision = 1;
             view.ai_form.prompt.update(cx, |input, cx| {

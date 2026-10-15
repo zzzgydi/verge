@@ -241,7 +241,11 @@ impl AiService {
                         key,
                         history,
                         evidence,
-                        test,
+                        if test {
+                            provider::Mode::Test
+                        } else {
+                            provider::Mode::Chat
+                        },
                         cancel.clone(),
                         |text, activity| {
                             let mut state = shared.lock().unwrap();
@@ -366,8 +370,6 @@ mod tests {
         let config = ProviderConfig {
             base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
             model: "fake".into(),
-            timeout_seconds: 5,
-            ..Default::default()
         };
         settings::save(
             &directory.0,
@@ -460,7 +462,6 @@ mod tests {
         let config = ProviderConfig {
             base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
             model: "local-test".into(),
-            ..Default::default()
         };
         let mut service = AiService::new(directory.0.clone());
         service

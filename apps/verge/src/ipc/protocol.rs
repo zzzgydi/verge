@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 /// Keep this unchanged for internal/UI changes, optional fields with safe defaults, and
 /// new error codes (readers fall back to ErrorCode::Unknown and retain the message).
 /// Increment only for incompatible required fields, message shapes, or command semantics.
-/// Generation 7 rejects earlier binaries with retired backup commands.
+/// Generation 8 removes required AI turn timeout and tool-round configuration fields.
 /// See README.md in this module for the evolution rules and compatibility tests.
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 pub const MERGE_PREVIEW: &str = "merge_preview";
 pub const PROFILE_ORDER: &str = "profile_order";

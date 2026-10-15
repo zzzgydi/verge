@@ -22,9 +22,7 @@ pub(crate) fn explain_health(
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<String, AppError> {
     let saved = settings::load(directory)?;
-    let mut config = saved.config.validated()?;
-    config.max_tool_steps = 0;
-    config.timeout_seconds = config.timeout_seconds.min(30);
+    let config = saved.config.validated()?;
     let chinese = crate::config::FileSettingsStore::open(directory)
         .is_ok_and(|settings| settings.get().language == "zh-CN");
     let prompt = format!(
@@ -44,7 +42,7 @@ pub(crate) fn explain_health(
             evidence: Vec::new(),
         }],
         evidence,
-        false,
+        provider::Mode::Health,
         cancel,
         |_, _| {},
         None,

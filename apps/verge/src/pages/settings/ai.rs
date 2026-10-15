@@ -157,36 +157,6 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
             .child(field(tr(lang, "ai.model"), &form.model, busy))
             .child(key),
     );
-    content = content.child(
-        h_flex()
-            .border_t_1()
-            .border_color(cx.theme().border)
-            .pt_2()
-            .child(
-                Button::new("ai-advanced")
-                    .debug_selector(|| "ai-advanced".into())
-                    .icon(if form.advanced_open {
-                        IconName::ChevronDown
-                    } else {
-                        IconName::ChevronRight
-                    })
-                    .label(tr(lang, "ai.advanced"))
-                    .ghost()
-                    .small()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.ai_form.advanced_open = !this.ai_form.advanced_open;
-                        cx.notify();
-                    })),
-            ),
-    );
-    if form.advanced_open {
-        content = content.child(
-            h_flex()
-                .gap_4()
-                .child(field(tr(lang, "ai.timeout"), &form.timeout, busy))
-                .child(field(tr(lang, "ai.steps"), &form.steps, busy)),
-        );
-    }
     let settings_operation = matches!(
         ai.operation,
         Some(AiOperation::Save | AiOperation::Test | AiOperation::State)

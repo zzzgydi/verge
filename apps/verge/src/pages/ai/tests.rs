@@ -30,7 +30,6 @@ fn setup(
             view.state.ai.config = ProviderConfig {
                 base_url: "https://example.test/v1".into(),
                 model: "fake".into(),
-                ..Default::default()
             };
             view.state.ai.revision = 1;
             view.state.application_settings = Some(crate::domain::ApplicationSettingsSnapshot {
@@ -339,14 +338,13 @@ fn ai_ime_confirmation_does_not_send_a_question(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn ai_settings_actions_stay_visible_with_advanced_fields_at_minimum_size(cx: &mut TestAppContext) {
+fn ai_settings_actions_stay_visible_at_minimum_size(cx: &mut TestAppContext) {
     let (view, _rx, cx) = setup(cx);
     cx.simulate_resize(gpui_kit::size(gpui_kit::px(960.), gpui_kit::px(640.)));
     cx.update(|_, cx| {
         view.update(cx, |view, cx| {
             view.state.page = Page::Settings;
             view.settings_category = crate::pages::settings::SettingsCategory::Ai;
-            view.ai_form.advanced_open = true;
             view.state.ai.has_key = true;
             cx.notify();
         })
@@ -728,7 +726,6 @@ fn initial_load_error_can_be_retried_from_settings(cx: &mut TestAppContext) {
         view.update(cx, |view, cx| {
             view.state.page = Page::Settings;
             view.settings_category = crate::pages::settings::SettingsCategory::Ai;
-            view.ai_form.advanced_open = true;
             view.state.ai.operation = Some(AiOperation::State);
             view.state.ai.error = Some("Unable to load AI settings".into());
             view.ai_form.settings_error = Some("Previous error".into());
@@ -767,7 +764,7 @@ fn initial_load_error_can_be_retried_from_settings(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn provider_fields_and_advanced_action_fit_the_small_window(cx: &mut TestAppContext) {
+fn provider_fields_fit_the_small_window_without_retired_limits(cx: &mut TestAppContext) {
     let (view, _, cx) = setup(cx);
     cx.simulate_resize(gpui_kit::size(gpui_kit::px(960.), gpui_kit::px(640.)));
     for language in ["en", "zh-CN"] {
@@ -787,8 +784,9 @@ fn provider_fields_and_advanced_action_fit_the_small_window(cx: &mut TestAppCont
             })
         });
         cx.run_until_parked();
+        assert!(cx.debug_bounds("ai-advanced").is_none());
         let footer = cx.debug_bounds("ai-save").unwrap();
-        for selector in ["ai-key-hint", "ai-clear-key", "ai-advanced"] {
+        for selector in ["ai-key-hint", "ai-clear-key"] {
             let control = cx.debug_bounds(selector).unwrap();
             assert!(control.size.height > gpui_kit::px(0.));
             assert!(

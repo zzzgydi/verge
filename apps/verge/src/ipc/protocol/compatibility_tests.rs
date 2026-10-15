@@ -184,7 +184,23 @@ fn welcome_handles_optional_capabilities_and_unknown_additions() {
         panic!("expected welcome")
     };
     assert_eq!(initial.capabilities, ["future_unknown_capability"]);
-    assert_eq!(PROTOCOL_VERSION, 7);
+    assert_eq!(PROTOCOL_VERSION, 8);
+}
+
+#[test]
+fn ai_provider_wire_settings_no_longer_include_execution_limits() {
+    let config = json!({"base_url": "https://example.test/v1", "model": "test"});
+    let command = json!({"SaveConfig": {
+        "config": config, "api_key": "", "clear_key": false
+    }});
+    let decoded: crate::ai::AiCommand = serde_json::from_value(command.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), command);
+    let mut missing = command;
+    missing["SaveConfig"]["config"]
+        .as_object_mut()
+        .unwrap()
+        .remove("model");
+    assert!(serde_json::from_value::<crate::ai::AiCommand>(missing).is_err());
 }
 
 #[test]

@@ -3,23 +3,30 @@ use crate::domain::AppError;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct ProviderConfig {
     pub base_url: String,
     pub model: String,
-    pub timeout_seconds: u16,
-    pub max_tool_steps: u8,
 }
 
-impl Default for ProviderConfig {
-    fn default() -> Self {
-        Self {
-            base_url: String::new(),
-            model: String::new(),
-            timeout_seconds: 60,
-            max_tool_steps: 4,
+impl<'de> Deserialize<'de> for ProviderConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct StoredConfig {
+            base_url: String,
+            model: String,
+            // Read retired limits without applying them or writing them back.
+            #[serde(default, rename = "timeout_seconds")]
+            _timeout: Option<serde::de::IgnoredAny>,
+            #[serde(default, rename = "max_tool_steps")]
+            _steps: Option<serde::de::IgnoredAny>,
         }
+        let stored = StoredConfig::deserialize(deserializer)?;
+        Ok(Self {
+            base_url: stored.base_url,
+            model: stored.model,
+        })
     }
 }
 
@@ -44,11 +51,9 @@ impl ProviderConfig {
         if self.model.is_empty()
             || self.model.len() > 200
             || self.model.chars().any(char::is_control)
-            || !(5..=120).contains(&self.timeout_seconds)
-            || !(1..=8).contains(&self.max_tool_steps)
         {
             return Err(error(
-                "Set a model, timeout of 5–120 seconds and tool limit of 1–8",
+                "Set a model of at most 200 bytes without control characters",
             ));
         }
         Ok(self)
@@ -160,8 +165,30 @@ mod tests {
         ProviderConfig {
             base_url: "https://example.test/v1".into(),
             model: "fake".into(),
-            ..Default::default()
         }
+    }
+
+    #[test]
+    fn config_accepts_only_provider_fields_and_retired_limits() {
+        let mut value = serde_json::to_value(config()).unwrap();
+        assert_eq!(
+            serde_json::from_value::<ProviderConfig>(value.clone()).unwrap(),
+            config()
+        );
+        value["timeout_seconds"] = serde_json::json!("unused");
+        value["max_tool_steps"] = serde_json::json!(10000);
+        assert_eq!(
+            serde_json::from_value::<ProviderConfig>(value.clone()).unwrap(),
+            config()
+        );
+        value["unexpected"] = true.into();
+        assert!(serde_json::from_value::<ProviderConfig>(value).is_err());
+        assert!(
+            serde_json::from_value::<ProviderConfig>(
+                serde_json::json!({"base_url":"https://example.test"})
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -262,7 +289,6 @@ mod tests {
                 ProviderConfig {
                     base_url: url.into(),
                     model: "test".into(),
-                    ..Default::default()
                 }
                 .validated()
                 .is_err()
@@ -277,7 +303,6 @@ mod tests {
                 ProviderConfig {
                     base_url: url.into(),
                     model: "test".into(),
-                    ..Default::default()
                 }
                 .validated()
                 .is_ok()

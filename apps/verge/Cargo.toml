@@ -53,6 +53,7 @@ reqwest = { version = "0.13.5", default-features = false, features = ["blocking"
 
 [dev-dependencies]
 gpui-kit = { version = "0.7.1", features = ["test-support"] }
+tokio = { version = "1.53.2", features = ["test-util"] }
 verge-helper = { path = "../verge-helper" }
 
 [build-dependencies]

@@ -26,10 +26,7 @@ pub struct AiForm {
     pub base: Entity<InputState>,
     pub model: Entity<InputState>,
     pub key: Entity<InputState>,
-    pub timeout: Entity<InputState>,
-    pub steps: Entity<InputState>,
     pub prompt: Entity<TextareaState>,
-    pub advanced_open: bool,
     pub evidence_open: Option<usize>,
     pub clear_key: bool,
     pub confirm_clear: bool,
@@ -82,10 +79,7 @@ impl AiForm {
                     .masked(true)
                     .placeholder("API key")
             }),
-            timeout: cx.new(|cx| InputState::new(window, cx).default_value("60")),
-            steps: cx.new(|cx| InputState::new(window, cx).default_value("4")),
             prompt,
-            advanced_open: false,
             evidence_open: None,
             clear_key: false,
             confirm_clear: false,
@@ -106,13 +100,7 @@ impl AiForm {
             expiry_task: None,
             markdown: Default::default(),
         };
-        for field in [
-            &form.base,
-            &form.model,
-            &form.key,
-            &form.timeout,
-            &form.steps,
-        ] {
+        for field in [&form.base, &form.model, &form.key] {
             cx.subscribe(field, |this, input, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     this.ai_form.settings_error = None;
@@ -170,8 +158,6 @@ impl AiForm {
         for (field, value) in [
             (&self.base, state.config.base_url.clone()),
             (&self.model, state.config.model.clone()),
-            (&self.timeout, state.config.timeout_seconds.to_string()),
-            (&self.steps, state.config.max_tool_steps.to_string()),
         ] {
             field.update(cx, |input, cx| input.set_value(value, window, cx));
         }
@@ -182,8 +168,6 @@ impl AiForm {
         let applied = self.applied.as_ref().unwrap_or(&defaults);
         self.base.read(cx).value().as_str() != applied.base_url
             || self.model.read(cx).value().as_str() != applied.model
-            || self.timeout.read(cx).value().as_str() != applied.timeout_seconds.to_string()
-            || self.steps.read(cx).value().as_str() != applied.max_tool_steps.to_string()
             || !self.key.read(cx).value().is_empty()
             || self.clear_key
     }
@@ -333,8 +317,6 @@ impl MainView {
             for (field, value) in [
                 (&self.ai_form.base, ai.config.base_url.clone()),
                 (&self.ai_form.model, ai.config.model.clone()),
-                (&self.ai_form.timeout, ai.config.timeout_seconds.to_string()),
-                (&self.ai_form.steps, ai.config.max_tool_steps.to_string()),
             ] {
                 field.update(cx, |input, cx| input.set_value(value, window, cx));
             }
@@ -373,22 +355,6 @@ impl MainView {
         let config = ProviderConfig {
             base_url: self.ai_form.base.read(cx).value().to_string(),
             model: self.ai_form.model.read(cx).value().to_string(),
-            timeout_seconds: self
-                .ai_form
-                .timeout
-                .read(cx)
-                .value()
-                .trim()
-                .parse()
-                .unwrap_or(0),
-            max_tool_steps: self
-                .ai_form
-                .steps
-                .read(cx)
-                .value()
-                .trim()
-                .parse()
-                .unwrap_or(0),
         };
         let config = match config.validated() {
             Ok(config) => config,
