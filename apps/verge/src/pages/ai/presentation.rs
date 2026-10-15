@@ -35,6 +35,7 @@ pub(crate) fn status_text(lang: Lang, status: &str) -> String {
     let key = match status {
         "Preparing" => "ai.preparing",
         "Receiving response" => "ai.responding",
+        "Reasoning" => "ai.reasoning_active",
         "Completed" => "ai.complete",
         "Settings saved" => "ai.saved",
         "Testing provider" => "ai.testing",
@@ -86,6 +87,8 @@ pub(crate) fn error_text(lang: Lang, error: &str) -> String {
         "ai.error_limit"
     } else if error.contains("8 KiB") {
         "ai.too_long"
+    } else if error.starts_with("AI system prompt") {
+        "ai.error_system_prompt"
     } else if error.contains("URL")
         || error.contains("HTTPS")
         || error.contains("endpoint")

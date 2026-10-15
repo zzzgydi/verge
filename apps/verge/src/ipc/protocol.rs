@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 /// Keep this unchanged for internal/UI changes, optional fields with safe defaults, and
 /// new error codes (readers fall back to ErrorCode::Unknown and retain the message).
 /// Increment only for incompatible required fields, message shapes, or command semantics.
-/// Generation 8 removes required AI turn timeout and tool-round configuration fields.
+/// Generation 9 adds custom AI prompts; older strict config readers reject that field.
 /// See README.md in this module for the evolution rules and compatibility tests.
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 pub const MERGE_PREVIEW: &str = "merge_preview";
 pub const PROFILE_ORDER: &str = "profile_order";

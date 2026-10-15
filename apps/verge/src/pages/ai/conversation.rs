@@ -159,8 +159,8 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
                 ),
                 (
                     IconName::Network,
-                    "ai.starter_node_title",
-                    "ai.starter_node",
+                    "ai.starter_optimize_title",
+                    "ai.starter_optimize",
                 ),
                 (
                     IconName::FileText,
@@ -181,7 +181,9 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
                         .label(tr(lang, title))
                         .accessibility_label(tr(lang, prompt))
                         .tooltip(tr(lang, prompt))
-                        .disabled(busy || offline)
+                        .disabled(
+                            busy || offline || !form.prompt.read(cx).value().trim().is_empty(),
+                        )
                         .on_click(cx.listener(move |this, _, window, cx| {
                             let value = tr(this.lang(), prompt);
                             this.ai_form.prompt.update(cx, |input, cx| {
@@ -189,6 +191,7 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
                                 input.focus(window, cx);
                             });
                             this.ai_form.local_error = None;
+                            this.send_ai(window, cx);
                             cx.notify();
                         })),
                 );
@@ -230,22 +233,75 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
             block = block
                 .flex_1()
                 .child(div().text_sm().font_medium().child("Verge"));
+            if !message.reasoning.is_empty() {
+                let open = form.reasoning_open(index, &message.text);
+                let mut reasoning = v_flex()
+                    .min_w_0()
+                    .gap_2()
+                    .border_l_2()
+                    .border_color(cx.theme().border)
+                    .pl_3()
+                    .child(
+                        h_flex().child(
+                            Button::new(("ai-reasoning", index))
+                                .debug_selector(move || format!("ai-reasoning-{index}"))
+                                .icon(if open {
+                                    IconName::ChevronDown
+                                } else {
+                                    IconName::ChevronRight
+                                })
+                                .label(tr(
+                                    lang,
+                                    if active && message.text.trim().is_empty() {
+                                        "ai.reasoning_active"
+                                    } else {
+                                        "ai.reasoning"
+                                    },
+                                ))
+                                .ghost()
+                                .small()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.ai_form.reasoning_expanded.insert(index, !open);
+                                    cx.notify();
+                                })),
+                        ),
+                    );
+                if open {
+                    reasoning = reasoning.child(
+                        div()
+                            .debug_selector(move || format!("ai-reasoning-body-{index}"))
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(
+                                TextView::markdown(
+                                    ("ai-reasoning-text", index),
+                                    presentation::safe_markdown(&message.reasoning, lang),
+                                )
+                                .selectable(true)
+                                .scrollable(false),
+                            ),
+                    );
+                }
+                block = block.child(reasoning);
+            }
             if message.text.is_empty() {
-                block = block.child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(tr(
-                            lang,
-                            if active {
-                                "ai.thinking"
-                            } else if ai.activity == "Cancelled" {
-                                "ai.stopped"
-                            } else {
-                                "ai.no_answer"
-                            },
-                        )),
-                );
+                if message.reasoning.is_empty() {
+                    block = block.child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(tr(
+                                lang,
+                                if active {
+                                    "ai.thinking"
+                                } else if ai.activity == "Cancelled" {
+                                    "ai.stopped"
+                                } else {
+                                    "ai.no_answer"
+                                },
+                            )),
+                    );
+                }
             } else {
                 block = block.child(
                     TextView::markdown(("ai-answer", index), {

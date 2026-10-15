@@ -184,7 +184,7 @@ fn welcome_handles_optional_capabilities_and_unknown_additions() {
         panic!("expected welcome")
     };
     assert_eq!(initial.capabilities, ["future_unknown_capability"]);
-    assert_eq!(PROTOCOL_VERSION, 8);
+    assert_eq!(PROTOCOL_VERSION, 9);
 }
 
 #[test]

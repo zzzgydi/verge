@@ -26,10 +26,12 @@ fn setup(
                 crate::ai::CAPABILITY.into(),
                 crate::ai::UX_CAPABILITY.into(),
                 crate::ai::ACTIONS_CAPABILITY.into(),
+                crate::ai::PROMPT_CAPABILITY.into(),
             ];
             view.state.ai.config = ProviderConfig {
                 base_url: "https://example.test/v1".into(),
                 model: "fake".into(),
+                system_prompt: String::new(),
             };
             view.state.ai.revision = 1;
             view.state.application_settings = Some(crate::domain::ApplicationSettingsSnapshot {
@@ -43,6 +45,200 @@ fn setup(
     });
     let view = holder.borrow().clone().unwrap();
     (view, rx, cx)
+}
+
+#[gpui_kit::test]
+fn reasoning_opens_during_stream_collapses_on_answer_and_can_be_reopened(cx: &mut TestAppContext) {
+    let (view, _, cx) = setup(cx);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state.ai.busy = true;
+            view.state.ai.run_id = 1;
+            view.state.ai.operation = Some(AiOperation::Start);
+            view.state.ai.messages = vec![crate::ai::ChatMessage {
+                role: "assistant".into(),
+                text: String::new(),
+                reasoning: "Inspecting current state".into(),
+                evidence: vec![],
+            }];
+            view.ai_form.sync(&view.state.ai, window, cx);
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("ai-reasoning-body-0").is_some());
+    let toggle = cx.debug_bounds("ai-reasoning-0").unwrap();
+    cx.simulate_click(toggle.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("ai-reasoning-body-0").is_none());
+    cx.simulate_click(toggle.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("ai-reasoning-body-0").is_some());
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state.ai.messages[0].text = "Network looks healthy".into();
+            view.ai_form.sync(&view.state.ai, window, cx);
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("ai-reasoning-body-0").is_none());
+    let toggle = cx.debug_bounds("ai-reasoning-0").unwrap();
+    cx.simulate_click(toggle.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("ai-reasoning-body-0").is_some());
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state.ai.messages[0].text.push_str(" so far.");
+            view.ai_form.sync(&view.state.ai, window, cx);
+            assert!(
+                view.ai_form
+                    .reasoning_open(0, &view.state.ai.messages[0].text)
+            );
+            view.state.ai.run_id += 1;
+            view.state.ai.messages[0].text.clear();
+            view.state.ai.messages[0].reasoning = "Trying again".into();
+            view.ai_form.sync(&view.state.ai, window, cx);
+            assert!(view.ai_form.reasoning_open(0, ""));
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn recommended_diagnosis_starts_a_turn_without_overwriting_an_existing_draft(
+    cx: &mut TestAppContext,
+) {
+    let (view, rx, cx) = setup(cx);
+    cx.run_until_parked();
+    let starter = cx.debug_bounds("ai-starter-0").unwrap();
+    cx.simulate_click(starter.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    let request = rx.try_recv().unwrap();
+    assert!(
+        matches!(request.request, UiRequest::Ai(AiCommand::Start { prompt }) if prompt == crate::i18n::tr(crate::i18n::Lang::En, "ai.starter_network"))
+    );
+    assert!(rx.try_recv().is_err());
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state
+                .apply_response_envelope(crate::ui::UiResponseEnvelope {
+                    request_id: Some(request.request_id),
+                    operation_id: Some(request.request_id),
+                    response: UiResponse::Ai {
+                        operation: AiOperation::Start,
+                        result: Err(crate::ai::error("test rejection")),
+                    },
+                });
+            view.ai_form
+                .prompt
+                .update(cx, |input, cx| input.set_value("My draft", window, cx));
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    let optimize = cx.debug_bounds("ai-starter-1").unwrap();
+    cx.simulate_click(optimize.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(rx.try_recv().is_err());
+    cx.update(|_, cx| {
+        assert_eq!(
+            view.read(cx).ai_form.prompt.read(cx).value().as_str(),
+            "My draft"
+        )
+    });
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.ai_form
+                .prompt
+                .update(cx, |input, cx| input.set_value("", window, cx));
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    cx.simulate_click(optimize.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+        matches!(rx.try_recv().unwrap().request, UiRequest::Ai(AiCommand::Start { prompt }) if prompt == crate::i18n::tr(crate::i18n::Lang::En, "ai.starter_optimize"))
+    );
+}
+
+#[gpui_kit::test]
+fn restoring_default_prompt_edits_only_the_draft_until_saved(cx: &mut TestAppContext) {
+    let (view, rx, cx) = setup(cx);
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(960.), gpui_kit::px(640.)));
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.state.page = Page::Settings;
+            view.settings_category = crate::pages::settings::SettingsCategory::Ai;
+            view.state.ai.config.system_prompt = "Saved preference".into();
+            view.ai_form.sync(&view.state.ai, window, cx);
+            assert!(!view.ai_form.has_provider_draft(cx));
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    let reset = cx.debug_bounds("ai-reset-prompt").unwrap();
+    let save = cx.debug_bounds("ai-save").unwrap();
+    assert!(reset.bottom() < save.top());
+    let scroll = cx.debug_bounds("ai-settings-scroll").unwrap();
+    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+        position: gpui_kit::point(scroll.right() - gpui_kit::px(4.), scroll.center().y),
+        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+            gpui_kit::px(0.),
+            gpui_kit::px(-600.),
+        )),
+        modifiers: Default::default(),
+        touch_phase: gpui_kit::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("ai-system-prompt-hint").unwrap().bottom() <= scroll.bottom());
+    let reset = cx.debug_bounds("ai-reset-prompt").unwrap();
+    cx.simulate_click(reset.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(rx.try_recv().is_err());
+    cx.update(|_, cx| {
+        let view = view.read(cx);
+        assert!(view.ai_form.system_prompt.read(cx).value().is_empty());
+        assert!(view.ai_form.has_provider_draft(cx));
+        assert_eq!(view.state.ai.config.system_prompt, "Saved preference");
+    });
+    cx.simulate_click(save.center(), gpui_kit::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+        matches!(rx.try_recv().unwrap().request, UiRequest::Ai(AiCommand::SaveConfig { config, .. }) if config.system_prompt.is_empty())
+    );
+}
+
+#[gpui_kit::test]
+fn custom_prompt_draft_is_preserved_saved_and_requires_daemon_support(cx: &mut TestAppContext) {
+    let (view, rx, cx) = setup(cx);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.ai_form.sync(&view.state.ai, window, cx);
+            view.ai_form
+                .system_prompt
+                .update(cx, |input, cx| input.set_value("My preference", window, cx));
+            view.state.ai.config.system_prompt = "Other saved preference".into();
+            view.ai_form.sync(&view.state.ai, window, cx);
+            assert_eq!(
+                view.ai_form.system_prompt.read(cx).value().as_str(),
+                "My preference"
+            );
+            view.state
+                .daemon_capabilities
+                .retain(|c| c != crate::ai::PROMPT_CAPABILITY);
+            view.save_ai_settings(false, cx);
+            assert!(rx.try_recv().is_err());
+            assert!(view.ai_form.settings_error.is_some());
+            view.state
+                .daemon_capabilities
+                .push(crate::ai::PROMPT_CAPABILITY.into());
+            view.save_ai_settings(false, cx);
+        })
+    });
+    assert!(
+        matches!(rx.try_recv().unwrap().request, UiRequest::Ai(AiCommand::SaveConfig { config, .. }) if config.system_prompt == "My preference")
+    );
 }
 
 #[gpui_kit::test]
@@ -364,6 +560,7 @@ fn ai_stream_follows_bottom_but_does_not_pull_reader_from_older_content(cx: &mut
             view.state.ai.messages = vec![crate::ai::ChatMessage {
                 role: "assistant".into(),
                 text: "A paragraph of diagnostic information.\n\n".repeat(40),
+                reasoning: String::new(),
                 evidence: vec![],
             }];
             cx.notify();
@@ -697,6 +894,7 @@ fn new_chat_confirmation_is_visible_when_reading_the_end_of_a_long_chat(cx: &mut
             view.state.ai.messages = vec![crate::ai::ChatMessage {
                 role: "assistant".into(),
                 text: "Long answer\n\n".repeat(80),
+                reasoning: String::new(),
                 evidence: vec![],
             }];
             view.ai_form.scroll.scroll_to_bottom();

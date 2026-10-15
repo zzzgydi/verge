@@ -457,6 +457,7 @@ fn ai_requests_are_gated_and_reconnect_does_not_restart_a_turn(cx: &mut TestAppC
                 revision: 10,
                 busy: true,
                 messages: vec![ChatMessage {
+                    reasoning: String::new(),
                     evidence: Vec::new(),
                     role: "assistant".into(),
                     text: "partial".into(),
@@ -525,6 +526,7 @@ fn ai_send_and_stop_remain_visible_and_dispatch_from_buttons(cx: &mut TestAppCon
             view.state.ai.config = ProviderConfig {
                 base_url: "https://example.test/v1".into(),
                 model: "fake".into(),
+                system_prompt: String::new(),
             };
             view.state.ai.revision = 1;
             view.ai_form.prompt.update(cx, |input, cx| {

@@ -12,7 +12,7 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
-    input::{Input, InputState},
+    input::{Input, InputState, Textarea},
     scroll::ScrollableElement as _,
     v_flex,
 };
@@ -40,6 +40,11 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
     let busy = ai.busy || view.is_pending(&["ai_write"]);
     let offline = view.state.connection_notice.is_some();
     let dirty = form.has_provider_draft(cx);
+    let supports_prompt = view
+        .state
+        .daemon_capabilities
+        .iter()
+        .any(|c| c == crate::ai::PROMPT_CAPABILITY);
     let mut content = v_flex()
         .w_full()
         .max_w(px(660.))
@@ -157,6 +162,59 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
             .child(field(tr(lang, "ai.model"), &form.model, busy))
             .child(key),
     );
+    content = content.child(
+        v_flex()
+            .gap_2()
+            .child(
+                h_flex()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_medium()
+                            .child(tr(lang, "ai.system_prompt")),
+                    )
+                    .child(
+                        Button::new("ai-reset-prompt")
+                            .debug_selector(|| "ai-reset-prompt".into())
+                            .label(tr(lang, "ai.system_prompt_reset"))
+                            .ghost()
+                            .small()
+                            .disabled(
+                                busy || !supports_prompt
+                                    || form.system_prompt.read(cx).value().is_empty(),
+                            )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.ai_form
+                                    .system_prompt
+                                    .update(cx, |input, cx| input.set_value("", window, cx));
+                                this.ai_form.settings_error = None;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                Textarea::new(&form.system_prompt)
+                    .h(px(120.))
+                    .disabled(busy || !supports_prompt)
+                    .aria_label(tr(lang, "ai.system_prompt")),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "ai-system-prompt-hint".into())
+                    .text_xs()
+                    .whitespace_normal()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(tr(
+                        lang,
+                        if supports_prompt {
+                            "ai.system_prompt_hint"
+                        } else {
+                            "ai.prompt_requires_restart"
+                        },
+                    )),
+            ),
+    );
     let settings_operation = matches!(
         ai.operation,
         Some(AiOperation::Save | AiOperation::Test | AiOperation::State)
@@ -271,6 +329,7 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
         .child(
             v_flex()
                 .id("ai-settings-scroll")
+                .debug_selector(|| "ai-settings-scroll".into())
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scrollbar()

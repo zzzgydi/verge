@@ -26,7 +26,11 @@ pub struct AiForm {
     pub base: Entity<InputState>,
     pub model: Entity<InputState>,
     pub key: Entity<InputState>,
+    pub system_prompt: Entity<TextareaState>,
     pub prompt: Entity<TextareaState>,
+    pub reasoning_expanded: std::collections::BTreeMap<usize, bool>,
+    reasoning_with_body: std::collections::BTreeSet<usize>,
+    reasoning_run: u64,
     pub evidence_open: Option<usize>,
     pub clear_key: bool,
     pub confirm_clear: bool,
@@ -80,6 +84,12 @@ impl AiForm {
                     .placeholder("API key")
             }),
             prompt,
+            system_prompt: cx.new(|cx| {
+                TextareaState::new(window, cx).placeholder(tr(lang, "ai.system_prompt_placeholder"))
+            }),
+            reasoning_expanded: Default::default(),
+            reasoning_with_body: Default::default(),
+            reasoning_run: 0,
             evidence_open: None,
             clear_key: false,
             confirm_clear: false,
@@ -112,6 +122,13 @@ impl AiForm {
             })
             .detach();
         }
+        cx.subscribe(&form.system_prompt, |this, _, event, cx| {
+            if matches!(event, InputEvent::Change) {
+                this.ai_form.settings_error = None;
+            }
+            cx.notify();
+        })
+        .detach();
         form
     }
 
@@ -128,6 +145,20 @@ impl AiForm {
         self.stop_requested = false;
     }
     pub fn sync(&mut self, state: &AiSnapshot, window: &mut Window, cx: &mut Context<MainView>) {
+        if self.reasoning_run != state.run_id {
+            self.reasoning_expanded.clear();
+            self.reasoning_with_body.clear();
+            self.reasoning_run = state.run_id;
+        }
+        self.reasoning_expanded
+            .retain(|index, _| *index < state.messages.len());
+        self.reasoning_with_body
+            .retain(|index| *index < state.messages.len());
+        for (index, message) in state.messages.iter().enumerate() {
+            if !message.text.trim().is_empty() && self.reasoning_with_body.insert(index) {
+                self.reasoning_expanded.remove(&index);
+            }
+        }
         self.expiry_task = None;
         let now = crate::ai::proposals::now();
         if let Some(expiry) = state
@@ -162,18 +193,29 @@ impl AiForm {
             field.update(cx, |input, cx| input.set_value(value, window, cx));
         }
         self.applied = Some(state.config.clone());
+        self.system_prompt.update(cx, |input, cx| {
+            input.set_value(state.config.system_prompt.clone(), window, cx)
+        });
     }
     pub(crate) fn has_provider_draft(&self, cx: &App) -> bool {
         let defaults = ProviderConfig::default();
         let applied = self.applied.as_ref().unwrap_or(&defaults);
         self.base.read(cx).value().as_str() != applied.base_url
             || self.model.read(cx).value().as_str() != applied.model
+            || self.system_prompt.read(cx).value().as_str() != applied.system_prompt
             || !self.key.read(cx).value().is_empty()
             || self.clear_key
     }
 
     fn at_bottom(&self) -> bool {
         self.scroll.max_offset().y + self.scroll.offset().y < px(48.)
+    }
+
+    pub(super) fn reasoning_open(&self, index: usize, text: &str) -> bool {
+        self.reasoning_expanded
+            .get(&index)
+            .copied()
+            .unwrap_or_else(|| text.trim().is_empty())
     }
 }
 
@@ -249,6 +291,8 @@ impl MainView {
                     self.ai_form.stop_requested = false;
                 }
                 if *operation == AiOperation::Clear {
+                    self.ai_form.reasoning_expanded.clear();
+                    self.ai_form.reasoning_with_body.clear();
                     self.ai_form.local_error = None;
                     self.ai_form.copied = None;
                     self.ai_form.confirm_clear = false;
@@ -321,6 +365,9 @@ impl MainView {
                 field.update(cx, |input, cx| input.set_value(value, window, cx));
             }
             self.ai_form.applied = Some(ai.config.clone());
+            self.ai_form.system_prompt.update(cx, |input, cx| {
+                input.set_value(ai.config.system_prompt.clone(), window, cx)
+            });
             if self.ai_form.test_after_save {
                 self.ai_form.test_after_save = false;
                 self.try_dispatch_ai(AiCommand::TestProvider, cx);
@@ -355,6 +402,7 @@ impl MainView {
         let config = ProviderConfig {
             base_url: self.ai_form.base.read(cx).value().to_string(),
             model: self.ai_form.model.read(cx).value().to_string(),
+            system_prompt: self.ai_form.system_prompt.read(cx).value().to_string(),
         };
         let config = match config.validated() {
             Ok(config) => config,

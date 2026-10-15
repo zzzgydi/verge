@@ -7,6 +7,8 @@ use std::path::Path;
 pub struct ProviderConfig {
     pub base_url: String,
     pub model: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub system_prompt: String,
 }
 
 impl<'de> Deserialize<'de> for ProviderConfig {
@@ -16,6 +18,8 @@ impl<'de> Deserialize<'de> for ProviderConfig {
         struct StoredConfig {
             base_url: String,
             model: String,
+            #[serde(default)]
+            system_prompt: String,
             // Read retired limits without applying them or writing them back.
             #[serde(default, rename = "timeout_seconds")]
             _timeout: Option<serde::de::IgnoredAny>,
@@ -26,6 +30,7 @@ impl<'de> Deserialize<'de> for ProviderConfig {
         Ok(Self {
             base_url: stored.base_url,
             model: stored.model,
+            system_prompt: stored.system_prompt,
         })
     }
 }
@@ -34,6 +39,17 @@ impl ProviderConfig {
     pub fn validated(mut self) -> Result<Self, AppError> {
         self.base_url = self.base_url.trim().trim_end_matches('/').to_owned();
         self.model = self.model.trim().to_owned();
+        self.system_prompt = self.system_prompt.trim().to_owned();
+        if self.system_prompt.len() > 32 * 1024
+            || self
+                .system_prompt
+                .chars()
+                .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+        {
+            return Err(error(
+                "AI system prompt exceeds 32 KiB or contains invalid control characters",
+            ));
+        }
         let url = reqwest::Url::parse(&self.base_url).map_err(|_| error("Invalid AI Base URL"))?;
         let local = is_loopback(&url);
         if self.base_url.len() > 2048
@@ -165,6 +181,7 @@ mod tests {
         ProviderConfig {
             base_url: "https://example.test/v1".into(),
             model: "fake".into(),
+            system_prompt: String::new(),
         }
     }
 
@@ -289,6 +306,7 @@ mod tests {
                 ProviderConfig {
                     base_url: url.into(),
                     model: "test".into(),
+                    system_prompt: String::new(),
                 }
                 .validated()
                 .is_err()
@@ -303,6 +321,7 @@ mod tests {
                 ProviderConfig {
                     base_url: url.into(),
                     model: "test".into(),
+                    system_prompt: String::new(),
                 }
                 .validated()
                 .is_ok()

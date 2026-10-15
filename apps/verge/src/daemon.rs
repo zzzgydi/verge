@@ -1649,6 +1649,7 @@ impl Backend {
                 crate::ai::CAPABILITY.into(),
                 crate::ai::UX_CAPABILITY.into(),
                 crate::ai::ACTIONS_CAPABILITY.into(),
+                crate::ai::PROMPT_CAPABILITY.into(),
             ],
             profiles: self.profiles.list().to_vec(),
             selected_profile: self.profiles.selected().cloned(),

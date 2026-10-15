@@ -11,6 +11,7 @@ fn config() -> ProviderConfig {
     ProviderConfig {
         base_url: "https://example.test/v1".into(),
         model: "storage-test".into(),
+        system_prompt: String::new(),
     }
 }
 
@@ -82,6 +83,35 @@ fn retired_limits_are_ignored_and_removed_on_save_without_losing_the_key() {
         FileSettingsStore::open(&directory.0).unwrap().get(),
         &application()
     );
+}
+
+#[test]
+fn custom_prompt_survives_save_restart_and_clear_without_changing_credentials() {
+    let directory = TestDir::new("ai-custom-prompt");
+    let mut custom = config();
+    custom.system_prompt = "  Prefer stable nodes.\nExplain briefly.  ".into();
+    let saved = save(
+        &directory.0,
+        &SavedConfig::default(),
+        custom,
+        Secret("prompt-test-key".into()),
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        saved.config.system_prompt,
+        "Prefer stable nodes.\nExplain briefly."
+    );
+    let loaded = load(&directory.0).unwrap();
+    assert_eq!(loaded.config, saved.config);
+    let mut invalid = loaded.config.clone();
+    invalid.system_prompt = "x".repeat(32 * 1024 + 1);
+    assert!(save(&directory.0, &loaded, invalid, Secret::default(), false).is_err());
+    assert_eq!(load(&directory.0).unwrap().config, loaded.config);
+    save(&directory.0, &loaded, config(), Secret::default(), false).unwrap();
+    let cleared = load(&directory.0).unwrap();
+    assert!(cleared.config.system_prompt.is_empty());
+    assert_eq!(cleared.api_key, saved.api_key);
 }
 
 #[test]

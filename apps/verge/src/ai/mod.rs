@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 pub const CAPABILITY: &str = "ai_chat_v1";
 pub const UX_CAPABILITY: &str = "ai_chat_ux_v2";
 pub const ACTIONS_CAPABILITY: &str = "ai_actions_v1";
+pub const PROMPT_CAPABILITY: &str = "ai_custom_prompt_v1";
 pub const TEXT_LIMIT: usize = 32 * 1024;
 
 pub(crate) fn explain_health(
@@ -39,12 +40,13 @@ pub(crate) fn explain_health(
         vec![ChatMessage {
             role: "user".into(),
             text: prompt,
+            reasoning: String::new(),
             evidence: Vec::new(),
         }],
         evidence,
         provider::Mode::Health,
         cancel,
-        |_, _| {},
+        |_| {},
         None,
     ))
 }
@@ -116,6 +118,8 @@ impl AiCommand {
 pub struct ChatMessage {
     pub role: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reasoning: String,
     #[serde(default)]
     pub evidence: Vec<tools::Evidence>,
 }
@@ -159,5 +163,21 @@ mod compatibility_tests {
         assert_eq!(state.operation, None);
         assert!(state.proposals.is_empty());
         assert!(state.messages[0].evidence.is_empty());
+        assert!(state.messages[0].reasoning.is_empty());
+    }
+
+    #[test]
+    fn prompt_and_reasoning_are_optional_on_the_wire() {
+        let config: ProviderConfig = serde_json::from_value(
+            serde_json::json!({"base_url":"https://example.test/v1","model":"test"}),
+        )
+        .unwrap();
+        assert!(config.system_prompt.is_empty());
+        let message: ChatMessage = serde_json::from_value(serde_json::json!({"role":"assistant","text":"answer","reasoning":"provider reasoning"})).unwrap();
+        assert_eq!(message.reasoning, "provider reasoning");
+        assert_eq!(
+            serde_json::to_value(message).unwrap()["reasoning"],
+            "provider reasoning"
+        );
     }
 }

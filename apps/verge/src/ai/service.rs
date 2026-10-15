@@ -106,7 +106,12 @@ impl AiService {
                     return Err(error("Enter a question of at most 8 KiB"));
                 }
                 if state.messages.len() >= 16
-                    || state.messages.iter().map(|m| m.text.len()).sum::<usize>() > 96 * 1024
+                    || state
+                        .messages
+                        .iter()
+                        .map(|m| m.text.len() + m.reasoning.len())
+                        .sum::<usize>()
+                        > 96 * 1024
                 {
                     return Err(error(
                         "Conversation limit reached; clear it to start a new conversation",
@@ -115,6 +120,7 @@ impl AiService {
                 state.messages.push(ChatMessage {
                     role: "user".into(),
                     text: prompt.trim().into(),
+                    reasoning: String::new(),
                     evidence: Vec::new(),
                 });
             }
@@ -217,6 +223,7 @@ impl AiService {
                             state.messages.push(ChatMessage {
                                 role: "assistant".into(),
                                 text: String::new(),
+                                reasoning: String::new(),
                                 evidence: evidence.clone(),
                             });
                         }
@@ -247,7 +254,7 @@ impl AiService {
                             provider::Mode::Chat
                         },
                         cancel.clone(),
-                        |text, activity| {
+                        |update| {
                             let mut state = shared.lock().unwrap();
                             if let Some(session) = &session {
                                 let session = session.lock().unwrap();
@@ -261,12 +268,14 @@ impl AiService {
                                     }
                                 }
                             }
-                            state.activity = activity;
-                            if !test
-                                && !text.is_empty()
-                                && let Some(message) = state.messages.last_mut()
-                            {
-                                message.text = text;
+                            state.activity = update.activity;
+                            if !test && let Some(message) = state.messages.last_mut() {
+                                if !update.text.is_empty() {
+                                    message.text = update.text;
+                                }
+                                if !update.reasoning.is_empty() {
+                                    message.reasoning = update.reasoning;
+                                }
                             }
                             state.revision += 1;
                         },
@@ -348,6 +357,104 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_reaches_snapshots_before_the_answer_and_stays_after_completion() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            time::{Duration, Instant},
+        };
+        let directory = crate::config::tests::TestDir::new("ai-reasoning-snapshot");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let config = ProviderConfig {
+            base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
+            model: "fake".into(),
+            system_prompt: String::new(),
+        };
+        settings::save(
+            &directory.0,
+            &settings::SavedConfig::default(),
+            config,
+            Secret::default(),
+            false,
+        )
+        .unwrap();
+        let (answer_tx, answer_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut header = Vec::new();
+            while !header.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                socket.read_exact(&mut byte).unwrap();
+                header.push(byte[0]);
+            }
+            let length: usize = String::from_utf8(header)
+                .unwrap()
+                .to_ascii_lowercase()
+                .lines()
+                .find_map(|line| {
+                    line.strip_prefix("content-length: ")
+                        .map(|n| n.parse().unwrap())
+                })
+                .unwrap();
+            let mut body = vec![0; length];
+            socket.read_exact(&mut body).unwrap();
+            let reasoning = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Checking the evidence\"}}]}\n\n";
+            let answer = "data: {\"choices\":[{\"delta\":{\"content\":\"No confirmed problem\"},\"finish_reason\":\"stop\"}]}\n\n";
+            write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reasoning}",reasoning.len()+answer.len()).unwrap();
+            answer_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            socket.write_all(answer.as_bytes()).unwrap();
+        });
+        let mut service = AiService::new(directory.0.clone());
+        let context = ToolContext {
+            socket: directory.0.join("missing.sock"),
+            services: vec![],
+            recovery_path: directory.0.join("recovery"),
+            config_selected: false,
+            connections: None,
+            errors: Default::default(),
+            config: None,
+            network: Default::default(),
+        };
+        service
+            .handle(
+                AiCommand::Start {
+                    prompt: "Diagnose my network".into(),
+                },
+                Some(context),
+            )
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let snapshot = service.snapshot();
+            if snapshot
+                .messages
+                .last()
+                .is_some_and(|message| message.reasoning == "Checking the evidence")
+            {
+                assert!(snapshot.busy);
+                assert!(snapshot.messages.last().unwrap().text.is_empty());
+                assert_eq!(snapshot.activity, "Reasoning");
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "reasoning did not reach the snapshot"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        answer_tx.send(()).unwrap();
+        let snapshot = wait_idle(&service);
+        server.join().unwrap();
+        assert!(snapshot.error.is_none());
+        let message = snapshot.messages.last().unwrap();
+        assert_eq!(message.reasoning, "Checking the evidence");
+        assert_eq!(message.text, "No confirmed problem");
+    }
+
+    #[test]
     fn failed_initial_settings_load_can_be_retried() {
         let directory = crate::config::tests::TestDir::new("ai-load-retry");
         let path = directory.0.join("settings.json");
@@ -370,6 +477,7 @@ mod tests {
         let config = ProviderConfig {
             base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
             model: "fake".into(),
+            system_prompt: String::new(),
         };
         settings::save(
             &directory.0,
@@ -420,6 +528,7 @@ mod tests {
             state.messages = vec![ChatMessage {
                 role: "assistant".into(),
                 text: "Existing answer".into(),
+                reasoning: String::new(),
                 evidence: evidence.clone(),
             }];
             state.evidence = evidence.clone();
@@ -462,6 +571,7 @@ mod tests {
         let config = ProviderConfig {
             base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
             model: "local-test".into(),
+            system_prompt: String::new(),
         };
         let mut service = AiService::new(directory.0.clone());
         service
@@ -550,6 +660,7 @@ mod tests {
             state.messages.push(ChatMessage {
                 role: role.into(),
                 text: text.into(),
+                reasoning: String::new(),
                 evidence: vec![],
             });
         }

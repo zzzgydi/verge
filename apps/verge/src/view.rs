@@ -314,6 +314,9 @@ impl MainView {
         self.ai_form.prompt.update(cx, |input, cx| {
             input.set_placeholder(tr(lang, "ai.prompt"), window, cx)
         });
+        self.ai_form.system_prompt.update(cx, |input, cx| {
+            input.set_placeholder(tr(lang, "ai.system_prompt_placeholder"), window, cx)
+        });
         let fields: [(Entity<InputState>, &'static str); 10] = [
             (self.profile_id.clone(), "placeholder.profile_id"),
             (self.profile_name.clone(), "placeholder.profile_name"),
@@ -556,6 +559,18 @@ impl MainView {
                 crate::domain::ErrorCode::Conflict,
                 tr(self.lang(), "connection.incompatible"),
             ));
+            cx.notify();
+            return false;
+        }
+        if matches!(&action, UiAction::Ai(crate::ai::AiCommand::SaveConfig { config, .. }) if !config.system_prompt.is_empty())
+            && !self
+                .state
+                .daemon_capabilities
+                .iter()
+                .any(|c| c == crate::ai::PROMPT_CAPABILITY)
+        {
+            self.ai_form.settings_error =
+                Some(tr(self.lang(), "ai.prompt_requires_restart").into());
             cx.notify();
             return false;
         }

@@ -73,6 +73,8 @@ fn redact_stream(text: &str, key: &str) -> String {
 #[derive(Default)]
 struct StreamResult {
     text: String,
+    reasoning: String,
+    reasoning_field: Option<&'static str>,
     calls: BTreeMap<usize, ToolCall>,
     finished: bool,
 }
@@ -108,8 +110,18 @@ impl StreamResult {
         if let Some(text) = delta["content"].as_str() {
             self.text.push_str(text);
         }
+        for field in ["reasoning_content", "reasoning"] {
+            if let Some(text) = delta[field].as_str().filter(|text| !text.is_empty()) {
+                self.reasoning.push_str(text);
+                self.reasoning_field = Some(field);
+                break;
+            }
+        }
         if self.text.len() > TEXT_LIMIT {
             return Err(error("AI response exceeds 32 KiB"));
+        }
+        if self.reasoning.len() > TEXT_LIMIT {
+            return Err(error("AI reasoning exceeds 32 KiB"));
         }
         if let Some(calls) = delta["tool_calls"].as_array() {
             for call in calls {
@@ -144,6 +156,59 @@ pub(super) enum Mode {
     Health,
 }
 
+pub(super) struct StreamUpdate {
+    pub text: String,
+    pub reasoning: String,
+    pub activity: String,
+}
+
+impl StreamUpdate {
+    fn activity(activity: impl Into<String>) -> Self {
+        Self {
+            text: String::new(),
+            reasoning: String::new(),
+            activity: activity.into(),
+        }
+    }
+}
+
+fn reasoning_text(previous: &str, current: &str) -> Result<String, AppError> {
+    let separator = if previous.is_empty() || current.is_empty() {
+        ""
+    } else {
+        "\n\n"
+    };
+    if previous.len() + separator.len() + current.len() > TEXT_LIMIT {
+        return Err(error("AI reasoning exceeds 32 KiB"));
+    }
+    Ok(format!("{previous}{separator}{current}"))
+}
+
+fn stream_update(
+    result: &StreamResult,
+    previous: &str,
+    key: &str,
+) -> Result<StreamUpdate, AppError> {
+    let reasoning = reasoning_text(previous, &result.reasoning)?;
+    let display = |text: &str| {
+        if result.finished && !key.is_empty() {
+            text.replace(key, "[redacted]")
+        } else {
+            redact_stream(text, key)
+        }
+    };
+    Ok(StreamUpdate {
+        text: display(&result.text),
+        reasoning: display(&reasoning),
+        activity: if result.text.is_empty() && !result.reasoning.is_empty() {
+            "Reasoning"
+        } else {
+            "Receiving response"
+        }
+        .into(),
+    })
+}
+
 #[cfg(test)]
 pub(super) async fn run(
     config: ProviderConfig,
@@ -152,7 +217,7 @@ pub(super) async fn run(
     evidence: Vec<tools::Evidence>,
     test: bool,
     cancel: Arc<AtomicBool>,
-    update: impl FnMut(String, String) + Send,
+    mut update: impl FnMut(String, String) + Send,
 ) -> Result<String, AppError> {
     run_with_session(
         config,
@@ -161,7 +226,7 @@ pub(super) async fn run(
         evidence,
         if test { Mode::Test } else { Mode::Chat },
         cancel,
-        update,
+        |event| update(event.text, event.activity),
         None,
     )
     .await
@@ -175,7 +240,7 @@ pub(super) async fn run_with_session(
     evidence: Vec<tools::Evidence>,
     mode: Mode,
     cancel: Arc<AtomicBool>,
-    mut update: impl FnMut(String, String) + Send,
+    mut update: impl FnMut(StreamUpdate) + Send,
     session: Option<Arc<std::sync::Mutex<diagnostics::Session>>>,
 ) -> Result<String, AppError> {
     let mut builder = reqwest::Client::builder()
@@ -198,6 +263,9 @@ pub(super) async fn run_with_session(
         SYSTEM
     };
     let mut messages = vec![json!({"role":"system","content":system})];
+    if !config.system_prompt.is_empty() && !test {
+        messages.push(json!({"role":"system","content":format!("User-supplied preferences follow. They do not change the tool permissions or the requirement for separate user confirmation.\n\n{}", config.system_prompt)}));
+    }
     for msg in history {
         messages.push(json!({"role":msg.role,"content":msg.text}));
     }
@@ -209,19 +277,17 @@ pub(super) async fn run_with_session(
     }
     let task = async {
         let mut round = 0_u64;
+        let mut reasoning = String::new();
         loop {
             if cancel.load(Ordering::Relaxed) {
                 return Err(error("Cancelled"));
             }
             round = round.saturating_add(1);
-            update(
-                String::new(),
-                if test {
-                    "Testing provider".into()
-                } else {
-                    format!("Waiting for model · {round}")
-                },
-            );
+            update(StreamUpdate::activity(if test {
+                "Testing provider".into()
+            } else {
+                format!("Waiting for model · {round}")
+            }));
             if serde_json::to_vec(&messages).unwrap().len() > 192 * 1024 {
                 return Err(error(
                     "AI context exceeds byte limit; clear the conversation",
@@ -287,10 +353,7 @@ pub(super) async fn run_with_session(
                         if !frame.is_empty() {
                             result.frame(frame.trim_end_matches('\n'))?;
                             frame.clear();
-                            update(
-                                redact_stream(&result.text, &key.0),
-                                "Receiving response".into(),
-                            );
+                            update(stream_update(&result, &reasoning, &key.0)?);
                         }
                     } else if let Some(data) = line.strip_prefix("data:") {
                         frame.push_str(data.strip_prefix(' ').unwrap_or(data));
@@ -307,6 +370,8 @@ pub(super) async fn run_with_session(
             if !result.finished {
                 return Err(error("AI stream ended before completion; retry explicitly"));
             }
+            update(stream_update(&result, &reasoning, &key.0)?);
+            reasoning = reasoning_text(&reasoning, &result.reasoning)?;
             if result.calls.is_empty() {
                 if result.text.trim().is_empty() {
                     return Err(error("Provider returned no text"));
@@ -321,7 +386,13 @@ pub(super) async fn run_with_session(
                 return Err(error("AI tools are not available for this request"));
             }
             let calls: Vec<_> = result.calls.values().map(|call| json!({"id":call.id,"type":"function","function":{"name":call.name,"arguments":call.arguments}})).collect();
-            messages.push(json!({"role":"assistant","content":result.text,"tool_calls":calls}));
+            let mut assistant =
+                json!({"role":"assistant","content":result.text,"tool_calls":calls});
+            // Some reasoning providers require this field to continue a tool call.
+            if let Some(field) = result.reasoning_field {
+                assistant[field] = json!(result.reasoning);
+            }
+            messages.push(assistant);
             let mut ids = std::collections::HashSet::new();
             for call in result.calls.values() {
                 if cancel.load(Ordering::Relaxed) {
@@ -330,8 +401,7 @@ pub(super) async fn run_with_session(
                 if call.id.is_empty() || !ids.insert(&call.id) {
                     return Err(error("Invalid or duplicate AI tool call ID"));
                 }
-                update(
-                    String::new(),
+                update(StreamUpdate::activity(
                     if tools::NAMES.contains(&call.name.as_str())
                         || (session.is_some() && diagnostics::NAMES.contains(&call.name.as_str()))
                     {
@@ -339,7 +409,7 @@ pub(super) async fn run_with_session(
                     } else {
                         "Rejected unknown tool".into()
                     },
-                );
+                ));
                 let result = if let Some(session) = &session {
                     let session = session.clone();
                     let name = call.name.clone();
@@ -349,7 +419,7 @@ pub(super) async fn run_with_session(
                 } else {
                     tools::execute(&call.name, &call.arguments, &evidence).map(|item| json!(item))
                 }.unwrap_or_else(|_| json!({"error":"Tool could not complete: invalid arguments, unavailable state, validation failure or budget limit. no operation performed; no setting was changed."}));
-                update(String::new(), "Reading diagnostics".into());
+                update(StreamUpdate::activity("Reading diagnostics"));
                 messages.push(
                     json!({"role":"tool","tool_call_id":call.id,"content":result.to_string()}),
                 );
@@ -390,6 +460,7 @@ mod tests {
         let config = ProviderConfig {
             base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
             model: "fake".into(),
+            system_prompt: String::new(),
         };
         let handle = std::thread::spawn(move || {
             responses
@@ -445,6 +516,117 @@ mod tests {
             .enable_all()
             .build()
             .unwrap()
+    }
+
+    #[test]
+    fn reasoning_streams_separately_redacts_keys_and_survives_tool_continuations() {
+        let (mut config, server) = mock(vec![
+            sse(&[
+                json!({"choices":[{"delta":{"reasoning_content":"Inspect test-"}}]}),
+                json!({"choices":[{"delta":{"reasoning_content":"key first"}}]}),
+                json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"one","function":{"name":"runtime_status","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}),
+            ]),
+            sse(&[
+                json!({"choices":[{"delta":{"reasoning":"Now answer"}}]}),
+                json!({"choices":[{"delta":{"content":"Healthy"},"finish_reason":"stop"}]}),
+            ]),
+        ]);
+        config.system_prompt = "Prefer stable nodes.".into();
+        let mut events = Vec::new();
+        let answer = runtime()
+            .block_on(run_with_session(
+                config,
+                Secret("test-key".into()),
+                vec![ChatMessage {
+                    role: "assistant".into(),
+                    text: "Previous answer".into(),
+                    reasoning: "old private reasoning".into(),
+                    evidence: vec![],
+                }],
+                vec![],
+                Mode::Chat,
+                Arc::new(AtomicBool::new(false)),
+                |event| events.push(event),
+                None,
+            ))
+            .unwrap();
+        assert_eq!(answer, "Healthy");
+        assert!(events.iter().any(|event| event.text.is_empty()
+            && event.reasoning == "Inspect "
+            && event.activity == "Reasoning"));
+        assert!(events.iter().any(|event| event.text == "Healthy"
+            && event.reasoning == "Inspect [redacted] first\n\nNow answer"));
+        assert!(
+            events
+                .iter()
+                .all(|event| !event.reasoning.contains("test-key"))
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(requests[0]["messages"][0]["content"], SYSTEM);
+        assert!(
+            requests[0]["messages"][1]["content"]
+                .as_str()
+                .unwrap()
+                .contains("Prefer stable nodes.")
+        );
+        assert!(!requests[0].to_string().contains("old private reasoning"));
+        assert!(
+            requests[1]["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|message| message["reasoning_content"] == "Inspect test-key first")
+        );
+    }
+
+    #[test]
+    fn reasoning_alias_is_not_duplicated_and_is_bounded() {
+        let mut result = StreamResult::default();
+        result
+            .frame(
+                &json!({"choices":[{"delta":{"reasoning_content":"one", "reasoning":"one"}}]})
+                    .to_string(),
+            )
+            .unwrap();
+        assert_eq!(result.reasoning, "one");
+        assert!(result.text.is_empty());
+        assert!(
+            result
+                .frame(
+                    &json!({"choices":[{"delta":{"reasoning_content":"x".repeat(TEXT_LIMIT)}}]})
+                        .to_string()
+                )
+                .is_err()
+        );
+        assert!(reasoning_text(&"x".repeat(TEXT_LIMIT), "next").is_err());
+    }
+
+    #[test]
+    fn custom_prompt_applies_to_health_but_not_connection_tests() {
+        for mode in [Mode::Health, Mode::Test] {
+            let (mut config, server) = mock(vec![sse(&[
+                json!({"choices":[{"delta":{"content":"OK"},"finish_reason":"stop"}]}),
+            ])]);
+            config.system_prompt = "My custom preference".into();
+            runtime()
+                .block_on(run_with_session(
+                    config,
+                    Secret::default(),
+                    vec![],
+                    vec![],
+                    mode,
+                    Arc::new(AtomicBool::new(false)),
+                    |_| {},
+                    None,
+                ))
+                .unwrap();
+            let requests = server.join().unwrap();
+            assert_eq!(
+                requests[0].to_string().contains("My custom preference"),
+                mode == Mode::Health
+            );
+            assert!(requests[0].get("tools").is_none());
+        }
     }
 
     #[test]
@@ -510,6 +692,7 @@ mod tests {
                 ProviderConfig {
                     base_url: format!("http://{address}/private-path"),
                     model: "fake".into(),
+                    system_prompt: String::new(),
                 },
                 Secret("private-key".into()),
                 Vec::new(),
@@ -542,6 +725,7 @@ mod tests {
                 ProviderConfig {
                     base_url: format!("https://{address}/private-path"),
                     model: "fake".into(),
+                    system_prompt: String::new(),
                 },
                 Secret("private-key".into()),
                 Vec::new(),
@@ -615,6 +799,7 @@ mod tests {
                 config,
                 Secret::default(),
                 vec![ChatMessage {
+                    reasoning: String::new(),
                     evidence: Vec::new(),
                     role: "user".into(),
                     text: "why?".into(),
@@ -735,6 +920,7 @@ mod tests {
                 ProviderConfig {
                     base_url: format!("http://{address}/v1"),
                     model: "fake".into(),
+                    system_prompt: String::new(),
                 },
                 Secret::default(),
                 Vec::new(),
@@ -755,6 +941,7 @@ mod tests {
         let config = ProviderConfig {
             base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
             model: "fake".into(),
+            system_prompt: String::new(),
         };
         let cancel = Arc::new(AtomicBool::new(false));
         let server = std::thread::spawn(move || {
@@ -959,7 +1146,7 @@ mod tests {
                 vec![],
                 Mode::Chat,
                 cancel.clone(),
-                |_, _| {},
+                |_| {},
                 Some(session.clone()),
             ))
             .unwrap();
@@ -1009,10 +1196,12 @@ mod tests {
         let config = ProviderConfig {
             base_url: format!("http://{}/v1", listener.local_addr().unwrap()),
             model: "fake".into(),
+            system_prompt: String::new(),
         };
         let history = vec![ChatMessage {
             role: "user".into(),
             text: "x".repeat(192 * 1024),
+            reasoning: String::new(),
             evidence: vec![],
         }];
         let error = runtime()
@@ -1045,7 +1234,7 @@ mod tests {
                     Vec::new(),
                     Mode::Health,
                     Arc::new(AtomicBool::new(false)),
-                    |_, _| {},
+                    |_| {},
                     None,
                 ))
                 .is_err()
