@@ -308,6 +308,31 @@ with owner-only read/write permissions. Changing providers requires re-entering 
 clearing the key. Loopback HTTP endpoints can be used for local models. Settings
 exports exclude AI credentials.
 
+AI turns have no tool-round cap or overall deadline. The model finishes the turn,
+or you can press **Stop**. Connection establishment still times out after 10
+seconds; context/response size limits and tool permissions remain enforced.
+Retired timeout and tool-round fields in existing settings are ignored and removed
+on the next AI settings save without clearing the key. Fully quit and reopen Verge
+after upgrading so the GUI and daemon use the same protocol.
+
+The conversation shows reasoning streamed by providers through `reasoning_content`
+or `reasoning`, separately from the answer. It expands while thinking and collapses
+when answer text arrives; click to reopen it. Providers that omit these fields do
+not show a reasoning section. Reasoning is retained in the in-memory conversation,
+not copied with the answer or sent as history on a new turn.
+
+The welcome shortcuts start a network diagnosis, an optimization request, or a
+configuration check. Optimization still prepares proposals for your confirmation;
+clicking a shortcut does not authorize configuration changes. Existing drafts are
+not overwritten.
+
+**Custom instructions (System Prompt)** in AI settings appends your preferences to
+the built-in prompt for chat and network report analysis. Leave it empty for the
+default behavior; **Restore default** clears the draft and **Save** persists it.
+The instructions are stored locally and sent to the configured model, so do not
+include credentials. Connection tests ignore them. Tool permissions and separate
+action confirmation remain enforced by the application.
+
 A question shares bounded runtime and group summaries, rule types/outbounds,
 connection counts and error counts. On-demand tools can read up to 20 active
 connections (application, destination, matched rule and outbound chain), query

@@ -92,6 +92,15 @@ GPUI spacing utilities match this scale; the application body explicitly uses
 
 ## Color and interaction
 
+- AI chat renders provider reasoning separately from the answer, expanded before
+  answer text arrives and automatically collapsed on the first answer text. Manual
+  reopening survives later chunks. Do not fabricate reasoning for providers that
+  omit it. Keep Stop visible during reasoning and tool activity. Welcome shortcuts
+  start diagnosis/optimization/config checks without overwriting drafts or bypassing
+  proposal confirmation. AI settings has a multiline custom-instructions field,
+  clear-to-default action and persistent Save/Test footer; the body scrolls at the
+  minimum window size. Custom instructions append to the built-in system prompt.
+
 - Use the app icon's purple (`#761E8D`) as the light theme's primary accent and a
   lighter purple (`#D8A0ED`) in dark mode. Surfaces carry a subtle purple tint;
   primary actions, links, focus rings and selections share the accent. Sidebar

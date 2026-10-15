@@ -1,8 +1,13 @@
 # IPC compatibility
 
 `PROTOCOL_VERSION` identifies an incompatible wire generation, not an application
-release or feature revision. The current generation is **7**; it removes retired
-encrypted-backup commands and responses. Do not accept older generations.
+release or feature revision. The current generation is **9**; it adds AI custom
+instructions, which older strict ProviderConfig readers reject. Generation 8 removed
+the required AI `timeout_seconds` and `max_tool_steps` configuration fields. Old GUI
+and daemon binaries must not mix: fully restart Verge after upgrading. Existing
+on-disk AI settings accept and ignore the retired fields; the next AI save omits
+them and retains the key. Generation 7 removed encrypted-backup commands and
+responses. Do not accept older generations.
 
 The GUI and daemon run separately. A window can reconnect to a daemon left running
 by an earlier build. A changed wire generation fails the handshake so requests
@@ -50,7 +55,7 @@ Each socket session owns its reader, writer, subscriptions and command failure s
 
 Disk logs use a bounded local socket and writer thread. All GUI/daemon writers lock a shared file before opening and appending to the active log, so rotation cannot strand another writer on an old inode. Current log plus three archives are capped at 2 MiB each. Abrupt process exit may lose the final buffered log bytes.
 
-AI uses the `ai_chat_v1` capability on generation 7. Commands cover configuration,
+AI uses the `ai_chat_v1` capability on generation 9. Commands cover configuration,
 provider testing, starting/cancelling a turn, clearing history and querying state.
 Responses identify the operation without echoing the request or its key. Only
 connections that request AI receive AI snapshots; snapshots are coalesced at the
@@ -66,6 +71,16 @@ a second user question. New GUIs gate this command. `AiSnapshot.operation` and
 per-message evidence are additive, defaulted fields; old snapshots remain readable.
 Provider tests retain chat evidence. Drafts are consumed only after an accepted
 command response; saving and testing are sequenced after successful persistence.
+
+`ChatMessage.reasoning` is an optional, default-empty provider reasoning stream;
+older readers ignore it. It is UI evidence, not next-turn model history.
+`ProviderConfig.system_prompt` defaults to empty and is omitted when empty.
+`ai_custom_prompt_v1` advertises support for saving/appending nonempty custom
+instructions; the GUI rejects such saves when the daemon lacks support instead
+of silently losing them. Although the new prompt defaults to empty on disk, a
+nonempty field is incompatible with generation 8's strict readers, so the wire
+generation advances to 9. Built-in tool
+permissions and confirmation checks do not depend on model instructions.
 
 
 `ai_actions_v1` adds `Approve { id, digest }` and `Dismiss { id }` on generation 7.
