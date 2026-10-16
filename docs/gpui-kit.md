@@ -57,7 +57,8 @@ No JavaScript shell or webview is enabled.
 - Read semantic colors from the component theme. After applying Verge's palette
   through `Theme::global_mut`, call `Theme::sync_base(cx)` so Base text, scrolling
   and other shared facilities receive the same theme.
-- Follow [Verge's UI guidelines](ui-guidelines.md) for product density and layout.
+- Follow [DESIGN.md](../DESIGN.md) for product design and layout, and
+  [UI implementation notes](ui-guidelines.md) for retained state and geometry.
 
 ## Validation and platform scope
 

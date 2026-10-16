@@ -1,137 +1,75 @@
-# Verge UI guidelines
+# Verge UI Implementation Notes
 
-All GPUI pages share this density and hierarchy. Use Tailwind's spacing and type
-scales as a reference, with desktop controls and retained GPUI entities. This is a
-native design system; it does not add a web styling dependency.
+[DESIGN.md](../DESIGN.md) is the authoritative product design specification.
+Read it before changing any page. These notes preserve implementation constraints,
+not a second visual system. [GPUI Kit integration](gpui-kit.md) describes the locked
+component APIs and platform setup.
 
-Use [GPUI Kit](gpui-kit.md) as the application UI entry point. Prefer its styled
-components and Base behavior primitives; follow the locked release's APIs and the
-[official design guide](https://gpui-kit.com/docs/design-guides).
+## Retained State And Geometry
 
-## Scale
-
-| Role | Logical pixels | Tailwind reference |
-| --- | --- | --- |
-| Spacing | 4, 8, 12, 16, 20, 24, 32 | 1, 2, 3, 4, 5, 6, 8 |
-| Page inset / section gap | 24 / 16 | p-6 / gap-4 |
-| Panel inset / compact row inset | 16 / 12 horizontal, 8 vertical | p-4 / px-3 py-2 |
-| Metadata | 12 / 16 line height | text-xs |
-| Body and controls | 14 / 20 | text-sm |
-| Section heading | 16 / 24, medium | text-base |
-| Page heading | 24 / 32, semibold | text-2xl |
-| Metric value | 24 / 32, medium | text-2xl |
-| Control / compact action height | 32 / 28 | h-8 / h-7 |
-| Panel / control radius | 12 / 8 | rounded-xl / rounded-lg |
-| Icons / selection marker | 16 / 20 | size-4 / size-5 |
-
-`appearance::metrics` owns shared dimensions. The theme uses a 16px rem basis so
-GPUI spacing utilities match this scale; the application body explicitly uses
-14px text. Do not change the rem basis to adjust body text.
-
-## Layout and content
-
-- Use `PageHeader` for a single 32px title-and-actions row on every page, including
-  loading states. No permanent subtitle explaining what the page already names.
-- Keep useful state, counts and actions in the header. Filters occupy one separate
-  32px toolbar where needed. Empty states explain the next action; settings help
-  text explains consequences or non-obvious constraints.
-- Use `panel` for grouped content. Avoid nested decorative cards and repeated
-  titles. Prefer alignment, typography and restrained borders to extra padding.
-- Keep page headers and primary actions outside the scrollable body. Give each
-  page and settings category an explicit, distinct scroll-container ID.
-- Overview groups the active profile, source, last update, core state and version,
-  system proxy, mode and a compact network status row in one full-width panel.
-  Below it, current proxies and telemetry share an equal-width, equal-height grid
-  row with aligned headings and metric footers. Use a 440px minimum height, 20px
-  panel padding and 16px section gaps; smaller windows scroll the body to keep
-  these cards readable. Show up to four current proxy groups with member counts,
-  selected node protocols and delay; count all eligible groups for the current
-  mode in the footer.
-  Keep Check network and Optimize in the fixed page header. The full-width panel
-  has a compact health summary opening an independently owned results sheet.
-  Show check scope and incomplete evidence explicitly; AI explanation is optional
-  and sending a summary requires consent. A proposed node change shows before,
-  after and exit-IP impact before confirmation. Background observation defaults off.
-  Active probes require their own opt-in explaining that Mihomo updates shared
-  health records and automatic groups may change selection. Without it, local
-  checks remain available and node connectivity is explicitly untested.
-  Network-check results lead with a specific verdict, one next action and compact
-  configuration/core/system-proxy/node results. Group probes by node and show the
-  latest result per target. Never turn untested evidence into a successful network
-  verdict. Put technical evidence behind disclosure, and observation settings and
-  history in separate tabs. Probe consent is contextual and immediately starts the
-  requested check after confirmation; do not put a permanent disclaimer wall above
-  results. Keep cancel/retry and the verdict visible while the body scrolls.
-  Comparison requires an explicit group choice; never preselect an unrelated group
-  from a failed-node report. Show operation errors across all three tabs and keep
-  clearing available for a sole current report. Historical conclusions retain
-  terminal check failures independently of transient operation or model errors.
-  A single route or empty state centers in its space. Keep cumulative traffic
-  and recent peaks under their corresponding rates, and use two continuous paths
-  scaled to the actual plot width with a subtle horizontal grid. Groups, rules,
-  providers, memory and connections use the same compact metric layout.
-- Profiles use 12px content padding and an 8px action footer. Settings use a
-  bounded 920px form with right-aligned controls and separators instead of nested
-  cards. Input-and-action groups must fill their control column.
-- Proxy groups and nodes are 64px tall, followed by an 8px gap. A node has two
-  lines (name, protocol/capabilities), a centered selection marker, and a 28px
-  delay action. Use 12px horizontal padding and a 4px gap between text lines.
-  Expanded groups have a 44px toolbar and a 28px left inset shared with node rows.
-  Global mode has one persistent search/test/sort toolbar and no group inset.
+- `appearance::metrics` defines common dimensions; `appearance.rs` defines semantic
+  colors for both themes. Use the shared `PageHeader`, `panel` and settings
+  row components. Do not introduce per-page palettes or a global status bar.
+- Every page owns its scrollable body with a distinct container ID. Headers and
+  important actions stay fixed. Preserve input entities and scroll handles across
+  renders. Root mounts sheets, dialogs and notifications exactly once.
+- Proxy rows remain 64px tall plus an 8px gap, with 12px horizontal padding. Expanded
+  groups have a 44px toolbar and 28px indentation; global mode has no indentation.
   Use two columns only when the actual content area is at least 780px wide.
-  Expansion and collapse preserve virtualized rows until the animation finishes.
-- Rules use 36px rows (56px provider cards plus 8px spacing); connections retain compact table rows;
-  logs use 24px physical lines, preserving embedded line breaks. The log viewport
-  scrolls in both axes and measures the longest filtered message; never apply
-  ellipsis or a fixed single-line height to an entire log event. These data views
-  keep their own virtualized scrolling.
-- Navigation uses one list of 40px rows without section headings; Intelligence
-  follows Logs. Keep icon alignment stable during sidebar animation.
-  At 960×640, actions must fit and long names truncate without pushing controls
-  out of view. Larger windows add visible data, not larger padding.
+  Keep virtual rows alive during expansion/collapse animation.
+- Rules use 36px rows and 56px provider sections plus 8px spacing. Connections retain
+  measured column widths. Logs use 24px physical lines with two-axis scrolling and
+  measured message widths; never truncate a complete multi-line log event to one row.
+- Delay result labels and semantic colors update in the same render, including
+  hovered and pressed states. Keep explicit waiting/failure labels and retry actions.
+  Copy and delay actions must not also switch the node.
 
-## Color and interaction
+## Overview Evidence
 
-- AI chat renders provider reasoning separately from the answer, expanded before
-  answer text arrives and automatically collapsed on the first answer text. Manual
-  reopening survives later chunks. Do not fabricate reasoning for providers that
-  omit it. Keep Stop visible during reasoning and tool activity. Welcome shortcuts
-  start diagnosis/optimization/config checks without overwriting drafts or bypassing
-  proposal confirmation. AI settings has a multiline custom-instructions field,
-  clear-to-default action and persistent Save/Test footer; the body scrolls at the
-  minimum window size. Custom instructions append to the built-in system prompt.
+- The chart uses 40 bounded samples, scaled to its actual width. Do not call this
+  one minute: the stream may reconnect or sample at a different rate. Download is
+  purple and upload is blue. Missing values remain unknown; cumulative counters
+  and peaks stay associated with the correct rate.
+- Use shape-preserving cubic interpolation, not moving averages or an unconstrained
+  spline. Draw both translucent fills before either stroke. Keep numbered ticks
+  in one unit and use rounded scale bounds with headroom above the largest sample.
+  Measure the longest tick at the rendered font size; never wrap numeric ticks.
+- Current Proxies shows at most two rows and links to the full proxy page. The
+  combined supporting column and traffic panel share the same height; extra routes
+  must not make the overview taller. Use a minimum height, not a fixed cap, so
+  wrapped metadata cannot push the report action outside its panel. Custom-content
+  buttons need an explicit accessible name.
+- Node latency counts unique visible endpoints, not group memberships or built-in
+  outbounds. Below 200ms, at least 200ms, failed and untested are separate categories.
+  Explicit delay results override snapshot values; a newer test failure supersedes
+  an older successful delay. These are latest observations,
+  not a new health check. Do not issue backend requests from render.
+- Check Network and Optimize preserve distinct entry points and the independent
+  report entity. Local checks remain available without probe consent. Active probes
+  require opt-in because Mihomo shared health records may affect automatic routing.
+- Reports lead with a specific verdict and next action. Group latest probe results
+  by node and target. Technical evidence is collapsible; history and observation
+  settings are separate tabs. Incomplete checks cannot become successful verdicts.
+- Comparison requires explicit group selection. Proposed changes show before/after
+  and exit-IP impact and require confirmation. Keep errors visible across tabs and
+  retain terminal check failures in historical reports. A sole report can be cleared.
 
-- Use the app icon's purple (`#761E8D`) as the light theme's primary accent and a
-  lighter purple (`#D8A0ED`) in dark mode. Surfaces carry a subtle purple tint;
-  primary actions, links, focus rings and selections share the accent. Sidebar
-  text stays neutral except for the current page. A selected node uses a filled
-  check marker, a contrasting border and a tinted background, never color alone.
-- Traffic uses purple for download and teal for upload (`#0C7066` in light mode,
-  `#51CFC3` in dark mode). Labels, legend samples, values and paths must agree.
-  Keep success, warning and error colors reserved for their semantic states.
-- Truncated proxy names and rule fields expose full-text tooltips and copying.
-  Proxy groups support keyboard expansion. Nodes expose selection semantics,
-  visible focus, arrow navigation across virtualized rows, Enter/Space selection,
-  and Command-C copying. Copy and delay actions must not switch the node.
-- Use compact icon refresh actions with tooltips and accessible labels.
-- Semantic text meets 4.5:1 contrast on normal, selected, hovered and pressed
-  surfaces in both themes. Logs color the severity marker, keeping payload text
-  neutral and preserving measured physical lines.
-- Hover must preserve selection. Delay label and semantic color update in the
-  same render, including while hovered or pressed. Pending and failed tests have
-  explicit labels; retry stays on the same action.
-- Use SVG icons from the existing icon system. Center icons in fixed boxes rather
-  than aligning glyphs to text baselines. Preserve native focus and keyboard behavior.
-- Keep state in feature entities, emit typed actions, share snapshot data, and
-  virtualize long lists. Visual polish must not introduce polling or per-row entities.
+## Intelligence And Forms
 
-## Review
+- Provider reasoning stays separate from answers: expand while thinking, collapse
+  on the first answer text, and retain manual reopening during subsequent chunks.
+  Providers without reasoning fields get no synthetic reasoning section.
+- Keep Stop visible during reasoning and tool calls. Welcome shortcuts start real
+  requests, preserve drafts and never bypass confirmation of configuration changes.
+- AI settings has a multiline appended system prompt, Restore Default and a fixed
+  Save/Test footer. Other settings use bounded forms and row separators rather than
+  nested cards. Input/action groups fill their control column.
 
-Check every affected page at 960×640 and a wider window, in light and dark themes.
-Include populated and empty/loading states, long names, selection, search,
-scrolling and a delay result arriving under the pointer. For virtual lists, update
-declared row heights together with rendered geometry.
+## Validation
 
-References: [spacing](https://tailwindcss.com/docs/theme#default-theme-variable-reference),
-[padding](https://tailwindcss.com/docs/padding),
-[typography](https://tailwindcss.com/docs/font-size).
+Run `./scripts/check-rust-workspaces.sh`, format and locale checks. Verify contrast,
+keyboard selection, pending operations, long values, scrolling and minimum-width
+hit regions. Capture production GPUI views with the native Metal renderer on the
+main thread using `HeadlessAppContext::with_platform` and `capture_screenshot`.
+Synthetic screenshots are visual evidence, not a test of real network operations
+or native accessibility integration. Follow the complete matrix in `DESIGN.md`.
