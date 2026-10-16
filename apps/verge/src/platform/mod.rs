@@ -48,7 +48,7 @@ pub use hotkey::{GlobalHotKeyBackend, HotkeyBackend, HotkeyRegistration, spawn_h
 
 mod daemon;
 pub use daemon::{
-    daemon_socket_path, redirect_stderr, redirect_stderr_to_log, restore_gui_windows,
+    StderrLog, daemon_socket_path, redirect_stderr, redirect_stderr_to_log, restore_gui_windows,
     run_accessory_appkit_loop, spawn_daemon,
 };
 

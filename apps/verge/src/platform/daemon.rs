@@ -6,6 +6,8 @@ use std::{
     process::{Command, Stdio},
 };
 
+pub use super::rotating_log::StderrLog;
+
 /// 守护进程 Unix socket 的固定路径（数据目录内，用户私有，权限 0600）。
 pub fn daemon_socket_path(data_dir: &Path) -> PathBuf {
     data_dir.join("daemon.sock")
@@ -15,15 +17,14 @@ pub fn daemon_socket_path(data_dir: &Path) -> PathBuf {
 ///
 /// 守护进程与 GUI 进程都调用（双击启动时没有终端，日志必须落盘才能排查）。
 /// stderr 经有界本机 socket 交给日志线程；跨进程锁协调轮转，保留当前文件与 3 份历史，
-/// 每份最多 2 MiB。强制退出时尚在 socket 缓冲内的末尾日志可能丢失。
-pub fn redirect_stderr_to_log(data_dir: &Path) -> io::Result<std::path::PathBuf> {
+/// 每份最多 2 MiB。正常退出前用返回的 handle 有界等待写完；强制退出仍可能丢失末尾日志。
+pub fn redirect_stderr_to_log(data_dir: &Path) -> io::Result<StderrLog> {
     let path = data_dir.join("logs").join("verge.log");
-    redirect_stderr(&path)?;
-    Ok(path)
+    redirect_stderr(&path)
 }
 
 /// 把 stderr 重定向到指定文件。
-pub fn redirect_stderr(path: &Path) -> io::Result<()> {
+pub fn redirect_stderr(path: &Path) -> io::Result<StderrLog> {
     #[cfg(unix)]
     {
         super::rotating_log::redirect(path)
