@@ -1750,9 +1750,13 @@ pub fn run_daemon() {
         }
     };
     // 双击启动没有终端：先把 stderr 重定向到数据目录日志，daemon 的运行日志落盘可查。
-    if let Err(error) = redirect_stderr_to_log(&config.data_dir) {
-        eprintln!("failed to redirect daemon stderr to log: {error}");
-    }
+    let stderr_log = match redirect_stderr_to_log(&config.data_dir) {
+        Ok(log) => Some(log),
+        Err(error) => {
+            eprintln!("failed to redirect daemon stderr to log: {error}");
+            None
+        }
+    };
     eprintln!(
         "[verge] daemon starting, data_dir={}",
         config.data_dir.display()
@@ -1803,7 +1807,24 @@ pub fn run_daemon() {
             tray_rx,
             tray_updates_tx,
             hotkey_sync_tx,
-            shutdown_tx,
+            move |restart| {
+                if restart {
+                    // The socket and primary GUI must be gone before starting the replacement.
+                    // Otherwise it handshakes with this daemon and exits as a duplicate.
+                    if let Err(error) = spawn_gui_process() {
+                        eprintln!("failed to restart Verge: {error}");
+                    }
+                }
+                if let Some(log) = stderr_log {
+                    // Never let a stuck disk or another process's log lock block quit.
+                    // Do not report failure through the same possibly stalled stderr.
+                    let _ = log.flush(Duration::from_millis(200));
+                }
+                if restart {
+                    std::process::exit(0);
+                }
+                let _ = shutdown_tx.send(());
+            },
         );
     });
     run_daemon_appkit(tray, hotkey_sync_rx, shutdown_rx);
@@ -1837,7 +1858,7 @@ fn run_daemon_backend(
     tray_rx: Receiver<TrayCommand>,
     tray_updates: TrayUpdateSender,
     hotkey_sync: Sender<Option<String>>,
-    shutdown: Sender<()>,
+    finish_shutdown: impl FnOnce(bool),
 ) {
     let mut backend = match Backend::new(config) {
         Ok(backend) => backend,
@@ -2160,16 +2181,7 @@ fn run_daemon_backend(
             ipc_started.elapsed().as_millis()
         ),
     );
-    if backend.restart_requested {
-        // The socket and primary GUI must be gone before starting the replacement.
-        // Otherwise it handshakes with this daemon and exits as a duplicate.
-        if let Err(error) = spawn_gui_process() {
-            eprintln!("failed to restart Verge: {error}");
-        }
-        std::process::exit(0);
-    }
-    // 清理完成：请求主线程终止 AppKit 事件循环，守护进程随 main 返回真正退出。
-    let _ = shutdown.send(());
+    finish_shutdown(backend.restart_requested);
 }
 
 /// 托盘"显示 Verge"与守护侧全局快捷键共用：有主 GUI 则激活其窗口，
@@ -3388,6 +3400,29 @@ mod tests {
 
     #[test]
     fn shutdown_logs_recovery_failure_and_preserves_recovery_record() {
+        const CHILD: &str = "VERGE_TEST_SHUTDOWN_LOG";
+        let Some(log_dir) = std::env::var_os(CHILD) else {
+            let log_dir =
+                std::env::temp_dir().join(format!("verge-shutdown-log-{}", std::process::id()));
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "daemon::tests::shutdown_logs_recovery_failure_and_preserves_recovery_record",
+                    "--nocapture",
+                ])
+                .env(CHILD, &log_dir)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            let text = fs::read_to_string(log_dir.join("logs/verge.log")).unwrap();
+            assert!(text.contains("Shutdown cleanup failed"));
+            assert!(text.contains("Shutdown backend: success=false"));
+            fs::remove_dir_all(log_dir).unwrap();
+            return;
+        };
+        // Redirect only in a child: process exit must not drop the cleanup error,
+        // and process-global stderr changes must not affect other tests.
+        let log = redirect_stderr_to_log(std::path::Path::new(&log_dir)).unwrap();
         let (mut backend, data_dir) = test_backend("shutdown-recovery-error");
         let config_path = data_dir.join("core.yaml");
         fs::write(&config_path, "{}").unwrap();
@@ -3446,6 +3481,8 @@ mod tests {
                 .any(|log| log.payload.contains(&backend.config.secret))
         );
         fs::remove_dir_all(data_dir).unwrap();
+        log.flush(Duration::from_millis(200)).unwrap();
+        std::process::exit(0);
     }
 
     #[test]
