@@ -48,7 +48,7 @@ fn policy_summary(lang: Lang, profile: &Profile) -> String {
 pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
     let lang = view.lang();
     let refreshing = view.is_pending(&["profiles"]);
-    let mut list = v_flex().gap_4();
+    let mut list = v_flex().gap_2();
     if view.state.profiles.is_empty() {
         list = list.child(if refreshing {
             super::skeleton_rows(2).into_any_element()
@@ -281,8 +281,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                             div()
                                 .size_8()
                                 .flex_shrink_0()
-                                .rounded_lg()
-                                .bg(cx.theme().accent)
+                                .text_color(cx.theme().muted_foreground)
                                 .flex()
                                 .items_center()
                                 .justify_center()

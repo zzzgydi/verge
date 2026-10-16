@@ -139,15 +139,6 @@ pub fn fmt_field_change(lang: Lang, field: &str, old: &str, new: &str) -> String
     )
 }
 
-/// 状态栏连接数。
-pub fn fmt_statusbar_connections(lang: Lang, count: usize) -> String {
-    fmt(
-        lang,
-        "statusbar.connections",
-        &[("count", &count.to_string())],
-    )
-}
-
 /// 连接页汇总行。
 pub fn fmt_connections_summary(lang: Lang, count: usize, upload: &str, download: &str) -> String {
     fmt(

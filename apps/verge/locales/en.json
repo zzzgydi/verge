@@ -527,13 +527,6 @@
   "sheet.yaml.loading": "Loading profile YAML…",
   "sheet.yaml.save": "Save to This Profile",
   "sheet.yaml.title": "Profile YAML",
-  "status.connections_waiting": "Waiting for connections…",
-  "status.core_offline": "Core offline",
-  "status.core_running": "Core running",
-  "status.core_state_unknown": "Core status unknown",
-  "status.core_unknown": "Status unknown",
-  "status.mode_unknown": "Mode unknown",
-  "statusbar.connections": "{count} connections",
   "titlebar.theme.dark": "Theme: Dark (click to change)",
   "titlebar.theme.light": "Theme: Light (click to change)",
   "titlebar.theme.system": "Theme: System (click to change)",
@@ -762,5 +755,6 @@
   "health.historical": "Historical result, not the current network state.",
   "health.progress": "Local checks {local}/3 · Probe results {probes}",
   "health.choose_group": "Choose a group",
-  "health.open_proxies": "Open proxies"
+  "health.open_proxies": "Open proxies",
+  "sidebar.toggle": "Toggle sidebar"
 }

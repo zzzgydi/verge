@@ -122,11 +122,10 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
                     .items_center()
                     .justify_center()
                     .size_10()
-                    .rounded_xl()
-                    .bg(cx.theme().muted)
+                    .text_color(cx.theme().muted_foreground)
                     .child(Icon::new(IconName::Bot).size_5()),
             )
-            .child(div().text_2xl().font_semibold().child(tr(
+            .child(div().text_xl().font_semibold().child(tr(
                 lang,
                 if ready {
                     "ai.welcome"
@@ -176,7 +175,7 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
                         .debug_selector(move || format!("ai-starter-{index}"))
                         .flex_1()
                         .min_w_0()
-                        .h(px(62.))
+                        .h(px(40.))
                         .icon(icon)
                         .label(tr(lang, title))
                         .accessibility_label(tr(lang, prompt))
@@ -221,7 +220,7 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
                 .px_4()
                 .pr_12()
                 .py_3()
-                .rounded_xl()
+                .rounded(px(8.))
                 .bg(cx.theme().muted)
                 .child(
                     div()
@@ -592,7 +591,7 @@ pub(super) fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement 
                     .max_w(px(CHAT_WIDTH))
                     .border_1()
                     .border_color(cx.theme().border)
-                    .rounded_xl()
+                    .rounded(px(8.))
                     .p_3()
                     .gap_2()
                     .child(

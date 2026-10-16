@@ -62,13 +62,14 @@ impl MainView {
                         .ghost()
                         .w_full()
                         .h(px(crate::appearance::metrics::NAV_ROW))
-                        // 48px collapsed width leaves 18px for the icon after padding and borders.
-                        .px(px(14.))
-                        .rounded_lg()
+                        // Leave room for the icon and button borders when collapsed.
+                        .px(px(13.))
+                        .rounded(px(6.))
                         .border_1()
                         .border_color(gpui_kit::transparent_black())
                         .text_color(cx.theme().foreground)
                         .accessibility_label(tr(lang, label))
+                        .toggled(self.state.page == page)
                         .child(
                             h_flex()
                                 .w_full()
@@ -96,9 +97,8 @@ impl MainView {
                             button
                                 .bg(cx.theme().list_active)
                                 .text_color(cx.theme().accent_foreground)
-                                .border_color(cx.theme().list_active_border)
+                                .font_medium()
                         })
-                        .accessibility_label(tr(lang, label))
                         .tooltip(tr(lang, label))
                         .on_click(cx.listener(move |this, _, _, cx| this.navigate(page, cx)))
                 }));
@@ -108,11 +108,12 @@ impl MainView {
             .h_full()
             .flex_shrink_0()
             .px(px(4.))
+            .bg(cx.theme().sidebar)
             .overflow_hidden()
-            .gap_4()
+            .gap_2()
             .child(
                 h_flex()
-                    .h_16()
+                    .h(px(56.))
                     .w_full()
                     .flex_shrink_0()
                     .px(px(8.))
@@ -126,14 +127,14 @@ impl MainView {
                             .child(
                                 svg()
                                     .path("branding/logo.svg")
-                                    .size_7()
+                                    .size_6()
                                     .flex_shrink_0()
                                     .text_color(cx.theme().primary),
                             )
                             .child(
                                 div()
                                     .flex_shrink_0()
-                                    .text_xl()
+                                    .text_lg()
                                     .font_semibold()
                                     .child("Verge"),
                             ),
@@ -146,6 +147,8 @@ impl MainView {
                             .ghost()
                             .small()
                             .size(px(32.))
+                            .accessibility_label(tr(lang, "sidebar.toggle"))
+                            .tooltip(tr(lang, "sidebar.toggle"))
                             .icon(if collapsed {
                                 IconName::PanelLeftOpen
                             } else {

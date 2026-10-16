@@ -443,7 +443,8 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 Button::new("close-all-connections")
                     .label(tr(lang, "connections.close_all"))
                     .small()
-                    .danger()
+                    .outline()
+                    .text_color(cx.theme().danger)
                     .disabled(
                         view.state.connection_notice.is_some()
                             || view.is_pending(&["connections_write"])

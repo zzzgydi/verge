@@ -524,8 +524,7 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 .when(view.settings_category == category, |button| {
                     button
                         .bg(cx.theme().list_active)
-                        .border_1()
-                        .border_color(cx.theme().list_active_border)
+                        .text_color(cx.theme().accent_foreground)
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.settings_category = category;

@@ -128,9 +128,9 @@ pub fn render(view: &mut MainView, window: &mut Window, cx: &mut Context<MainVie
                 .flex_1()
                 .min_h_0()
                 .overflow_hidden()
-                .border_1()
+                .border_t_1()
                 .border_color(cx.theme().border)
-                .rounded_lg()
+                .bg(cx.theme().group_box)
                 .p(px(LOG_INSET))
                 .child(
                     v_virtual_list(

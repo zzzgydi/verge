@@ -49,10 +49,10 @@ pub fn render(row: &Row, page: &ProxyPage, cx: &mut Context<ProxyPage>) -> AnyEl
                         .size_full()
                         .px(px(metrics::ITEM_INSET))
                         .gap(px(metrics::ITEM_GAP))
-                        .rounded_lg()
-                        .bg(cx.theme().muted.opacity(0.35))
+                        .rounded(px(6.))
+                        .bg(cx.theme().muted.opacity(0.5))
                         .border_1()
-                        .border_color(cx.theme().border)
+                        .border_color(gpui_kit::transparent_black())
                         .cursor_pointer()
                         .hover(|s| s.bg(cx.theme().list_hover))
                         .on_click(cx.listener(move |this, _, _, cx| this.toggle(ix, cx)))
@@ -240,12 +240,12 @@ fn card(group: usize, member: usize, page: &ProxyPage, cx: &mut Context<ProxyPag
         .h_full()
         .px(px(metrics::ITEM_INSET))
         .gap(px(metrics::ITEM_GAP))
-        .rounded_lg()
+        .rounded(px(6.))
         .border_1()
         .border_color(if selected {
             selection_color(cx)
         } else {
-            cx.theme().border.opacity(0.7)
+            gpui_kit::transparent_black()
         })
         .bg(if selected {
             cx.theme().list_active

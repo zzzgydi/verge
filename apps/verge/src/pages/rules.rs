@@ -134,8 +134,8 @@ pub fn render(view: &mut MainView, cx: &mut Context<MainView>) -> AnyElement {
                                 .pb_2()
                                 .child(
                                     base.h(px(56.))
-                                        .rounded_lg()
-                                        .bg(cx.theme().accent.opacity(0.35))
+                                        .rounded(px(6.))
+                                        .bg(cx.theme().muted.opacity(0.5))
                                         .justify_between()
                                         .child(
                                             v_flex()

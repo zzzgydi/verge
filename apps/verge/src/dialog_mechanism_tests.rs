@@ -759,6 +759,17 @@ fn all_pages_render_at_minimum_window_size(cx: &mut TestAppContext) {
             .expect("every page has one shared header");
         assert_eq!(header.size.height, gpui_kit::px(32.), "{page:?}");
         assert!(header.right() <= gpui_kit::px(960.), "{page:?}");
+        let pane = cx.debug_bounds("content-pane").unwrap();
+        assert_eq!(
+            pane.bottom(),
+            gpui_kit::px(632.),
+            "only an 8px inset, no footer on {page:?}"
+        );
+        assert_eq!(
+            pane.right(),
+            gpui_kit::px(952.),
+            "shared rounded content pane on {page:?}"
+        );
     }
 }
 

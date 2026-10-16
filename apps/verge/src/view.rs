@@ -4,7 +4,7 @@ use std::sync::mpsc;
 use crate::domain::{
     CommandActor, CommandApproval, CommandContext, CommandRisk, ProfileId, ThemePreference,
 };
-use crate::ui::{CoreStatus, Page, UiAction, UiRequestEnvelope, UiState};
+use crate::ui::{Page, UiAction, UiRequestEnvelope, UiState};
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
     VirtualListScrollHandle,
@@ -12,7 +12,6 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{EditorState, InputEvent, InputState},
-    status_bar::StatusBar,
     table::TableState,
     theme::{Theme, ThemeMode},
     v_flex,
@@ -56,22 +55,8 @@ pub struct SheetState {
     pub merge_preview_dialog: bool,
 }
 
-pub struct ConnectionCount {
-    count: Option<usize>,
-    lang: Lang,
-}
-impl Render for ConnectionCount {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().child(self.count.map_or_else(
-            || tr(self.lang, "status.connections_waiting").to_owned(),
-            |count| i18n::fmt_statusbar_connections(self.lang, count),
-        ))
-    }
-}
-
 pub struct MainView {
     pub state: UiState,
-    pub connection_count: Entity<ConnectionCount>,
     pub ai_form: pages::ai::AiForm,
     pub optimization_panel: Entity<pages::home::optimization::Panel>,
     pub telemetry: Entity<pages::home::telemetry::Telemetry>,
@@ -236,7 +221,6 @@ impl MainView {
         let lang = Lang::En;
         Self {
             state: UiState::default(),
-            connection_count: cx.new(|_| ConnectionCount { count: None, lang }),
             ai_form: pages::ai::AiForm::new(window, cx),
             optimization_panel: cx.new(|_| pages::home::optimization::Panel::default()),
             telemetry: cx.new(|_| pages::home::telemetry::Telemetry::new()),
@@ -761,15 +745,6 @@ impl MainView {
 
     /// Update retained table state on data arrival, never from render.
     pub fn sync_connections(&self, cx: &mut Context<Self>) {
-        let count = self.state.connections.as_ref().map(|s| s.connection_count);
-        let lang = self.lang();
-        self.connection_count.update(cx, |view, cx| {
-            if view.count != count || view.lang != lang {
-                view.count = count;
-                view.lang = lang;
-                cx.notify();
-            }
-        });
         let snapshot = self.state.connections.clone();
         let lang = self.lang();
         self.connections_table.update(cx, |table, cx| {
@@ -918,25 +893,6 @@ impl MainView {
                 ),
             )
     }
-
-    fn status_bar(&self, _cx: &mut Context<Self>) -> impl IntoElement {
-        let lang = self.lang();
-        let core_status = match self.state.core_status {
-            CoreStatus::Running => tr(lang, "status.core_running"),
-            CoreStatus::Offline => tr(lang, "status.core_offline"),
-            CoreStatus::Unknown => tr(lang, "status.core_state_unknown"),
-        };
-        let mode = self
-            .state
-            .mode
-            .map(|mode| pages::home::mode_label(lang, mode))
-            .unwrap_or_else(|| tr(lang, "status.mode_unknown"));
-        // 流量与内存留给首页统计卡（避免状态栏与首页信息重复）。
-        StatusBar::new()
-            .left(core_status)
-            .left(mode)
-            .right(self.connection_count.clone())
-    }
 }
 
 impl Render for MainView {
@@ -956,6 +912,7 @@ impl Render for MainView {
         // Each page owns its scrollable body; shared chrome never retains page offsets.
         let content_area = v_flex()
             .id("page-content")
+            .debug_selector(|| "page-content".into())
             .flex_1()
             .min_h_0()
             .overflow_hidden()
@@ -989,7 +946,7 @@ impl Render for MainView {
             )
             .on_action(cx.listener(|this, _: &RefreshPage, _, cx| this.refresh_current_page(cx)))
             .size_full()
-            .bg(cx.theme().background)
+            .bg(cx.theme().sidebar)
             .text_size(px(crate::appearance::metrics::BODY))
             .text_color(cx.theme().foreground)
             .child(self.title_bar(window, cx))
@@ -997,19 +954,19 @@ impl Render for MainView {
                 h_flex()
                     .flex_1()
                     .min_h_0()
-                    .px_3()
-                    .pb_3()
-                    .gap_2()
+                    .pr(px(crate::appearance::metrics::WINDOW_INSET))
+                    .pb(px(crate::appearance::metrics::WINDOW_INSET))
                     .child(self.sidebar(cx))
                     .child(
                         v_flex()
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .bg(cx.theme().group_box)
+                            .debug_selector(|| "content-pane".into())
+                            .bg(cx.theme().background)
                             .border_1()
                             .border_color(cx.theme().border)
-                            .rounded(px(crate::appearance::metrics::PANEL_RADIUS))
+                            .rounded(px(crate::appearance::metrics::CONTENT_RADIUS))
                             .overflow_hidden()
                             .when_some(self.state.connection_notice.clone(), |this, message| {
                                 this.child(
@@ -1042,6 +999,5 @@ impl Render for MainView {
                             .child(content_area),
                     ),
             )
-            .child(self.status_bar(cx))
     }
 }

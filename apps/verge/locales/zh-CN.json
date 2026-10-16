@@ -527,13 +527,6 @@
   "sheet.yaml.loading": "正在加载配置 YAML…",
   "sheet.yaml.save": "保存到该配置",
   "sheet.yaml.title": "配置 YAML",
-  "status.connections_waiting": "连接等待中",
-  "status.core_offline": "内核离线",
-  "status.core_running": "内核运行中",
-  "status.core_state_unknown": "内核状态未知",
-  "status.core_unknown": "状态未知",
-  "status.mode_unknown": "模式未知",
-  "statusbar.connections": "连接 {count}",
   "titlebar.theme.dark": "主题：深色（点击切换）",
   "titlebar.theme.light": "主题：浅色（点击切换）",
   "titlebar.theme.system": "主题：跟随系统（点击切换）",
@@ -762,5 +755,6 @@
   "health.historical": "这是过去的检查记录，不代表当前网络状态。",
   "health.progress": "本地检查 {local}/3 · 已获得 {probes} 项探测结果",
   "health.choose_group": "选择策略组",
-  "health.open_proxies": "查看当前代理"
+  "health.open_proxies": "查看当前代理",
+  "sidebar.toggle": "显示或隐藏侧栏"
 }
