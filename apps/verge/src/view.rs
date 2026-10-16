@@ -899,7 +899,7 @@ impl Render for MainView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let page = self.state.page;
         let content = match page {
-            Page::Home => pages::home::render(self, cx),
+            Page::Home => pages::home::render(self, window, cx),
             Page::Proxies => pages::proxies::render(self, cx),
             Page::Profiles => pages::profiles::render(self, cx),
             Page::Connections => pages::connections::render(self, cx),

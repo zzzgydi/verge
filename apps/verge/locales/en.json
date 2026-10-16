@@ -266,7 +266,7 @@
   "home.rule_count": "rules",
   "home.run_mode": "Mode",
   "home.sample_peak": "Recent peak",
-  "home.samples": "LAST 40 SAMPLES",
+  "home.samples": "Last 40 samples",
   "home.system_proxy": "System Proxy",
   "home.tile.connections": "Connections",
   "home.tile.core": "Core Status",
@@ -756,5 +756,16 @@
   "health.progress": "Local checks {local}/3 · Probe results {probes}",
   "health.choose_group": "Choose a group",
   "health.open_proxies": "Open proxies",
-  "sidebar.toggle": "Toggle sidebar"
+  "home.chart_scale": "Auto scale · 0 baseline",
+  "home.node_latency": "Node latency",
+  "home.nodes_evidence": "Latest samples, not a live health check.",
+  "home.nodes_failed": "Test failed",
+  "home.nodes_low": "Below 200 ms",
+  "home.nodes_slow": "200 ms or above",
+  "home.nodes_total": "Total nodes",
+  "home.nodes_untested": "Not tested",
+  "sidebar.toggle": "Toggle sidebar",
+  "home.download": "Download",
+  "home.upload": "Upload",
+  "home.view_all": "View all"
 }

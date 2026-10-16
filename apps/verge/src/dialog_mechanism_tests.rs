@@ -774,6 +774,303 @@ fn all_pages_render_at_minimum_window_size(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn overview_prioritizes_traffic_and_keeps_controls_inside_configuration(cx: &mut TestAppContext) {
+    use crate::domain::{
+        ApplicationSettings, ApplicationSettingsSnapshot, RunMode, ThemePreference,
+    };
+    use gpui_kit::{px, size};
+    let (_, holder, cx) = setup(cx);
+    let view = holder.borrow().clone().unwrap();
+    for (width, height) in [(960., 640.), (1280., 800.)] {
+        cx.simulate_resize(size(px(width), px(height)));
+        for dark in [false, true] {
+            cx.update(|window, cx| {
+                view.update(cx, |v, cx| {
+                    v.state.application_settings = Some(ApplicationSettingsSnapshot {
+                        settings: ApplicationSettings {
+                            language: "en".into(),
+                            theme: if dark {
+                                ThemePreference::Dark
+                            } else {
+                                ThemePreference::Light
+                            },
+                            ..Default::default()
+                        },
+                        data_directory: "/tmp/verge-layout-test".into(),
+                        app_version: None,
+                    });
+                    v.state.mode = Some(RunMode::Rule);
+                    v.sync_theme(window, cx);
+                    cx.notify();
+                });
+            });
+            cx.run_until_parked();
+            let config = cx.debug_bounds("home-configuration").unwrap();
+            let network = cx.debug_bounds("home-network-status").unwrap();
+            let controls = cx.debug_bounds("home-controls").unwrap();
+            let mode = cx.debug_bounds("mode-Direct").unwrap();
+            let traffic = cx.debug_bounds("home-telemetry-panel").unwrap();
+            let nodes = cx.debug_bounds("home-nodes-panel").unwrap();
+            let routes = cx.debug_bounds("home-routes-panel").unwrap();
+            let chart = cx.debug_bounds("home-traffic-chart").unwrap();
+            let footer = cx.debug_bounds("home-traffic-footer").unwrap();
+            assert!(mode.right() < config.right());
+            assert!(network.bottom() < config.bottom());
+            assert!(traffic.right() < nodes.left());
+            assert!(traffic.size.width > nodes.size.width);
+            assert_eq!(traffic.top(), nodes.top());
+            assert_eq!(traffic.bottom(), routes.bottom());
+            assert!(footer.bottom() < traffic.bottom());
+            assert!(chart.size.height >= px(168.));
+            if width < 1180. {
+                assert!(network.top() >= controls.bottom());
+                let header = cx.debug_bounds("page-header").unwrap();
+                cx.simulate_event(gpui_kit::ScrollWheelEvent {
+                    position: gpui_kit::point(chart.left() + px(30.), chart.top() + px(30.)),
+                    delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-600.))),
+                    modifiers: Default::default(),
+                    touch_phase: gpui_kit::TouchPhase::Moved,
+                });
+                cx.run_until_parked();
+                assert_eq!(cx.debug_bounds("page-header").unwrap(), header);
+                let rates = cx.debug_bounds("home-traffic-metrics").unwrap();
+                assert!(rates.top() > header.bottom());
+                assert!(
+                    rates.bottom() < px(height),
+                    "traffic rates remain reachable by scrolling"
+                );
+                cx.simulate_event(gpui_kit::ScrollWheelEvent {
+                    position: rates.center(),
+                    delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(600.))),
+                    modifiers: Default::default(),
+                    touch_phase: gpui_kit::TouchPhase::Moved,
+                });
+                cx.run_until_parked();
+            } else {
+                assert!(network.right() < mode.left());
+            }
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn overview_limits_routes_and_view_all_opens_proxies(cx: &mut TestAppContext) {
+    use crate::domain::{ProxyGroup, ProxySnapshot, RunMode};
+    use gpui_kit::{px, size};
+    let (_, holder, cx) = setup(cx);
+    let view = holder.borrow().clone().unwrap();
+    for (width, height) in [(960., 640.), (1280., 800.)] {
+        cx.simulate_resize(size(px(width), px(height)));
+        for count in [0, 1, 2, 3, 8] {
+            cx.update(|_, cx| {
+                view.update(cx, |v, cx| {
+                    v.state.page = crate::ui::Page::Home;
+                    v.state.mode = Some(RunMode::Rule);
+                    v.state.proxies = std::sync::Arc::new(ProxySnapshot {
+                        groups: (0..count)
+                            .map(|i| ProxyGroup {
+                                name: format!("Route {i}"),
+                                kind: "Selector".into(),
+                                selected: Some("A long selected node name for truncation".into()),
+                                members: vec!["Node".into()],
+                            })
+                            .collect(),
+                        ..Default::default()
+                    });
+                    cx.notify();
+                })
+            });
+            cx.run_until_parked();
+            for selector in ["home-route-0", "home-route-1"]
+                .into_iter()
+                .take(count.min(2))
+            {
+                assert!(cx.debug_bounds(selector).is_some());
+            }
+            assert!(cx.debug_bounds("home-route-2").is_none());
+            let traffic = cx.debug_bounds("home-telemetry-panel").unwrap();
+            let routes = cx.debug_bounds("home-routes-panel").unwrap();
+            assert_eq!(
+                traffic.bottom(),
+                routes.bottom(),
+                "{count} routes at {width}"
+            );
+            let report = cx.debug_bounds("home-health-report").unwrap();
+            assert!(report.bottom() < routes.bottom());
+            let more = cx.debug_bounds("home-view-routes").unwrap();
+            if more.bottom() > px(height - 24.) {
+                cx.simulate_event(gpui_kit::ScrollWheelEvent {
+                    position: gpui_kit::point(traffic.left() + px(30.), px(height - 80.)),
+                    delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-600.))),
+                    modifiers: Default::default(),
+                    touch_phase: gpui_kit::TouchPhase::Moved,
+                });
+                cx.run_until_parked();
+            }
+            let more = cx.debug_bounds("home-view-routes").unwrap();
+            cx.simulate_click(more.center(), Default::default());
+            cx.update(|_, cx| assert_eq!(view.read(cx).state.page, crate::ui::Page::Proxies));
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn overview_report_stays_named_and_reachable_with_large_counts(cx: &mut TestAppContext) {
+    use crate::domain::*;
+    use gpui_kit::{px, size};
+    let (_, holder, cx) = setup(cx);
+    let view = holder.borrow().clone().unwrap();
+    for (width, height) in [(960., 640.), (1280., 800.)] {
+        cx.simulate_resize(size(px(width), px(height)));
+        for language in ["en", "zh-CN"] {
+            cx.update(|window, cx| {
+                view.update(cx, |v, cx| {
+                    v.state.application_settings = Some(ApplicationSettingsSnapshot {
+                        settings: ApplicationSettings {
+                            language: language.into(),
+                            theme: ThemePreference::Light,
+                            ..Default::default()
+                        },
+                        data_directory: "/tmp/verge-layout-test".into(),
+                        app_version: None,
+                    });
+                    v.state.mode = Some(RunMode::Rule);
+                    v.state.proxies = std::sync::Arc::new(ProxySnapshot {
+                        groups: (0..4)
+                            .map(|i| ProxyGroup {
+                                name: format!("Route {i}"),
+                                kind: "Selector".into(),
+                                selected: Some("Selected node".into()),
+                                members: vec!["Selected node".into()],
+                            })
+                            .collect(),
+                        ..Default::default()
+                    });
+                    v.state.rules = vec![
+                        RuleEntry {
+                            kind: "DOMAIN".into(),
+                            payload: "example.net".into(),
+                            proxy: "DIRECT".into(),
+                            size: 0
+                        };
+                        100_000
+                    ];
+                    v.state.providers = (0..100)
+                        .map(|i| ProviderSummary {
+                            name: format!("Provider {i}"),
+                            kind: ProviderKind::Rule,
+                            vehicle: "HTTP".into(),
+                            updated_at: String::new(),
+                            item_count: 1000,
+                        })
+                        .collect();
+                    v.sync_form_inputs(window, cx);
+                    v.sync_theme(window, cx);
+                    cx.notify();
+                })
+            });
+            cx.run_until_parked();
+            let panel = cx.debug_bounds("home-routes-panel").unwrap();
+            let report = cx.debug_bounds("home-health-report").unwrap();
+            assert!(
+                report.bottom() < panel.bottom(),
+                "{language} at {width}: report {report:?} outside {panel:?}"
+            );
+            assert_eq!(
+                panel.bottom(),
+                cx.debug_bounds("home-telemetry-panel").unwrap().bottom()
+            );
+            cx.simulate_event(gpui_kit::ScrollWheelEvent {
+                position: gpui_kit::point(panel.center().x, px(height - 80.)),
+                delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-1000.))),
+                modifiers: Default::default(),
+                touch_phase: gpui_kit::TouchPhase::Moved,
+            });
+            cx.run_until_parked();
+            let report = cx.debug_bounds("home-health-report").unwrap();
+            assert!(report.bottom() < px(height - 8.));
+            cx.update(|window, _| {
+                let snapshots = gpui_kit::base::test_support::snapshots(window);
+                let report = snapshots
+                    .iter()
+                    .find(|s| {
+                        s.path()
+                            .contains(&gpui_kit::ElementId::from("home-health-report"))
+                    })
+                    .unwrap();
+                assert!(report.visible());
+                assert_eq!(
+                    report.label(),
+                    Some(crate::i18n::tr(
+                        Lang::from_code(language),
+                        "optimization.details"
+                    ))
+                );
+            });
+            cx.simulate_click(report.center(), Default::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                assert!(window.has_active_sheet(cx));
+                window.close_sheet(cx);
+            });
+            cx.run_until_parked();
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn overview_axis_ticks_fit_large_scales_on_one_line(cx: &mut TestAppContext) {
+    use crate::domain::{RealtimeEvent, TrafficEvent};
+    use gpui_kit::{px, size};
+    let (_, holder, cx) = setup(cx);
+    let view = holder.borrow().clone().unwrap();
+    cx.simulate_resize(size(px(960.), px(640.)));
+    for (peak, top_label) in [
+        (512, "1000"),
+        (819_200, "1000"),
+        (1_073_600_000, "2000"),
+        (u64::MAX, "20000000000"),
+    ] {
+        cx.update(|_, cx| {
+            view.update(cx, |v, cx| {
+                v.telemetry.update(cx, |t, cx| {
+                    t.apply(
+                        &[RealtimeEvent::Traffic(TrafficEvent { up: 0, down: peak })],
+                        cx,
+                    )
+                });
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        let required_width = cx.update(|window, _| {
+            window
+                .text_system()
+                .shape_line(
+                    top_label.into(),
+                    px(12.),
+                    &[gpui_kit::TextRun {
+                        len: top_label.len(),
+                        font: window.text_style().font(),
+                        ..Default::default()
+                    }],
+                    None,
+                )
+                .width()
+        });
+        assert!(cx.debug_bounds("home-traffic-tick-0").unwrap().size.width >= required_width);
+        for selector in [
+            "home-traffic-tick-0",
+            "home-traffic-tick-1",
+            "home-traffic-tick-2",
+        ] {
+            let tick = cx.debug_bounds(selector).unwrap();
+            assert_eq!(tick.size.height, px(12.), "peak {peak}: {tick:?}");
+        }
+    }
+}
+
+#[gpui_kit::test]
 fn connection_close_button_dispatches_immediately(cx: &mut TestAppContext) {
     use crate::domain::{Connection, ConnectionSnapshot, RealtimeEvent, RuntimeCommand};
     cx.update(gpui_kit::init);

@@ -756,5 +756,16 @@
   "health.progress": "本地检查 {local}/3 · 已获得 {probes} 项探测结果",
   "health.choose_group": "选择策略组",
   "health.open_proxies": "查看当前代理",
-  "sidebar.toggle": "显示或隐藏侧栏"
+  "home.chart_scale": "自动缩放 · 基线 0",
+  "home.node_latency": "节点延迟",
+  "home.nodes_evidence": "最近测速记录，不代表当前连通性。",
+  "home.nodes_failed": "测速失败",
+  "home.nodes_low": "低于 200 ms",
+  "home.nodes_slow": "200 ms 及以上",
+  "home.nodes_total": "节点总数",
+  "home.nodes_untested": "未测速",
+  "sidebar.toggle": "显示或隐藏侧栏",
+  "home.download": "下载",
+  "home.upload": "上传",
+  "home.view_all": "查看全部"
 }

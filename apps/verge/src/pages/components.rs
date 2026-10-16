@@ -3,44 +3,6 @@ use crate::appearance::metrics;
 use gpui_kit::component::{ActiveTheme as _, StyledExt as _, h_flex, v_flex};
 use gpui_kit::{prelude::FluentBuilder as _, *};
 
-#[derive(IntoElement)]
-pub struct Metric {
-    label: SharedString,
-    value: SharedString,
-}
-
-impl Metric {
-    pub fn new(label: impl Into<SharedString>, value: impl Into<SharedString>) -> Self {
-        Self {
-            label: label.into(),
-            value: value.into(),
-        }
-    }
-}
-
-impl RenderOnce for Metric {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        v_flex()
-            .flex_1()
-            .min_w_0()
-            .gap_1()
-            .child(
-                div()
-                    .text_xs()
-                    .line_height(px(16.))
-                    .text_color(cx.theme().muted_foreground)
-                    .child(self.label),
-            )
-            .child(
-                div()
-                    .text_xl()
-                    .line_height(px(24.))
-                    .font_medium()
-                    .child(self.value),
-            )
-    }
-}
-
 pub fn panel(cx: &App) -> Div {
     v_flex()
         .p(px(metrics::PANEL_INSET))

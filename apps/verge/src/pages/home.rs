@@ -1,7 +1,8 @@
+mod nodes;
 pub mod optimization;
 pub mod telemetry;
 
-use super::components::{Metric, PageHeader, panel};
+use super::components::{PageHeader, panel};
 use crate::domain::{ProfileSource, RunMode};
 use crate::ui::{CoreStatus, Page, UiAction};
 use crate::{
@@ -29,7 +30,8 @@ pub fn mode_label(lang: Lang, mode: RunMode) -> &'static str {
     )
 }
 
-pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
+pub fn render(view: &MainView, window: &Window, cx: &mut Context<MainView>) -> AnyElement {
+    let wide = window.bounds().size.width >= px(1180.);
     let lang = view.lang();
     let (core_status, status_color) = match view.state.core_status {
         CoreStatus::Running => (tr(lang, "home.core.running"), cx.theme().success),
@@ -49,21 +51,21 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
         view.state.runtime_settings.is_some() || view.state.system_proxy_enabled();
 
     let connection = panel(cx)
-        .p_5()
-        .gap_3()
+        .debug_selector(|| "home-configuration".into())
+        .gap_4()
         .child(
             h_flex()
                 .gap_3()
                 .child(
                     div()
-                        .size_10()
-                        .rounded_xl()
+                        .size(px(48.))
+                        .rounded(px(8.))
                         .bg(cx.theme().accent)
                         .text_color(cx.theme().primary)
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(Icon::new(IconName::Globe).size_5()),
+                        .child(Icon::new(IconName::Globe).size_6()),
                 )
                 .child(
                     v_flex()
@@ -142,20 +144,21 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 .child(
                     Button::new("manage-profiles")
                         .small()
-                        .ghost()
                         .label(tr(lang, "home.manage_profiles"))
                         .on_click(cx.listener(|this, _, _, cx| this.navigate(Page::Profiles, cx))),
                 ),
         )
         .child(
             h_flex()
+                .debug_selector(|| "home-controls".into())
                 .justify_between()
                 .gap_4()
-                .pt_3()
+                .pt_4()
                 .border_t_1()
                 .border_color(cx.theme().border)
                 .child(
                     h_flex()
+                        .flex_shrink_0()
                         .gap_3()
                         .text_sm()
                         .child(tr(lang, "home.system_proxy"))
@@ -186,29 +189,12 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                             )
                         }),
                 )
+                .when(wide, |row| {
+                    row.child(div().flex_1().min_w_0().child(network_status(view, cx)))
+                })
                 .child(super::components::mode_selector(view, cx)),
         )
-        .child(network_status(view, cx))
-        .child(
-            h_flex()
-                .gap_2()
-                .flex_wrap()
-                .pt_2()
-                .child(div().flex_1().text_sm().child(format!(
-                    "{} · {}",
-                    tr(lang, "optimization.title"),
-                    tr(lang, optimization::status(&view.state.optimization))
-                )))
-                .child(
-                    Button::new("home-health-report")
-                        .small()
-                        .ghost()
-                        .label(tr(lang, "optimization.details"))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_optimization(false, window, cx)
-                        })),
-                ),
-        );
+        .when(!wide, |group| group.child(network_status(view, cx)));
 
     v_flex()
         .flex_1()
@@ -220,7 +206,6 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                     Button::new("home-health-check")
                         .debug_selector(|| "home-health-check".into())
                         .small()
-                        .primary()
                         .label(tr(lang, "optimization.check"))
                         .disabled(
                             view.state.connection_notice.is_some()
@@ -277,13 +262,26 @@ pub fn render(view: &MainView, cx: &mut Context<MainView>) -> AnyElement {
                 .id("home-body")
                 .child(
                     v_flex().gap_4().child(connection).child(
-                        div()
-                            .grid()
-                            .grid_cols(2)
+                        h_flex()
+                            .debug_selector(|| "home-dashboard".into())
+                            .min_h(px(crate::appearance::metrics::OVERVIEW_MIN_HEIGHT))
                             .gap_4()
                             .items_stretch()
-                            .child(overview_details(view, cx))
-                            .child(view.telemetry.clone()),
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(view.telemetry.clone()),
+                            )
+                            .child(
+                                v_flex()
+                                    .w(px(if wide { 288. } else { 252. }))
+                                    .flex_shrink_0()
+                                    .gap_4()
+                                    .child(nodes::render(view, cx))
+                                    .child(overview_details(view, cx)),
+                            ),
                     ),
                 ),
         )
@@ -299,11 +297,11 @@ fn network_status(view: &MainView, cx: &App) -> impl IntoElement {
         None => unknown,
     };
     let stat = |label: &str, value: String| {
-        h_flex()
+        v_flex()
             .min_w_0()
-            .gap_2()
+            .gap_1()
             .text_xs()
-            .line_height(px(20.))
+            .line_height(px(16.))
             .child(
                 div()
                     .text_color(cx.theme().muted_foreground)
@@ -334,23 +332,26 @@ fn network_status(view: &MainView, cx: &App) -> impl IntoElement {
 
 fn overview_details(view: &MainView, cx: &mut Context<MainView>) -> impl IntoElement {
     let lang = view.lang();
-    let mut routes = v_flex().flex_1().gap_3();
+    let mut routes = v_flex().gap_3();
     let panel = panel(cx)
         .debug_selector(|| "home-routes-panel".into())
         .min_w_0()
-        .min_h(px(crate::appearance::metrics::OVERVIEW_MIN_HEIGHT))
-        .p_5()
-        .gap_4()
+        .flex_1()
+        .gap_3()
         .child(
             h_flex()
-                .h(px(28.))
+                .h(px(24.))
                 .justify_between()
                 .child(div().font_medium().child(tr(lang, "home.routes")))
                 .child(
                     Button::new("home-view-routes")
+                        .debug_selector(|| "home-view-routes".into())
                         .small()
                         .ghost()
-                        .label(tr(lang, "proxies.title"))
+                        .label(tr(lang, "home.view_all"))
+                        .icon(IconName::ChevronRight)
+                        .accessibility_label(tr(lang, "proxies.title"))
+                        .tooltip(tr(lang, "proxies.title"))
                         .on_click(cx.listener(|this, _, _, cx| this.navigate(Page::Proxies, cx))),
                 ),
         );
@@ -371,10 +372,6 @@ fn overview_details(view: &MainView, cx: &mut Context<MainView>) -> impl IntoEle
         })
         .collect();
     let group_count = groups.len();
-    let single_route = groups.len() == 1;
-    if single_route || groups.is_empty() {
-        routes = routes.justify_center();
-    }
     if groups.is_empty() {
         routes = routes.child(
             div()
@@ -390,7 +387,7 @@ fn overview_details(view: &MainView, cx: &mut Context<MainView>) -> impl IntoEle
                 )),
         );
     }
-    for (index, group) in groups.into_iter().take(4).enumerate() {
+    for (index, group) in groups.into_iter().take(2).enumerate() {
         let selected = group.selected.as_deref().unwrap_or("—");
         let details = view.state.proxies.proxies.get(selected);
         let delay = view.state.delays.get(selected).copied().or_else(|| {
@@ -408,9 +405,13 @@ fn overview_details(view: &MainView, cx: &mut Context<MainView>) -> impl IntoEle
             parts.join(" · ")
         });
         let group_name = group.name.clone();
-        let selected_name = selected.to_owned();
+        let selected_name = match description {
+            Some(description) => format!("{selected} · {description}"),
+            None => selected.to_owned(),
+        };
         routes = routes.child(
             v_flex()
+                .debug_selector(move || format!("home-route-{index}"))
                 .gap_1()
                 .child(
                     h_flex()
@@ -448,7 +449,6 @@ fn overview_details(view: &MainView, cx: &mut Context<MainView>) -> impl IntoEle
                                 .truncate()
                                 .text_sm()
                                 .font_medium()
-                                .when(single_route, |this| this.text_lg().line_height(px(28.)))
                                 .child(selected.to_owned())
                                 .tooltip(move |window, cx| {
                                     gpui_kit::component::tooltip::Tooltip::new(
@@ -469,35 +469,52 @@ fn overview_details(view: &MainView, cx: &mut Context<MainView>) -> impl IntoEle
                                     }),
                             )
                         }),
-                )
-                .when_some(description, |this, description| {
-                    this.child(
-                        div()
-                            .text_xs()
-                            .line_height(px(16.))
-                            .text_color(cx.theme().muted_foreground)
-                            .child(description),
-                    )
-                }),
+                ),
         );
     }
     panel.child(routes).child(
-        h_flex()
-            .gap_4()
-            .pt_4()
+        v_flex()
+            .mt_auto()
+            .gap_2()
+            .pt_3()
             .border_t_1()
             .border_color(cx.theme().border)
-            .child(Metric::new(
-                tr(lang, "home.groups"),
-                group_count.to_string(),
-            ))
-            .child(Metric::new(
-                tr(lang, "rules.title"),
-                view.state.rules.len().to_string(),
-            ))
-            .child(Metric::new(
-                tr(lang, "rules.providers"),
-                view.state.providers.len().to_string(),
-            )),
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!("{} {}", tr(lang, "home.groups"), group_count))
+                    .child(format!(
+                        "{} {}",
+                        tr(lang, "rules.title"),
+                        view.state.rules.len()
+                    ))
+                    .child(format!(
+                        "{} {}",
+                        tr(lang, "rules.providers"),
+                        view.state.providers.len()
+                    )),
+            )
+            .child(
+                Button::new("home-health-report")
+                    .debug_selector(|| "home-health-report".into())
+                    .small()
+                    .ghost()
+                    .w_full()
+                    .accessibility_label(tr(lang, "optimization.details"))
+                    .child(div().flex_1().min_w_0().truncate().text_xs().child(format!(
+                        "{} · {}",
+                        tr(lang, "optimization.title"),
+                        tr(lang, optimization::status(&view.state.optimization))
+                    )))
+                    .tooltip(tr(lang, "optimization.details"))
+                    .on_click(
+                        cx.listener(|this, _, window, cx| {
+                            this.open_optimization(false, window, cx)
+                        }),
+                    ),
+            ),
     )
 }
