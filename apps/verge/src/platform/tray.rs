@@ -9,7 +9,8 @@ use crate::i18n::{self, Lang, tr};
 use tray_icon::{
     Icon, TrayIcon, TrayIconBuilder,
     menu::{
-        CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu,
+        CheckMenuItem, IsMenuItem, Menu, MenuEvent, MenuItem, MenuItemKind, PredefinedMenuItem,
+        Submenu,
         accelerator::{Accelerator, Code, Modifiers},
     },
 };
@@ -166,6 +167,15 @@ impl TrayUpdateSender {
             {
                 eprintln!("[verge] tray update: {}", error.message);
             }
+        });
+    }
+
+    pub fn begin_shutdown(&self) {
+        let tray = self.tray.clone();
+        on_tray_run_loop(move || {
+            let marker =
+                objc2::MainThreadMarker::new().expect("tray shutdown requires main thread");
+            tray.get(marker).begin_shutdown();
         });
     }
 }
@@ -473,6 +483,7 @@ pub struct TrayService {
     state: RefCell<Option<Arc<TrayMenuState>>>,
     checks: RefCell<Vec<(CheckMenuItem, bool)>>,
     clicked: Cell<bool>,
+    shutting_down: Cell<bool>,
     proxy_item: RefCell<Option<CheckMenuItem>>,
     proxy_interaction: RefCell<ProxyInteraction>,
     tracking: RefCell<MenuTracking>,
@@ -582,8 +593,13 @@ impl TrayService {
     }
 
     fn menu_command(&self, id: &str) -> Option<TrayCommand> {
+        if self.shutting_down.get() {
+            return None;
+        }
         let mut command = self.commands.borrow().get(id)?.clone();
-        if matches!(command, TrayCommand::SetSystemProxy { .. }) {
+        if matches!(command, TrayCommand::Quit) {
+            self.begin_shutdown();
+        } else if matches!(command, TrayCommand::SetSystemProxy { .. }) {
             let state = self.state.borrow();
             let state = state.as_ref()?;
             if !can_change_proxy(state) {
@@ -627,6 +643,7 @@ impl TrayService {
             state: RefCell::new(None),
             checks: RefCell::new(Vec::new()),
             clicked: Cell::new(false),
+            shutting_down: Cell::new(false),
             proxy_item: RefCell::new(None),
             proxy_interaction: RefCell::new(ProxyInteraction::default()),
             tracking: RefCell::new(MenuTracking::default()),
@@ -642,6 +659,9 @@ impl TrayService {
     }
 
     pub fn update(&self, snapshot: &TraySnapshot) -> Result<(), AppError> {
+        if self.shutting_down.get() {
+            return Ok(());
+        }
         let was_pending = self.proxy_interaction.borrow().pending.is_some();
         self.proxy_interaction
             .borrow_mut()
@@ -674,6 +694,9 @@ impl TrayService {
     }
 
     fn update_menu(&self, desired: &Arc<TrayMenuState>) -> Result<(), AppError> {
+        if self.shutting_down.get() {
+            return Ok(());
+        }
         let changed = self.state.borrow().as_ref() != Some(desired);
         let rebuild = changed
             && self
@@ -714,6 +737,43 @@ impl TrayService {
         }
         *self.state.borrow_mut() = Some(desired.clone());
         Ok(())
+    }
+
+    fn begin_shutdown(&self) {
+        if self.shutting_down.replace(true) {
+            return;
+        }
+        self.deferred_menu.borrow_mut().take();
+        self.animation_generation
+            .set(self.animation_generation.get().wrapping_add(1));
+        let lang = self
+            .state
+            .borrow()
+            .as_ref()
+            .map_or(Lang::En, |state| Lang::from_code(&state.language));
+        let label = tr(lang, "tray.quitting");
+        // Retain the visible menu and command IDs until Cocoa finishes dispatching this click.
+        for item in self.menu.borrow().items() {
+            match item {
+                MenuItemKind::MenuItem(item) => {
+                    if matches!(
+                        self.commands.borrow().get(item.id().as_ref()),
+                        Some(TrayCommand::Quit)
+                    ) {
+                        item.set_text(label);
+                    }
+                    item.set_enabled(false);
+                }
+                MenuItemKind::Check(item) => item.set_enabled(false),
+                MenuItemKind::Submenu(item) => item.set_enabled(false),
+                MenuItemKind::Icon(item) => item.set_enabled(false),
+                MenuItemKind::Predefined(_) => {}
+            }
+        }
+        self.tray.set_title(Some(label));
+        if let Err(error) = self.tray.set_tooltip(Some(label)) {
+            eprintln!("[verge] tray shutdown feedback: {error}");
+        }
     }
 
     fn update_proxy_item(&self, state: &TrayMenuState) {
@@ -778,6 +838,9 @@ impl TrayService {
 
         let marker = objc2::MainThreadMarker::new().expect("tray requires the main thread");
         let tray = bound.get(marker);
+        if tray.shutting_down.get() {
+            return;
+        }
         let generation = match tray.start_click_animation() {
             Ok(generation) => generation,
             Err(error) => {

@@ -561,6 +561,7 @@
   "tray.profiles": "Profiles",
   "tray.proxies": "Proxies",
   "tray.quit": "Quit",
+  "tray.quitting": "Quitting...",
   "tray.restart_app": "Restart Verge",
   "tray.restart_core": "Restart Core",
   "tray.show": "Show Verge",

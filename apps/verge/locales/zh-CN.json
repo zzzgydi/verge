@@ -561,6 +561,7 @@
   "tray.profiles": "配置",
   "tray.proxies": "代理",
   "tray.quit": "退出",
+  "tray.quitting": "正在退出…",
   "tray.restart_app": "重启 Verge",
   "tray.restart_core": "重启内核",
   "tray.show": "显示 Verge",

@@ -2023,7 +2023,10 @@ fn run_daemon_backend(
             DaemonEvent::Tray(TrayCommand::ShowMainWindow) | DaemonEvent::HotkeyPressed => {
                 show_main_window(&server);
             }
-            DaemonEvent::Tray(TrayCommand::Quit) => quit = true,
+            DaemonEvent::Tray(TrayCommand::Quit) => {
+                backend.log_app("info", "收到托盘退出请求，正在清理系统状态");
+                quit = true;
+            }
             DaemonEvent::Tray(command @ TrayCommand::SetSystemProxy { request_id, .. }) => {
                 tray_state.invalidate_system_proxy();
                 if let Some(state) = tray::execute(&mut backend, &server, command) {
@@ -2137,11 +2140,13 @@ fn run_daemon_backend(
                 }
             }
         }
-        tray_state.publish(&backend, |snapshot| tray_updates.send(snapshot));
-        tray_state.refresh(&backend, &event_tx);
         // 重启或退出请求已受理：随本次事件一起收尾退出。
-        if backend.restart_requested || backend.quit_requested {
+        if quit || backend.restart_requested || backend.quit_requested {
+            tray_updates.begin_shutdown();
             quit = true;
+        } else {
+            tray_state.publish(&backend, |snapshot| tray_updates.send(snapshot));
+            tray_state.refresh(&backend, &event_tx);
         }
     }
     backend.optimization.cancel();

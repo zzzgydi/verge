@@ -9,6 +9,149 @@ mod i18n;
 mod native {
     include!("../src/platform/tray.rs");
 
+    pub fn verify_quit() {
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::{
+            NSApplication, NSApplicationActivationPolicy, NSEventTrackingRunLoopMode, NSMenu,
+        };
+        use objc2_foundation::{NSDate, NSDefaultRunLoopMode, NSRunLoop, NSTimer};
+        use std::{
+            sync::mpsc,
+            time::{Duration, Instant},
+        };
+        use tray_icon::menu::ContextMenu;
+
+        let marker = MainThreadMarker::new().unwrap();
+        NSApplication::sharedApplication(marker)
+            .setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+        let (tx, rx) = mpsc::channel();
+        let bound = TrayService::new()
+            .unwrap()
+            .bind(move |command| tx.send(command).unwrap());
+        let tray = bound.get(marker);
+        let snapshot = TraySnapshot {
+            menu: Arc::new(TrayMenuState {
+                language: "zh-CN".into(),
+                can_enable_system_proxy: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        tray.update(&snapshot).unwrap();
+        let menu = unsafe {
+            objc2::rc::Retained::retain(tray.menu.borrow().ns_menu().cast::<NSMenu>()).unwrap()
+        };
+        let index = menu.numberOfItems() - 1;
+        let quit = menu.itemAtIndex(index).unwrap();
+        let status = tray.tray.ns_status_item().unwrap();
+        let button = status.button(marker).unwrap();
+        let old_animation = tray.start_click_animation().unwrap();
+        let mut stale = snapshot.clone();
+        Arc::make_mut(&mut stale.menu).language = "en".into();
+        let active = Arc::new(dispatch2::MainThreadBound::new(
+            (bound.clone(), menu.clone()),
+            marker,
+        ));
+        let observed = Arc::new(Mutex::new(None));
+        let timing = observed.clone();
+        let refresh = stale.clone();
+        let block = block2::RcBlock::new(move |_: std::ptr::NonNull<NSTimer>| {
+            let marker = MainThreadMarker::new().unwrap();
+            let (bound, menu) = active.get(marker);
+            let tray = bound.get(marker);
+            assert!(tray.tracking.borrow().active);
+            tray.update(&refresh).unwrap();
+            assert!(tray.deferred_menu.borrow().is_some());
+            let started = Instant::now();
+            menu.performActionForItemAtIndex(index);
+            *timing.lock().unwrap() = Some(started.elapsed().as_micros());
+            menu.cancelTrackingWithoutAnimation();
+        });
+        let timer = unsafe { NSTimer::timerWithTimeInterval_repeats_block(0.05, false, &block) };
+        unsafe {
+            NSRunLoop::mainRunLoop().addTimer_forMode(&timer, NSEventTrackingRunLoopMode);
+        }
+        status.setMenu(Some(&menu));
+        unsafe {
+            button.performClick(None);
+        }
+        status.setMenu(None);
+        let feedback_us = observed.lock().unwrap().unwrap();
+        assert_eq!(rx.try_recv().unwrap(), TrayCommand::Quit);
+        assert!(tray.shutting_down.get());
+        assert!(!quit.isEnabled());
+        assert_eq!(quit.title().to_string(), "正在退出…");
+        assert_eq!(button.title().to_string(), "正在退出…");
+        assert!(tray.deferred_menu.borrow().is_none());
+        assert_ne!(tray.animation_generation.get(), old_animation);
+        for id in tray.commands.borrow().keys() {
+            assert!(
+                tray.menu_command(id).is_none(),
+                "shutdown accepted another command"
+            );
+        }
+        assert!(rx.try_recv().is_err());
+
+        // Neither old traffic nor deferred structural updates can revive a quitting tray.
+        tray.update_menu(&stale.menu).unwrap();
+        tray.update(&stale).unwrap();
+        let updates = TrayUpdateSender::new(bound.clone());
+        let sender = updates.clone();
+        std::thread::spawn(move || {
+            sender.send(stale);
+            sender.begin_shutdown();
+        })
+        .join()
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_millis(100);
+        while Instant::now() < deadline {
+            unsafe {
+                NSRunLoop::mainRunLoop().runMode_beforeDate(
+                    NSDefaultRunLoopMode,
+                    &NSDate::dateWithTimeIntervalSinceNow(0.01),
+                );
+            }
+        }
+        assert_eq!(button.title().to_string(), "正在退出…");
+        assert!(!quit.isEnabled());
+        assert!(std::ptr::eq(
+            tray.menu.borrow().ns_menu().cast::<NSMenu>(),
+            &*menu
+        ));
+
+        // The GUI/backend shutdown route uses the same sticky feedback state.
+        let other = TrayService::new().unwrap().bind(|_| {});
+        let updates = TrayUpdateSender::new(other.clone());
+        std::thread::spawn(move || updates.begin_shutdown())
+            .join()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !other.get(marker).shutting_down.get() && Instant::now() < deadline {
+            unsafe {
+                NSRunLoop::mainRunLoop().runMode_beforeDate(
+                    NSDefaultRunLoopMode,
+                    &NSDate::dateWithTimeIntervalSinceNow(0.01),
+                );
+            }
+        }
+        assert!(other.get(marker).shutting_down.get());
+        assert_eq!(
+            other
+                .get(marker)
+                .tray
+                .ns_status_item()
+                .unwrap()
+                .button(marker)
+                .unwrap()
+                .title()
+                .to_string(),
+            "Quitting..."
+        );
+        println!(
+            "PASS: native quit feedback in real menu tracking, disabled commands, stale update protection, stable tracking menu and backend shutdown delivery; feedback_us={feedback_us}"
+        );
+    }
+
     pub fn verify() {
         use objc2::MainThreadMarker;
         use objc2_app_kit::{
@@ -536,7 +679,9 @@ mod native {
 }
 
 fn main() {
-    if std::env::args().any(|arg| arg == "--animation") {
+    if std::env::args().any(|arg| arg == "--quit") {
+        objc2::rc::autoreleasepool(|_| native::verify_quit());
+    } else if std::env::args().any(|arg| arg == "--animation") {
         objc2::rc::autoreleasepool(|_| native::verify_animation());
     } else if std::env::args().any(|arg| arg == "--tracking") {
         objc2::rc::autoreleasepool(|_| native::verify_tracking_refresh());
@@ -553,6 +698,13 @@ fn main() {
         assert!(
             std::process::Command::new(std::env::current_exe().unwrap())
                 .arg("--animation")
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--quit")
                 .status()
                 .unwrap()
                 .success()
