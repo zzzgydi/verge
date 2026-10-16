@@ -27,6 +27,8 @@ use crate::platform::{HelperControl, SystemProxyPlatform, TunConfig};
 pub mod app_update;
 pub mod geodata;
 mod network;
+#[cfg(test)]
+mod shutdown_tests;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CommandPolicy;
@@ -288,6 +290,18 @@ pub struct MihomoRuntime<T> {
     sensitive_values: Vec<String>,
 }
 
+impl<T> MihomoRuntime<T> {
+    fn stop_subscriptions(&mut self) {
+        // Signal every worker before joining: otherwise idle read timeouts add up.
+        for subscription in self.subscriptions.values() {
+            subscription.cancel();
+        }
+        for (_, mut subscription) in self.subscriptions.drain() {
+            subscription.stop();
+        }
+    }
+}
+
 impl<T: ControllerTransport> MihomoRuntime<T> {
     pub fn new(
         client: MihomoClient<T>,
@@ -417,9 +431,7 @@ impl<T: ControllerTransport> RuntimeControl for MihomoRuntime<T> {
     }
 
     fn stop_realtime(&mut self) {
-        for (_, mut subscription) in self.subscriptions.drain() {
-            subscription.stop();
-        }
+        self.stop_subscriptions();
     }
 
     fn drain_realtime(&mut self) -> Vec<RealtimeEvent> {
@@ -458,9 +470,7 @@ fn redact_realtime_event(
 
 impl<T> Drop for MihomoRuntime<T> {
     fn drop(&mut self) {
-        for (_, mut subscription) in self.subscriptions.drain() {
-            subscription.stop();
-        }
+        self.stop_subscriptions();
     }
 }
 
@@ -838,16 +848,30 @@ where
     }
 
     pub fn shutdown(&mut self) -> Result<(), LifecycleFailure> {
+        self.shutdown_with_progress(|_, _, _| {})
+    }
+
+    pub(crate) fn shutdown_with_progress(
+        &mut self,
+        mut progress: impl FnMut(&'static str, Duration, bool),
+    ) -> Result<(), LifecycleFailure> {
+        let started = Instant::now();
         self.runtime.stop_realtime();
+        progress("realtime", started.elapsed(), true);
         let mut errors = Vec::new();
+        let started = Instant::now();
         if self.system_proxy.recovery_pending()
             && let Err(error) = self.system_proxy.recover_pending()
         {
             errors.push(error);
         }
+        progress("system_proxy", started.elapsed(), errors.is_empty());
+        let started = Instant::now();
+        let previous_errors = errors.len();
         if let Err(error) = self.core.stop() {
             errors.push(error);
         }
+        progress("core", started.elapsed(), errors.len() == previous_errors);
         if errors.is_empty() {
             Ok(())
         } else {
@@ -2950,6 +2974,29 @@ mod tests {
         assert_eq!(runtime.calls, ["stop"]);
         assert_eq!(proxy.calls, ["recover"]);
         assert_eq!(core.stop_calls, 1);
+    }
+
+    #[test]
+    fn lifecycle_shutdown_reports_each_stage_and_keeps_all_cleanup_errors() {
+        let mut core = FakeCore::default();
+        core.stop.push_back(Err(failure("core stop failed")));
+        let mut runtime = runtime();
+        let mut proxy = fake_system_proxy();
+        proxy.state.recovery_pending = true;
+        proxy.failure = Some(failure("proxy restore failed"));
+        let mut stages = Vec::new();
+        let failure = ApplicationLifecycle::new(&mut core, &mut runtime, &mut proxy)
+            .shutdown_with_progress(|stage, _, success| stages.push((stage, success)))
+            .unwrap_err();
+        assert_eq!(
+            stages,
+            [("realtime", true), ("system_proxy", false), ("core", false)]
+        );
+        assert_eq!(failure.cause.message, "proxy restore failed");
+        assert_eq!(failure.cleanup_errors[0].message, "core stop failed");
+        assert_eq!(runtime.calls, ["stop"]);
+        assert_eq!(core.stop_calls, 1);
+        assert!(proxy.state.recovery_pending);
     }
 
     #[test]

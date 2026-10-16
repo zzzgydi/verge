@@ -374,21 +374,62 @@ impl Backend {
     }
 
     fn shutdown(&mut self) {
+        let started = Instant::now();
+        let phase = Instant::now();
         self.optimization.shutdown();
         self.ai.cancel();
+        self.log_app(
+            "info",
+            format!(
+                "Shutdown background: elapsed_ms={}",
+                phase.elapsed().as_millis()
+            ),
+        );
         self.proxy_session.target = None;
+        let mut errors = Vec::new();
         if let Some(mut engine) = self.engine.take() {
             let mut core = SupervisorControl::new(&mut engine.supervisor, Duration::from_secs(5));
-            let _ =
+            if let Err(failure) =
                 ApplicationLifecycle::new(&mut core, &mut engine.runtime, &mut self.system_proxy)
-                    .shutdown();
+                    .shutdown_with_progress(|stage, elapsed, success| {
+                        eprintln!(
+                            "[verge] [info] Shutdown {stage}: success={success}, elapsed_ms={}",
+                            elapsed.as_millis()
+                        );
+                    })
+            {
+                errors.push(failure.cause);
+                errors.extend(failure.cleanup_errors);
+            }
         }
+        let phase = Instant::now();
         self.profiles.set_tun_device(None);
         if let Some(lease) = self.tun_lease.take()
             && let Err(error) = lease.release()
         {
-            self.log_app("error", error.message);
+            errors.push(error);
         }
+        self.log_app(
+            "info",
+            format!("Shutdown tun: elapsed_ms={}", phase.elapsed().as_millis()),
+        );
+        for error in &errors {
+            self.log_app(
+                "error",
+                format!(
+                    "Shutdown cleanup failed: {}",
+                    self.redact_text(&error.message)
+                ),
+            );
+        }
+        self.log_app(
+            "info",
+            format!(
+                "Shutdown backend: success={}, elapsed_ms={}",
+                errors.is_empty(),
+                started.elapsed().as_millis()
+            ),
+        );
     }
 
     fn fail_runtime(&mut self, error: AppError) {
@@ -2105,7 +2146,15 @@ fn run_daemon_backend(
     }
     backend.optimization.cancel();
     backend.shutdown();
+    let ipc_started = Instant::now();
     server.shutdown();
+    backend.log_app(
+        "info",
+        format!(
+            "Shutdown ipc: elapsed_ms={}",
+            ipc_started.elapsed().as_millis()
+        ),
+    );
     if backend.restart_requested {
         // The socket and primary GUI must be gone before starting the replacement.
         // Otherwise it handshakes with this daemon and exits as a duplicate.
@@ -3333,6 +3382,68 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_logs_recovery_failure_and_preserves_recovery_record() {
+        let (mut backend, data_dir) = test_backend("shutdown-recovery-error");
+        let config_path = data_dir.join("core.yaml");
+        fs::write(&config_path, "{}").unwrap();
+        fs::write(&backend.config.binary, "unused fixture").unwrap();
+        // Parsing fails before any system command; this must never touch host proxy settings.
+        fs::write(&backend.config.recovery_path, "invalid recovery JSON").unwrap();
+        backend.engine = Some(Engine {
+            supervisor: CoreSupervisor::new(
+                MihomoConfig {
+                    binary: backend.config.binary.clone(),
+                    working_dir: data_dir.clone(),
+                    controller: backend.config.controller,
+                    secret: backend.config.secret.clone(),
+                    max_restarts: 0,
+                    restart_backoff: Duration::from_millis(1),
+                    stop_timeout: Duration::from_millis(1),
+                    log_capacity: 1,
+                },
+                config_path,
+            )
+            .unwrap(),
+            runtime: MihomoRuntime::new(
+                MihomoClient::new(
+                    TcpControllerTransport::new(
+                        backend.config.controller,
+                        "test",
+                        Duration::from_secs(1),
+                    )
+                    .unwrap(),
+                ),
+                backend.config.controller,
+                "test",
+                RealtimeOptions::default(),
+            )
+            .unwrap(),
+        });
+        backend.shutdown();
+        assert!(backend.engine.is_none());
+        assert!(backend.config.recovery_path.exists());
+        assert!(
+            backend
+                .app_log_buffer
+                .iter()
+                .any(|log| log.level == "error" && log.payload.contains("Shutdown cleanup failed"))
+        );
+        assert!(
+            backend
+                .app_log_buffer
+                .iter()
+                .any(|log| log.payload.contains("Shutdown backend: success=false"))
+        );
+        assert!(
+            !backend
+                .app_log_buffer
+                .iter()
+                .any(|log| log.payload.contains(&backend.config.secret))
+        );
+        fs::remove_dir_all(data_dir).unwrap();
+    }
+
+    #[test]
     fn install_helper_outside_a_packaged_app_gives_a_readable_error() {
         let (mut backend, data_dir) = test_backend("helper-install-unpackaged");
         // unix socket 地址有长度上限，用短的不存在路径模拟“未安装”。
@@ -3412,6 +3523,8 @@ mod tests {
             state => panic!("expected running Mihomo, got {state:?}"),
         };
 
+        // Exercise steady-state subscriptions rather than only a just-started core.
+        std::thread::sleep(Duration::from_millis(350));
         backend.shutdown();
 
         #[cfg(unix)]

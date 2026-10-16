@@ -119,6 +119,15 @@ pub struct RealtimeSubscription {
 }
 
 impl RealtimeSubscription {
+    #[cfg(test)]
+    pub(crate) fn for_shutdown_test(cancel: Arc<AtomicBool>, worker: JoinHandle<()>) -> Self {
+        Self {
+            cancel,
+            events: EventBuffer::new(1),
+            worker: Some(worker),
+        }
+    }
+
     pub fn spawn(
         controller: impl Into<ControllerEndpoint>,
         secret: impl Into<String>,
@@ -166,8 +175,12 @@ impl RealtimeSubscription {
         self.events.drain()
     }
 
-    pub fn stop(&mut self) {
+    pub(crate) fn cancel(&self) {
         self.cancel.store(true, Ordering::Release);
+    }
+
+    pub fn stop(&mut self) {
+        self.cancel();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -419,6 +432,102 @@ fn realtime_error(error: impl std::fmt::Display) -> AppError {
 mod tests {
     use super::*;
     use crate::domain::{LogEvent, MemoryEvent, TrafficEvent};
+
+    fn check_idle_shutdown(
+        endpoint: ControllerEndpoint,
+        accept: impl FnOnce() -> ControllerStream + Send + 'static,
+    ) {
+        let peer = thread::spawn(move || {
+            let stream = accept();
+            stream.set_timeout(Duration::from_secs(3)).unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            socket
+                .send(Message::Text(r#"{"up":1,"down":2}"#.into()))
+                .unwrap();
+            assert!(matches!(socket.read().unwrap(), Message::Close(_)));
+        });
+        let mut subscription = RealtimeSubscription::spawn(
+            endpoint,
+            "test",
+            RealtimeTopic::Traffic,
+            RealtimeOptions::default(),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if subscription
+                .drain()
+                .iter()
+                .any(|event| matches!(event, RealtimeEvent::Traffic(_)))
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "subscription did not establish");
+            thread::sleep(Duration::from_millis(5));
+        }
+        subscription.cancel();
+        subscription.stop();
+        subscription.stop();
+        assert!(subscription.worker.is_none());
+        peer.join().unwrap();
+    }
+
+    #[test]
+    fn shutdown_idle_tcp_subscription_closes_peer_and_joins_worker() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        check_idle_shutdown(listener.local_addr().unwrap().into(), move || {
+            ControllerStream::Tcp(listener.accept().unwrap().0)
+        });
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn shutdown_idle_unix_subscription_closes_peer_and_joins_worker() {
+        let path =
+            std::path::PathBuf::from(format!("/tmp/verge-ws-stop-{}.sock", std::process::id()));
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        check_idle_shutdown(ControllerEndpoint::Unix(path.clone()), move || {
+            ControllerStream::Unix(listener.accept().unwrap().0)
+        });
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn shutdown_interrupts_long_reconnect_backoff() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let mut subscription = RealtimeSubscription::spawn(
+            address,
+            "test",
+            RealtimeTopic::Traffic,
+            RealtimeOptions {
+                initial_backoff: Duration::from_secs(5),
+                max_backoff: Duration::from_secs(5),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !subscription
+            .drain()
+            .iter()
+            .any(|event| matches!(event, RealtimeEvent::Reconnecting { .. }))
+        {
+            assert!(
+                Instant::now() < deadline,
+                "subscription did not enter backoff"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        let started = Instant::now();
+        subscription.stop();
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "stop waited for reconnect backoff"
+        );
+        assert!(subscription.worker.is_none());
+    }
 
     #[test]
     fn reconnect_reads_current_log_level_before_subscribing() {
